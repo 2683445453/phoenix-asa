@@ -16,6 +16,7 @@
 #include <sstream>
 #include <iomanip>
 #include <system_error>
+#include "LicenseClient.h"
 
 namespace {
     HANDLE g_StartupLog = INVALID_HANDLE_VALUE;
@@ -52,7 +53,7 @@ namespace {
         const std::filesystem::path logDirectory = moduleDirectory / "logs";
         std::error_code error;
         std::filesystem::create_directories(logDirectory, error);
-        const std::string filename = "Begeerte_DLL_" + StartupLogTimestamp(true) +
+        const std::string filename = "phoenix_dll_" + StartupLogTimestamp(true) +
             "_PID" + std::to_string(GetCurrentProcessId()) + ".log";
         const std::filesystem::path logPath =
             (error ? moduleDirectory : logDirectory) / filename;
@@ -60,7 +61,7 @@ namespace {
             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL, nullptr);
         if (g_StartupLog == INVALID_HANDLE_VALUE) {
-            OutputDebugStringA("[Begeerte] Unable to create DLL startup log.\n");
+            OutputDebugStringA("[phoenix] Unable to create DLL startup log.\n");
         }
     }
 
@@ -77,19 +78,34 @@ namespace {
 
 }
 
-void init(LPVOID lpParam) {
+namespace g_Hook {
+    void LogLifecycle(const char* Message) { StartupLog(Message ? Message : ""); }
+    void CloseLifecycleLog() {
+        std::scoped_lock Lock(g_StartupLogMutex);
+        if (g_StartupLog != INVALID_HANDLE_VALUE) { CloseHandle(g_StartupLog); g_StartupLog = INVALID_HANDLE_VALUE; }
+    }
+}
+
+bool init(LPVOID lpParam) {
     const std::filesystem::path moduleDirectory = GetModuleDirectory(lpParam);
-    InitializeStartupLog(lpParam);
     StartupLog("DLL initialization thread started. Module directory: " +
         moduleDirectory.string());
     StartupLog("Waiting for UWorld and UEngine...");
     const ULONGLONG engineWaitStarted = GetTickCount64();
 
     while (true) {
+        if (!phoenix::license::IsAuthorized() || g_Hook::IsUnloadRequested()) return false;
         SDK::UWorld* World = SDK::UWorld::GetWorld();
-        SDK::UEngine* Engine = SDK::UEngine::GetEngine();
 
-        if (World && Engine)  break;
+        // During the first seconds of process startup GObjects is published before
+        // every UObject/FName entry is ready. UEngine::GetEngine() scans that array
+        // and resolves names, so calling it while GWorld is still null can race the
+        // engine bootstrap and dereference a half-initialized name entry. Wait for
+        // the game to publish a world before performing any global object scan.
+        if (World) {
+            SDK::UEngine* Engine = SDK::UEngine::GetEngine();
+            if (Engine) break;
+        }
 
         Sleep(100);
     }
@@ -97,14 +113,26 @@ void init(LPVOID lpParam) {
         std::to_string(GetTickCount64() - engineWaitStarted) + " ms.");
 
     if (g_Util::HasCommandLineArg(L"-lowspec")) g_Config::bPotatoGraphics = true;
-    if (g_Util::HasCommandLineArg(L"-novid")) g_Config::bInitWelcome = true;
+    // Ark's -novid controls game videos, not the overlay presentation.
 
 	StartupLog("Initializing configuration manager...");
 	ConfigManager& configManager = ConfigManager::Get();
 	configManager.Initialize((moduleDirectory / "cfg").string());
-	const bool configLoaded = configManager.LoadConfig("38s_autosave.ini");
+	bool configLoaded = configManager.LoadConfig("phoenix_autosave.ini");
+	// Import an existing installation's settings once; keep the original file.
+	std::error_code configError;
+	const bool phoenixConfigExists = std::filesystem::exists(
+		moduleDirectory / "cfg" / "phoenix_autosave.ini", configError);
+	if (!configLoaded && !phoenixConfigExists && !configError &&
+		configManager.LoadConfig("38s_autosave.ini")) {
+		configLoaded = true;
+		const bool migrated = configManager.SaveConfig("phoenix_autosave.ini");
+		configManager.RefreshFileList();
+		StartupLog(migrated ? "Previous configuration imported into phoenix." :
+			"WARNING: previous configuration loaded but could not be saved as phoenix.");
+	}
 	if (!configLoaded) {
-		const bool configSaved = configManager.SaveConfig("38s_autosave.ini");
+		const bool configSaved = configManager.SaveConfig("phoenix_autosave.ini");
 		configManager.RefreshFileList();
 		StartupLog(configSaved ?
             "Default configuration created successfully." :
@@ -115,7 +143,11 @@ void init(LPVOID lpParam) {
 	}
 
     StartupLog("Initializing D3D12 hook runtime...");
-    g_MDX12::Initialize(lpParam);
+    if (!phoenix::license::IsAuthorized()) return false;
+    if (!g_MDX12::Initialize(lpParam)) {
+        StartupLog("ERROR: hook initialization failed; requesting coordinated rollback.");
+        return false;
+    }
     StartupLog("D3D12 hook runtime returned; registering callbacks...");
     g_MDX12::SetSetupImGuiCallback(g_DrawImGui::MyImGuiDraw);
     g_MDX12::SetSetupActorTickCallback(g_AActor::Tick);
@@ -133,10 +165,25 @@ void init(LPVOID lpParam) {
     LuaManager::Get().Initialize((moduleDirectory / "lua").string());
     LuaManager::Get().FetchWorkshopScripts();
     StartupLog("DLL initialization completed successfully.");
+    return true;
 }
 
 DWORD WINAPI MainThread(LPVOID lpParam) {
-    init(lpParam);
+    InitializeStartupLog(lpParam);
+#if PHOENIX_LICENSE_ENABLED
+    const bool authorized = phoenix::license::Start(GetModuleDirectory(lpParam));
+    if (!authorized) StartupLog("Authorization denied: " + phoenix::license::Status().message);
+    if (!authorized || !init(lpParam)) {
+        g_Hook::SetRuntimeReady(false);
+        g_Hook::RequestUnload();
+        return 6;
+    }
+    // Publish only after initialization has finished using this DLL image.
+    phoenix::license::SetExpirationCallback(g_Hook::RequestUnload);
+#else
+    if (!init(lpParam)) { g_Hook::RequestUnload(); return 6; }
+#endif
+    g_Hook::SetRuntimeReady(true);
     return 0;
 }
 
@@ -145,7 +192,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
         g_Hook::SetModuleHandle(hModule);
-        if (HANDLE h = CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr)) CloseHandle(h);
+        if (HANDLE h = CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr)) g_Hook::SetInitializationThread(h);
         break;
 
     case DLL_PROCESS_DETACH:

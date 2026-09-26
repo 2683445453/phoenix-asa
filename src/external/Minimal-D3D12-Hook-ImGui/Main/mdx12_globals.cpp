@@ -1,4 +1,6 @@
 #include "mdx12_api.h"
+#include "hooks.h"
+#include "../../../internal/Menu/FeatureShortcuts.h"
 
 namespace g_MDX12 {
     // Fonts
@@ -36,7 +38,7 @@ namespace g_MDX12 {
         // 使用 GetModuleHandleA 轮询，等待目标进程自然加载模块
         // 绝对不用 LoadLibraryA，避免在模块未就绪时强制加载导致崩溃
         bool WaitAndLoad() {
-            while (true) {
+            while (!g_Hook::IsUnloadRequested()) {
                 if (!g_hD3D12) {
                     g_hD3D12 = GetModuleHandleA("d3d12.dll");
                 }
@@ -57,6 +59,7 @@ namespace g_MDX12 {
 
                 Sleep(10);
             }
+            return false;
         }
     }
 
@@ -93,7 +96,6 @@ namespace g_MDX12 {
     namespace g_InputState {
         std::atomic<bool> g_blockMouseInput{ false };
         std::atomic<bool> g_blockKeyboardInput{ false };
-        std::atomic<bool> g_bypassOutBodyHotkeyForFishing{ false };
     }
 
     // Menu state
@@ -101,9 +103,7 @@ namespace g_MDX12 {
         // Start closed so injection never hides the system cursor before the
         // first real F2 transition has supplied ImGui with a mouse position.
         bool g_isOpen = false;
-        UINT g_openKey = VK_F2;
-        bool g_isOutBodyActive = false;
-        UINT g_OutBodyKey = 0x5A;
+        UINT& g_openKey = PhoenixShortcuts::MenuKey;
         UINT* g_pCurrentBindingKey = nullptr;
         bool g_bindingFinished = false;
         bool g_wasOpenLastFrame = true;

@@ -3,6 +3,9 @@
 #include "../../external/Shadow-Gui/include/Shadow.h"
 #include "../CheatData/DynamicData.hpp"
 #include "../ESP/DrawESP.h"
+#include "../ESP/ESP.h"
+#include "../Legit/Aimbot/Aimbot.h"
+#include "../Hack/TekSpear.h"
 #include "../ESP/Indicators.h"
 #include "../Lua/LuaManager.h"
 #include "../Util/Util.h"
@@ -184,15 +187,17 @@ namespace g_UGameViewportClient {
 
         _DD::Update();
 
-        if (g_Config::bPotatoGraphics) {
-            g_Util::PotatoGraphics(_DD::World, rcx);
+        if (g_Util::PotatoGraphics(_DD::World, rcx, g_Config::bPotatoGraphics))
             g_Config::bPotatoGraphics = false;
-        }
 
         Shadow::NewFrame(canvas);
+        g_ESP::BeginProjectionFrame(canvas);
         g_Util::Welcome(_DD::World, canvas);
-        g_DrawESP::DrawResourceESP(canvas);
+        g_ESP::BeginLabelFrame();
         g_DrawESP::DrawESP(canvas);
+        g_DrawESP::DrawResourceESP(canvas);
+        g_Aimbot::DrawOverlay(canvas);
+        g_TekSpear::DrawOverlay(canvas);
         g_Indicators::OnRender();
         LuaManager::Get().Lua_OnPostRender();
         Shadow::Render();

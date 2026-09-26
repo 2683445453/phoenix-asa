@@ -1,5 +1,8 @@
 #include "mdx12_api.h"
 #include "hooks.h"
+#include "WindowProcedureRoutes.h"
+#include "../../../internal/Menu/FeatureShortcuts.h"
+#include "../../../internal/Hack/Hack.h"
 #include "../../../internal/Lua/LuaManager.h"
 
 #include "../MinHook/include/MinHook.h"
@@ -378,7 +381,8 @@ namespace g_MDX12 {
     }
 
     namespace inputhook {
-        static WNDPROC sOriginalWndProc = nullptr;
+        LRESULT APIENTRY WndProcHook(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+        static PhoenixInput::WindowProcedureRoutes sWindowRoutes(WndProcHook);
         static bool g_menuKeyDown = false;
 
         void UpdateInputBlockState() {
@@ -414,7 +418,9 @@ namespace g_MDX12 {
 
         LRESULT APIENTRY WndProcHook(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
             g_Hook::CallbackScope Guard;
-            const WNDPROC originalWndProc = sOriginalWndProc;
+            const auto Route = sWindowRoutes.Resolve(hwnd);
+            const WNDPROC originalWndProc = Route.Original;
+            if (!Route.Active || g_Hook::IsStopping()) return originalWndProc ? CallWindowProc(originalWndProc, hwnd, uMsg, wParam, lParam) : DefWindowProc(hwnd, uMsg, wParam, lParam);
 
             if (uMsg == WM_CLOSE || uMsg == WM_DESTROY ||
                 uMsg == WM_QUERYENDSESSION || (uMsg == WM_ENDSESSION && wParam != FALSE)) {
@@ -430,42 +436,62 @@ namespace g_MDX12 {
                 g_Hook::RequestUnload();
             }
 
-            // 【通用升级】如果当前正在录制任意按键（
-            if (g_MenuState::g_pCurrentBindingKey != nullptr) {
-                if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) {
-                    UINT vk = (UINT)wParam;
-
-                    // 排除鼠标误触
-                    if (vk != VK_LBUTTON && vk != VK_RBUTTON && vk != VK_MBUTTON) {
-                        if (vk == VK_ESCAPE) {
-                            // 按 ESC 取消录制
+            const bool KeyDown = uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN;
+            const bool KeyUp = uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP;
+            const unsigned Vk = static_cast<unsigned>(wParam);
+            const bool Repeated = (lParam & (1LL << 30)) != 0;
+            const unsigned Modifiers = ((GetKeyState(VK_CONTROL) & 0x8000) ? PhoenixInterface::Ctrl : 0) |
+                ((GetKeyState(VK_MENU) & 0x8000) ? PhoenixInterface::Alt : 0) |
+                ((GetKeyState(VK_SHIFT) & 0x8000) ? PhoenixInterface::Shift : 0);
+            const unsigned Chord = Vk | Modifiers;
+            static bool Consumed[256]{};
+            static bool BindingHeld = false;
+            static unsigned BindingVk = 0;
+            if (uMsg == WM_KILLFOCUS) {
+                std::fill(std::begin(Consumed), std::end(Consumed), false);
+                g_menuKeyDown = false; BindingHeld = false;
+                g_MenuState::g_pCurrentBindingKey = nullptr;
+                PhoenixShortcuts::PendingToggles.store(0);
+            }
+            if (BindingHeld && (KeyDown || KeyUp) && Vk == BindingVk) {
+                if (KeyUp) BindingHeld = false;
+                return 0;
+            }
+            if (g_MenuState::g_pCurrentBindingKey) {
+                if (KeyDown && !Repeated) {
+                    if (Vk == VK_ESCAPE) g_MenuState::g_pCurrentBindingKey = nullptr;
+                    else if (Vk != VK_CONTROL && Vk != VK_MENU && Vk != VK_SHIFT) {
+                        const unsigned NewKey = (Vk == VK_BACK || Vk == VK_DELETE) ? 0 : Chord;
+                        if (PhoenixShortcuts::Assign(*g_MenuState::g_pCurrentBindingKey, NewKey))
                             g_MenuState::g_pCurrentBindingKey = nullptr;
-                        }
-                        else {
-                            // 核心：直接向指针指向的内存写入捕获的原生虚拟键码！
-                            *g_MenuState::g_pCurrentBindingKey = vk;
-
-                            g_MenuState::g_pCurrentBindingKey = nullptr; // 录制结束，清空指针
-                            g_MenuState::g_bindingFinished = true;        // 激活弹起保护
-                        }
-                        return 0; // 拦截，不响应游戏和 ImGui
+                    }
+                    BindingHeld = true; BindingVk = Vk;
+                }
+                if (KeyDown || KeyUp || uMsg == WM_CHAR || uMsg == WM_SYSCHAR) return 0;
+            }
+            if ((KeyDown || KeyUp) && Vk < 256 && Consumed[Vk]) {
+                if (KeyUp) Consumed[Vk] = false;
+                return 0;
+            }
+            const bool Foreground = GetForegroundWindow() == hwnd;
+            if (KeyDown && PhoenixInterface::ShouldTrigger(PhoenixShortcuts::StopKey, Chord,
+                Repeated, Foreground, false, g_MenuState::g_isOpen, true)) {
+                PhoenixShortcuts::StopAll(); PhoenixShortcuts::RequestStop();
+                if (Vk < 256) Consumed[Vk] = true;
+                return 0;
+            }
+            if (KeyDown && PhoenixShortcuts::GameplayReady.load()) {
+                for (size_t I = 0; I < std::size(PhoenixShortcuts::Actions); ++I) {
+                    if (PhoenixInterface::ShouldTrigger(PhoenixShortcuts::Actions[I].Key, Chord,
+                        Repeated, Foreground, false, g_MenuState::g_isOpen)) {
+                        PhoenixShortcuts::PendingToggles.fetch_xor(1u << I);
+                        if (Vk < 256) Consumed[Vk] = true;
+                        return 0;
                     }
                 }
-                // 录制期间拦截所有键盘杂音
-                if (uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP || uMsg == WM_CHAR) {
-                    return 0;
-                }
             }
 
-            // 清除录制那一瞬间的按键弹起消息（保持不变）
-            if (g_MenuState::g_bindingFinished) {
-                if (uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) {
-                    g_MenuState::g_bindingFinished = false;
-                    return 0;
-                }
-            }
-
-            if (uMsg == WM_KEYDOWN && wParam == g_MenuState::g_openKey && !g_menuKeyDown) {
+            if (KeyDown && Chord == g_MenuState::g_openKey && !g_menuKeyDown && !Repeated && Foreground) {
                 g_menuKeyDown = true;
                 g_MenuState::g_isOpen = !g_MenuState::g_isOpen;
 
@@ -492,35 +518,25 @@ namespace g_MDX12 {
                     }
                 }
 
-                // 处理 ClipCursor 和 ShowCursor
-                UpdateInputBlockState();
-                cursorhook::UpdateCursorState();
+                // Cursor/raw-input detours are initialized with the renderer.
+                // If F2 arrives earlier, only retain the menu state; the first
+                // initialized overlay frame applies input and cursor capture.
+                if (ImGui::GetCurrentContext() != nullptr) {
+                    UpdateInputBlockState();
+                    cursorhook::UpdateCursorState();
+                }
 
                 return 0;
             }
-            else if (uMsg == WM_KEYUP && wParam == g_MenuState::g_openKey) {
+            else if (KeyUp && Vk == (g_MenuState::g_openKey & 0xff)) {
                 g_menuKeyDown = false;
                 return 0;
             }
 
-            const bool BypassOutBodyHotkey =
-                wParam == g_MenuState::g_OutBodyKey &&
-                g_InputState::g_bypassOutBodyHotkeyForFishing.load();
-            if (!BypassOutBodyHotkey) {
-                if (uMsg == WM_KEYDOWN && wParam == g_MenuState::g_OutBodyKey && !g_MenuState::g_isOutBodyActive) {
-                    if (!g_MenuState::g_isOpen) {
-                        g_MenuState::g_isOutBodyActive = true;
-                    }
-                    return 0;
-                }
-                else if (uMsg == WM_KEYUP && wParam == g_MenuState::g_OutBodyKey) {
-                    if (g_MenuState::g_isOutBodyActive) {
-                        g_MenuState::g_isOutBodyActive = false;
-                    }
-                    return 0;
-                }
-            }
-
+            if (!g_MenuState::g_isOpen &&
+                (uMsg == WM_KEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP) &&
+                g_Hack::HandleFreeCameraKey(static_cast<unsigned int>(wParam),
+                    uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN, (lParam & (1LL << 30)) != 0)) return 0;
             if (uMsg == WM_INPUT || uMsg == WM_INPUT_DEVICE_CHANGE) {
                 if (g_MenuState::g_isOpen && g_InputState::g_blockMouseInput) {
                     return 0;
@@ -569,27 +585,22 @@ namespace g_MDX12 {
         }
 
         void Init(HWND hWindow) {
-            if (!hWindow) return;
-            g_ProcessWindow::g_mainWindow = hWindow;
-
-            if (sOriginalWndProc) {
-                Remove(hWindow);
-            }
-
-            sOriginalWndProc = reinterpret_cast<WNDPROC>(SetWindowLongPtr(hWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProcHook)));
+            if (!hWindow || g_Hook::IsStopping()) return;
+            if (sWindowRoutes.Install(hWindow)) g_ProcessWindow::g_mainWindow = hWindow;
         }
 
-        void Remove(HWND hWindow) {
-            if (!hWindow || !sOriginalWndProc) return;
+        bool Remove(HWND hWindow) {
+            return sWindowRoutes.Remove(hWindow);
+        }
 
-            SetWindowLongPtr(hWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(sOriginalWndProc));
-            sOriginalWndProc = nullptr;
+        bool RemoveAll() {
+            return sWindowRoutes.RemoveAll();
         }
 
         void ReinstallWindowHook() {
             if (!g_ProcessWindow::g_mainWindow) return;
 
-            if (!sOriginalWndProc) {
+            if (!sWindowRoutes.IsInstalled(g_ProcessWindow::g_mainWindow)) {
                 Init(g_ProcessWindow::g_mainWindow);
             }
         }

@@ -1,16 +1,8 @@
-﻿#if defined(__cpp_char8_t)
-#define U8(str) reinterpret_cast<const char*>(u8##str)
-#else
-#define U8(str) u8##str
-#endif
-
-#include "../../external/Minimal-D3D12-Hook-ImGui/Main/mdx12_api.h"
-#include "../../external/CppSDK/SDK.hpp"
-// #include "../ESP/ESP.h"
-#include "../Config/Configs.h"
-// #include "../ESP/DrawESP.h"
+#include "../../external/Minimal-D3D12-Hook-ImGui/Main/hooks.h"
+#include "VibrancyBackdrop.h"
 #include "ConfigImGui.h"
-#include "DrawImGui.h"
+#include "FeatureCatalog.h"
+#include "StartupPresentation.h"
 #include "Aimbot_Menu.h"
 #include "Visuals_Menu.h"
 #include "EntityList_Menu.h"
@@ -21,312 +13,213 @@
 #include "Configs_Menu.h"
 #include "Lua_Menu.h"
 #include "../Log/LogManager.h"
-#include "../Language/LanguageManager.h"
 #include "../Config/ConfigManager.h"
+#ifndef PHOENIX_UI_TEST
 #include "../Lua/LuaManager.h"
-#include "../Util/Util.h"
-
-#include <cstdio>
-#include <string>
-#include <algorithm>
-#include <cfloat>
-#include <cmath>
-#include <map>
+#endif
+#include "../Hack/Hack.h"
+#include "../Hack/TekSpear.h"
 
 namespace g_DrawImGui {
-	float g_MenuAlpha = 0.0f;
-	bool g_UseSidebarNavigation = true;
-	MenuPage g_ActiveMenuPage = MenuPage::Automation;
-
-	namespace {
-		enum class MenuSection {
-			Combat,
-			Visuals,
-			ResourceHarvest,
-			Automation,
-			Tools,
-			Settings
-		};
-
-		MenuSection GetActiveMenuSection() {
-			switch (g_ActiveMenuPage) {
-			case MenuPage::Combat:
-				return MenuSection::Combat;
-			case MenuPage::Visuals:
-			case MenuPage::TeamVisuals:
-				return MenuSection::Visuals;
-			case MenuPage::ResourceHarvest:
-				return MenuSection::ResourceHarvest;
-			case MenuPage::Inventory:
-			case MenuPage::CreatureList:
-			case MenuPage::StructureList:
-			case MenuPage::Lua:
-				return MenuSection::Tools;
-			case MenuPage::Configs:
-			case MenuPage::Language:
-			case MenuPage::InterfaceSettings:
-				return MenuSection::Settings;
-			default:
-				return MenuSection::Automation;
-			}
-		}
-
-		const char* GetPageTitle() {
-			switch (g_ActiveMenuPage) {
-			case MenuPage::Combat: return U8("战斗与瞄准");
-			case MenuPage::Visuals: return U8("视觉与资源");
-			case MenuPage::TeamVisuals: return U8("队友显示");
-			case MenuPage::ResourceHarvest: return U8("自动采集资源");
-			case MenuPage::Inventory: return U8("背包整理");
-			case MenuPage::CreatureList: return U8("生物列表");
-			case MenuPage::StructureList: return U8("建筑列表");
-			case MenuPage::Lua: return U8("脚本扩展");
-			case MenuPage::InterfaceSettings: return U8("界面与系统");
-			case MenuPage::Configs: return U8("配置管理");
-			case MenuPage::Language: return U8("语言设置");
-			default: return U8("自动化与实用");
-			}
-		}
-
-		const char* GetPageDescription() {
-			switch (g_ActiveMenuPage) {
-			case MenuPage::Combat: return U8("集中管理瞄准、平滑与触发设置");
-			case MenuPage::Visuals: return U8("玩家、生物、建筑与世界显示设置");
-			case MenuPage::TeamVisuals: return U8("单独配置队友、友方生物与建筑显示");
-			case MenuPage::ResourceHarvest: return U8("资源选择、高亮、自动靠近与水陆采集控制");
-			case MenuPage::Inventory: return U8("搜索、使用或丢弃人物背包内物品");
-			case MenuPage::CreatureList: return U8("按名称筛选附近玩家与生物");
-			case MenuPage::StructureList: return U8("按名称和归属筛选附近建筑");
-			case MenuPage::Lua: return U8("加载与管理可选 Lua 脚本");
-			case MenuPage::InterfaceSettings: return U8("菜单外观、快捷键、系统操作与卸载");
-			case MenuPage::Configs: return U8("创建、保存和载入功能配置");
-			case MenuPage::Language: return U8("管理与切换菜单语言文件");
-			default: return U8("生存、生产、养成、移动及快捷功能");
-			}
-		}
-
-		bool DrawSidebarEntry(const char* Label, bool Selected, float Height,
-			bool Secondary = false) {
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
-			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-				ImVec2(Secondary ? 12.0f : 14.0f, 8.0f));
-			ImGui::PushStyleColor(ImGuiCol_Header, Selected ? ThemeColors::GetAccent() : ThemeColors::BG);
-			ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ThemeColors::YELLOW);
-			ImGui::PushStyleColor(ImGuiCol_HeaderActive, ThemeColors::ACCENT2);
-			ImGui::PushStyleColor(ImGuiCol_Text, ThemeColors::TEXT);
-			if (Secondary) ImGui::Indent(10.0f);
-			ImDrawList* DrawList = ImGui::GetWindowDrawList();
-			const ImVec2 ExpectedMin = ImGui::GetCursorScreenPos();
-			const ImVec2 ExpectedMax(ExpectedMin.x + ImGui::GetContentRegionAvail().x,
-				ExpectedMin.y + Height);
-			DrawList->AddRectFilled(ImVec2(ExpectedMin.x + 4.0f, ExpectedMin.y + 4.0f),
-				ImVec2(ExpectedMax.x + 4.0f, ExpectedMax.y + 4.0f), IM_COL32_BLACK);
-			// An unselected ImGui::Selectable does not paint ImGuiCol_Header.
-			// Draw the menu face explicitly so the offset shadow cannot cover it.
-			DrawList->AddRectFilled(ExpectedMin, ExpectedMax,
-				ImGui::GetColorU32(ThemeColors::BG));
-			const bool Pressed = ImGui::Selectable(Label, Selected,
-				ImGuiSelectableFlags_None, ImVec2(0.0f, Height));
-			const ImVec2 Min = ImGui::GetItemRectMin();
-			const ImVec2 Max = ImGui::GetItemRectMax();
-			DrawList->AddRect(Min, Max, IM_COL32_BLACK, 0.0f, 0, 2.0f);
-			if (Selected)
-				DrawList->AddRectFilled(Min, ImVec2(Min.x + 6.0f, Max.y),
-					ImGui::GetColorU32(ThemeColors::ACCENT2));
-			if (Secondary) ImGui::Unindent(10.0f);
-			ImGui::PopStyleColor(4);
-			ImGui::PopStyleVar(2);
-			return Pressed;
-		}
-	}
-
-	void MyImGuiDraw(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT Flags)
-	{
-		if (!g_Config::bInitWelcome) return;
-
-		if (!style_initialized) { SetupCustomImGuiStyle(); style_initialized = true; }
-		static bool g_PrevMenuState = false;
-		bool isNowOpen = g_MDX12::g_MenuState::g_isOpen;
-
-		if (isNowOpen && !g_PrevMenuState) {
-			LanguageManager::Get().RefreshFileList();
-			LuaManager::Get().RefreshFileList();
-			ConfigManager::Get().RefreshFileList();
-			LuaManager::Get().Lua_OnMenuOpen();
-		}
-		else if (!isNowOpen && g_PrevMenuState) {
-			ConfigManager::Get().SaveConfig("38s_autosave.ini");
-		}
-		g_PrevMenuState = isNowOpen;
-
-		ImGuiIO& io = ImGui::GetIO();
-		ImVec2 screenSize = io.DisplaySize;
-		g_MenuAlpha = isNowOpen ? 1.0f : 0.0f;
-
-		// 定时写入自动预设，异常退出时也能尽量保留最近参数。
-		static double nextAutoSaveAt = 0.0;
-		const double now = ImGui::GetTime();
-		if (!ConfigManager::Get().GetConfigDir().empty() && now >= nextAutoSaveAt) {
-			ConfigManager::Get().SaveConfig("38s_autosave.ini");
-			nextAutoSaveAt = now + 10.0;
-		}
-
-		if (g_MenuAlpha > 0.001f) {
-			LuaManager::Get().Lua_OnPaintMenu(g_MenuAlpha);
-
-			static int lastScaleIdx = g_Config::MenuScaleIdx;
-			const float menu_size_w = 1160.f;
-			const float menu_size_h = 760.f;
-
-			const float fontSizes[] = { 14.0f, 18.0f, 22.0f, 26.0f, 34.0f };
-			float menuScale = fontSizes[g_Config::MenuScaleIdx] / fontSizes[1];
-
-			ImGui::GetStyle().WindowMinSize = ImVec2(menu_size_w * menuScale, menu_size_h * menuScale);
-			// 处理重置逻辑
-			if (g_Config::bMenuNeedReset) {
-				g_Config::MenuScaleIdx = 1; // 重置为默认缩放
-				ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.382, io.DisplaySize.y * 0.414), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-				ImGui::SetNextWindowSize(ImVec2(menu_size_w * menuScale, menu_size_h * menuScale), ImGuiCond_Always);
-				g_Config::bMenuNeedReset = false;
-			}
-			else {
-				// 正常状态：限制最大尺寸不超过屏幕
-				ImGui::SetNextWindowSizeConstraints(ImVec2(menu_size_w * menuScale, menu_size_h * menuScale), screenSize);
-
-				// 如果你希望第一次打开是 menu_size_w x menu_size_h，可以用 FirstUseEver
-				// 但不要放在 if 块外面，否则会干扰上面的 Always 逻辑
-				ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.382, io.DisplaySize.y * 0.414), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-				ImGui::SetNextWindowSize(ImVec2(menu_size_w * menuScale, menu_size_h * menuScale), ImGuiCond_FirstUseEver);
-			}
-
-			if (g_Config::MenuScaleIdx != lastScaleIdx) {
-				ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.382, io.DisplaySize.y * 0.414), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-				ImGui::SetNextWindowSize(ImVec2(menu_size_w * menuScale, menu_size_h * menuScale), ImGuiCond_Always);
-				lastScaleIdx = g_Config::MenuScaleIdx;
-			}
-
-			// ImGui::SetNextWindowSize(ImVec2(menu_size_w, menu_size_h), ImGuiCond_FirstUseEver);
-			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, g_MenuAlpha);
-
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f, 18.0f));
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 4.0f);
-
-			ImVec4 accentColor = ThemeColors::GetAccent();
-
-			ImGui::PushStyleColor(ImGuiCol_WindowBg, ThemeColors::BG);
-			ImGui::PushStyleColor(ImGuiCol_Border, ThemeColors::TEXT);
-
-			ImGuiWindowFlags wFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar;
-			io.ConfigWindowsResizeFromEdges = false;
-			if (g_Config::bMenuLockResize) {
-				wFlags |= ImGuiWindowFlags_NoResize; // 如果勾选，禁止缩放
-			}
-
-			if (ImGui::Begin(U8("38s\u81EA\u7528###38sPrivate"), nullptr, wFlags)) {
-
-				ImDrawList* draw_list = ImGui::GetWindowDrawList();
-				ImVec2 title_pos = ImGui::GetWindowPos();
-				float title_width = ImGui::GetWindowWidth();
-				ImVec2 title_size = ImGui::GetWindowSize();
-				ImGui::GetBackgroundDrawList()->AddRectFilled(
-					ImVec2(title_pos.x + 10.0f, title_pos.y + 10.0f),
-					ImVec2(title_pos.x + title_size.x + 10.0f,
-						title_pos.y + title_size.y + 10.0f), IM_COL32_BLACK);
-				draw_list->AddRectFilled(ImVec2(title_pos.x, title_pos.y),
-					ImVec2(title_pos.x + title_width, title_pos.y + 9.0f),
-					ImGui::GetColorU32(ThemeColors::ACCENT2));
-				draw_list->AddLine(ImVec2(title_pos.x, title_pos.y + 9.0f),
-					ImVec2(title_pos.x + title_width, title_pos.y + 9.0f), IM_COL32_BLACK, 3.0f);
-
-				const float SidebarWidth = 190.0f * menuScale;
-				ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
-				ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 3.0f);
-				ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 14.0f));
-				ImGui::PushStyleColor(ImGuiCol_ChildBg, ThemeColors::BG);
-				ImGui::PushStyleColor(ImGuiCol_Border, ThemeColors::TEXT);
-				ImGui::BeginChild("MainSidebar", ImVec2(SidebarWidth, 0.0f), true,
-					ImGuiWindowFlags_NoScrollbar);
-				ImGui::TextColored(accentColor, U8("38s\u81EA\u7528"));
-				ImGui::Dummy(ImVec2(0.0f, 8.0f));
-				DrawAnimatedSeparator();
-
-				const MenuSection ActiveSection = GetActiveMenuSection();
-				if (DrawSidebarEntry(U8("战斗与瞄准"), ActiveSection == MenuSection::Combat, 42.0f))
-					g_ActiveMenuPage = MenuPage::Combat;
-				if (DrawSidebarEntry(U8("视觉与资源"), ActiveSection == MenuSection::Visuals, 42.0f))
-					g_ActiveMenuPage = MenuPage::Visuals;
-				if (GetActiveMenuSection() == MenuSection::Visuals) {
-					if (DrawSidebarEntry(U8("视觉设置"), g_ActiveMenuPage == MenuPage::Visuals, 32.0f, true))
-						g_ActiveMenuPage = MenuPage::Visuals;
-					if (DrawSidebarEntry(U8("队友显示"), g_ActiveMenuPage == MenuPage::TeamVisuals, 32.0f, true))
-						g_ActiveMenuPage = MenuPage::TeamVisuals;
-				}
-				if (DrawSidebarEntry(U8("自动采集资源"), GetActiveMenuSection() == MenuSection::ResourceHarvest, 42.0f))
-					g_ActiveMenuPage = MenuPage::ResourceHarvest;
-				if (DrawSidebarEntry(U8("自动化与实用"), GetActiveMenuSection() == MenuSection::Automation, 42.0f))
-					g_ActiveMenuPage = MenuPage::Automation;
-				if (DrawSidebarEntry(U8("工具"), GetActiveMenuSection() == MenuSection::Tools, 42.0f))
-					g_ActiveMenuPage = MenuPage::Inventory;
-				if (GetActiveMenuSection() == MenuSection::Tools) {
-					if (DrawSidebarEntry(U8("背包整理"), g_ActiveMenuPage == MenuPage::Inventory, 32.0f, true))
-						g_ActiveMenuPage = MenuPage::Inventory;
-					if (DrawSidebarEntry(U8("生物列表"), g_ActiveMenuPage == MenuPage::CreatureList, 32.0f, true))
-						g_ActiveMenuPage = MenuPage::CreatureList;
-					if (DrawSidebarEntry(U8("建筑列表"), g_ActiveMenuPage == MenuPage::StructureList, 32.0f, true))
-						g_ActiveMenuPage = MenuPage::StructureList;
-					if (DrawSidebarEntry(U8("脚本扩展"), g_ActiveMenuPage == MenuPage::Lua, 32.0f, true))
-						g_ActiveMenuPage = MenuPage::Lua;
-				}
-				if (DrawSidebarEntry(U8("设置"), GetActiveMenuSection() == MenuSection::Settings, 42.0f))
-					g_ActiveMenuPage = MenuPage::InterfaceSettings;
-				if (GetActiveMenuSection() == MenuSection::Settings) {
-					if (DrawSidebarEntry(U8("界面与系统"), g_ActiveMenuPage == MenuPage::InterfaceSettings, 32.0f, true))
-						g_ActiveMenuPage = MenuPage::InterfaceSettings;
-					if (DrawSidebarEntry(U8("配置管理"), g_ActiveMenuPage == MenuPage::Configs, 32.0f, true))
-						g_ActiveMenuPage = MenuPage::Configs;
-					if (DrawSidebarEntry(U8("语言设置"), g_ActiveMenuPage == MenuPage::Language, 32.0f, true))
-						g_ActiveMenuPage = MenuPage::Language;
-				}
-				ImGui::EndChild();
-				ImGui::SameLine(0.0f, 12.0f);
-
-				ImGui::BeginChild("MainContent", ImVec2(0.0f, 0.0f), true,
-					ImGuiWindowFlags_NoScrollbar);
-				ImGui::TextColored(accentColor, "%s", GetPageTitle());
-				ImGui::PushStyleColor(ImGuiCol_Text,
-					ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-				ImGui::TextWrapped("%s", GetPageDescription());
-				ImGui::PopStyleColor();
-				ImGui::Dummy(ImVec2(0.0f, 5.0f));
-				DrawAnimatedSeparator();
-				ImGui::Dummy(ImVec2(0.0f, 7.0f));
-
-				Aimbot_Menu();
-				Visuals_Menu();
-				ResourceHarvest_Menu();
-				EntityList_Menu();
-				StructureList_Menu();
-				ItemList_Menu();
-				Misc_Menu();
-				Language_Menu();
-				Configs_Menu();
-				Lua_Menu();
-
-				ImGui::EndChild();
-				ImGui::PopStyleColor(2);
-				ImGui::PopStyleVar(3);
-			}
-
-			ImGui::End();
-			ImGui::PopStyleColor(2);
-			ImGui::PopStyleVar(4);
-		}
-
-		// g_Aimbot::Tick();
-		// g_DrawESP::DrawESP();
-		g_LogManager::Run();
-		LuaManager::Get().Lua_OnPaint();
-	}
+    float g_MenuAlpha=1;
+    bool g_UseSidebarNavigation=true;
+    MenuPage g_ActiveMenuPage=MenuPage::Home;
+    namespace {
+        void PhoenixMark(float Size, float Reveal=1.f) {
+            const auto P=ImGui::GetCursorScreenPos(); auto* D=ImGui::GetWindowDrawList();
+            const ImU32 C=ImGui::GetColorU32(ThemeColors::GetAccent());
+            const float Growth=std::clamp(Reveal,0.f,1.f);
+            auto Line=[&](float X,float Y,float A,float B){
+                const float Lift=(1.f-Growth)*.10f;
+                D->AddLine({P.x+X*Size,P.y+(Y+Lift)*Size},
+                    {P.x+(X+(A-X)*Growth)*Size,P.y+(Y+(B-Y)*Growth+Lift)*Size},C,1.6f);
+            };
+            Line(.5f,.15f,.5f,.72f); Line(.5f,.15f,.62f,.22f); Line(.5f,.42f,.12f,.16f); Line(.12f,.16f,.25f,.59f);
+            Line(.25f,.59f,.5f,.72f); Line(.5f,.42f,.88f,.16f); Line(.88f,.16f,.75f,.59f); Line(.75f,.59f,.5f,.72f);
+            Line(.5f,.58f,.21f,.39f); Line(.5f,.58f,.79f,.39f); Line(.5f,.72f,.36f,.91f); Line(.5f,.72f,.64f,.91f);
+            ImGui::Dummy({Size,Size});
+        }
+        void StopAutomation() {
+            PhoenixShortcuts::StopAll(); PhoenixShortcuts::RequestStop();
+        }
+        void Welcome() {
+            auto& IO=ImGui::GetIO();
+            static ImGuiContext* Context=nullptr;
+            static double LastTime=-1;
+            if (Context!=ImGui::GetCurrentContext() || ImGui::GetTime()<LastTime) {
+                Context=ImGui::GetCurrentContext(); PhoenixStartup::Current={};
+            }
+            LastTime=ImGui::GetTime();
+            bool Visible=true;
+#ifndef PHOENIX_UI_TEST
+            DWORD ForegroundPID=0;
+            const HWND Foreground=GetForegroundWindow();
+            GetWindowThreadProcessId(Foreground,&ForegroundPID);
+            Visible=ForegroundPID==GetCurrentProcessId() && !IsIconic(Foreground);
+#endif
+            auto& Intro=PhoenixStartup::Current;
+            Intro.Tick(IO.DisplaySize.x>1 && IO.DisplaySize.y>1,g_Config::bShowWelcome,Visible,IO.DeltaTime);
+            if(Intro.Alpha<=0) return;
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha,Intro.Alpha);
+            ImGui::SetNextWindowPos({IO.DisplaySize.x*.5f,22.f+(1.f-Intro.Alpha)*10.f},ImGuiCond_Always,{.5f,0});
+            ImGui::SetNextWindowSize({std::min(420.f,IO.DisplaySize.x-24),0});
+            if(ImGui::Begin("phoenix##welcome",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_AlwaysAutoResize|
+                ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing|ImGuiWindowFlags_NoNav)) {
+                ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+                PhoenixMark(64,std::min(1.f,Intro.Elapsed/.8f)); ImGui::SameLine(); ImGui::BeginGroup();
+                Title("phoenix");ImGui::TextDisabled(Tr(U8("界面已就绪")));
+                ImGui::Text(Tr(U8("按 %s 打开控制中心")),KeyName(PhoenixShortcuts::MenuKey).c_str());
+                ImGui::EndGroup();
+                if(DrawCustomButton(Tr(U8("关闭启动展示")))) Intro.Dismiss();
+            } ImGui::End(); ImGui::PopStyleVar();
+        }
+        void ShortcutSettings() {
+            BeginTabRegion("Shortcuts");
+            DrawKeyBindButton(Tr(U8("菜单开关")),PhoenixShortcuts::MenuKey);
+            DrawKeyBindButton(Tr(U8("停止自动化")),PhoenixShortcuts::StopKey);
+            ImGui::Separator();
+            for(auto& A:PhoenixShortcuts::Actions) DrawKeyBindButton(Tr(A.Label),A.Key);
+            if(!PhoenixShortcuts::BindingError.empty()) {
+                const std::string Prefix=U8("该快捷键已用于："); const auto& Error=PhoenixShortcuts::BindingError;
+                std::string Message=Error.starts_with(Prefix)?std::string(Tr(Prefix.c_str()))+Tr(Error.substr(Prefix.size()).c_str()):Tr(Error.c_str());
+                ImGui::TextWrapped("%s",Message.c_str());
+            }
+            EndTabRegion();
+        }
+        void Home() {
+            BeginTabRegion("Home"); Title(Tr(U8("常用功能")));
+            struct Quick { const char* Name; const char* Detail; Topic Target; bool* Enabled; bool Ready; };
+            const Quick Links[]={
+                {Tr(U8("自动锁定")),Tr(U8("目标与弹道")),Topic::Aim,&g_Config::bAimbotEnabled,g_Hook::UpdateCameraOK||g_Hook::PostRenderOK},
+                {Tr(U8("泰克长矛")),Tr(U8("瞬间招架与偏转")),Topic::Spear,&g_Config::bTekSpearAutoBlock,g_Hook::UpdateCameraOK||g_Hook::PostRenderOK},
+                {Tr(U8("骑乘采集")),Tr(U8("资源与自动靠近")),Topic::Harvest,&g_Config::bAutoHarvestResources,g_Hook::PostRenderOK&&g_Hook::ActorTickOK},
+                {Tr(U8("自动吸包")),Tr(U8("空投与掉落包")),Topic::Loot,&g_Config::bAutoLootContainers,g_Hook::ActorTickOK},
+                {Tr(U8("自动制作")),Tr(U8("工作台与配方")),Topic::Craft,&g_Config::bAutoCraft,g_Hook::ActorTickOK},
+                {Tr(U8("灵魂出窍")),Tr(U8("本地自由飞行")),Topic::Travel,&g_Config::bFreeCameraEnabled,g_Hook::UpdateCameraOK}
+            };
+            for(const auto& Q:Links) {
+                ImGui::PushID(Q.Name);
+                if(DrawCustomButton(Q.Name,{160,0})) SelectTopic(Q.Target);
+                ImGui::SameLine(); ImGui::BeginDisabled(!Q.Ready); ImGui::Checkbox(Tr(U8("启用")),Q.Enabled); ImGui::EndDisabled();
+                ImGui::TextDisabled("%s%s",Q.Detail,Q.Ready?"":Tr(U8(" · 当前接口不可用"))); ImGui::Separator();ImGui::PopID();
+            }
+            Title(Tr(U8("已开启的快捷功能")));
+            bool Any=false;
+            for(auto& A:PhoenixShortcuts::Actions) if(*A.Enabled) {
+                Any=true; ImGui::PushID(A.Id); ImGui::Checkbox(Tr(A.Label),A.Enabled);
+                if(A.Key) { ImGui::SameLine(); ImGui::TextDisabled("%s",KeyName(A.Key).c_str()); } ImGui::PopID();
+            }
+            if(!Any) ImGui::TextDisabled(Tr(U8("快捷功能均已关闭")));
+            HelpText(Tr(U8("这里列出支持快捷键的功能；其余自动化请在各分类中查看。")));
+            EndTabRegion();
+        }
+    }
+    void MyImGuiDraw(IDXGISwapChain3*,UINT,UINT) {
+        if(!ImGui::GetCurrentContext()) return;
+        if(!style_initialized){SetupCustomImGuiStyle();style_initialized=true;}
+        const bool Open=g_MDX12::g_MenuState::g_isOpen;
+        HoverHelp::BeginFrame();
+        AdvanceTopic(ImGui::GetIO().DeltaTime);
+        static float MenuFade=0;
+        MenuFade=PhoenixMotion::Approach(MenuFade,Open?1.f:0.f,ImGui::GetIO().DeltaTime,.14f);
+        g_MenuAlpha=MenuFade;
+        static bool WasOpen=false;
+#ifndef PHOENIX_UI_TEST
+        if(Open&&!WasOpen){LanguageManager::Get().RefreshFileList();LuaManager::Get().RefreshFileList();ConfigManager::Get().RefreshFileList();LuaManager::Get().Lua_OnMenuOpen();}
+        if(!Open&&WasOpen){g_MDX12::g_MenuState::g_pCurrentBindingKey=nullptr;ConfigManager::Get().SaveConfig("phoenix_autosave.ini");}
+        WasOpen=Open;
+        static double NextSave=0;
+        if(!ConfigManager::Get().GetConfigDir().empty()&&ImGui::GetTime()>=NextSave){ConfigManager::Get().SaveConfig("phoenix_autosave.ini");NextSave=ImGui::GetTime()+10;}
+#endif
+        if(MenuFade>0) {
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha,MenuFade);
+#ifndef PHOENIX_UI_TEST
+            if(Open) LuaManager::Get().Lua_OnPaintMenu(MenuFade);
+#endif
+            auto& IO=ImGui::GetIO();
+            g_Config::MenuScaleIdx=std::clamp(g_Config::MenuScaleIdx,0,4);
+            if(g_Config::bMenuNeedReset) g_Config::MenuScaleIdx=1;
+            const float Scales[]={.78f,1,1.22f,1.44f,1.89f};const float Scale=Scales[g_Config::MenuScaleIdx];
+            ImVec2 Maximum{std::max(240.f,IO.DisplaySize.x-16),std::max(240.f,IO.DisplaySize.y-16)};
+            ImVec2 Desired{std::min(1200.f*Scale,Maximum.x),std::min(790.f*Scale,Maximum.y)};
+            ImGui::GetStyle().WindowMinSize={std::min(440.f,Maximum.x),std::min(360.f,Maximum.y)};
+            ImGui::SetNextWindowSizeConstraints(ImGui::GetStyle().WindowMinSize,Maximum);
+            static int LastScale=-1;
+            static ImVec2 LastDisplay{};
+            const bool Reset=g_Config::bMenuNeedReset||LastScale!=g_Config::MenuScaleIdx||LastDisplay.x!=IO.DisplaySize.x||LastDisplay.y!=IO.DisplaySize.y;
+            LastDisplay=IO.DisplaySize;
+            if(g_Config::bMenuNeedReset){g_Config::MenuScaleIdx=1;g_Config::bMenuNeedReset=false;}
+            if(Reset) {ImGui::SetNextWindowPos({IO.DisplaySize.x*.5f,IO.DisplaySize.y*.5f},ImGuiCond_Always,{.5f,.5f});ImGui::SetNextWindowSize(Desired,ImGuiCond_Always);LastScale=g_Config::MenuScaleIdx;}
+            ImGuiWindowFlags Flags=ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoScrollbar;
+            if(g_Config::bMenuLockResize)Flags|=ImGuiWindowFlags_NoResize;
+            if(!Open) Flags|=ImGuiWindowFlags_NoInputs;
+            if(ImGui::Begin("phoenix###phoenixMain",nullptr,Flags)) {
+                // Keep the entire window reachable after display resolution changes.
+                ImVec2 Pos=ImGui::GetWindowPos(),Size=ImGui::GetWindowSize();
+                ImGui::SetWindowPos({std::clamp(Pos.x,0.f,std::max(0.f,IO.DisplaySize.x-Size.x)),std::clamp(Pos.y,0.f,std::max(0.f,IO.DisplaySize.y-Size.y))});
+                const float Width=ImGui::GetContentRegionAvail().x;
+                const bool Wide=Width>=1000*Scale, Medium=Width>=740*Scale;
+                int Category=CurrentFeature().Category;
+                static char Search[128]{};
+                if(!Wide) {
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    if(ImGui::BeginCombo("##category",Tr(Categories[Category]))) {
+                        for(int I=0;I<IM_ARRAYSIZE(Categories);++I) if(ImGui::Selectable(Tr(Categories[I]),I==Category)) {
+                            for(const auto& F:Features) if(F.Category==I){SelectTopic(F.TopicId);break;}
+                        } ImGui::EndCombo();
+                    }
+                }
+                if(Wide) {
+                    ImGui::PushStyleColor(ImGuiCol_ChildBg,{28/255.f,28/255.f,30/255.f,.8f});
+                    ImGui::BeginChild("Categories",{156*Scale,0},false);
+                    PhoenixVibrancy::DrawSidebar();
+                    PhoenixMark(42*Scale);Title("phoenix");ImGui::Spacing();
+                    for(int I=0;I<IM_ARRAYSIZE(Categories);++I) if(ImGui::Selectable(Tr(Categories[I]),I==Category,0,{0,38*Scale})) {
+                        Search[0]=0;for(const auto& F:Features)if(F.Category==I){SelectTopic(F.TopicId);break;}
+                    }
+                    ImGui::Separator();
+                    ImGui::TextDisabled("%s",KeyName(PhoenixShortcuts::MenuKey).c_str());
+                    if(DrawCustomButton(Tr(U8("停止自动化")),{-FLT_MIN,0}))StopAutomation();
+                    ImGui::TextWrapped("%s",KeyName(PhoenixShortcuts::StopKey).c_str());
+                    ImGui::EndChild();ImGui::PopStyleColor();ImGui::SameLine();
+                }
+                if(Medium) {
+                    ImGui::BeginChild("FeatureList",{215*Scale,0},true);
+                    ImGui::SetNextItemWidth(-FLT_MIN);ImGui::InputTextWithHint("##search",Tr(U8("搜索全部功能…")),Search,sizeof(Search));
+                    int Matches=0;
+                    for(const auto& F:Features) {
+                        if(Search[0] ? (std::string(Tr(F.Name)).find(Search)==std::string::npos&&std::string(Tr(F.Summary)).find(Search)==std::string::npos) : F.Category!=CurrentFeature().Category)continue;
+                        ++Matches;ImGui::PushID(static_cast<int>(F.TopicId));
+                        if(ImGui::Selectable(Tr(F.Name),IsTopic(F.TopicId),0,{0,36*Scale}))SelectTopic(F.TopicId);
+                        HoverHelp::Remember(F.Guide);
+                        ImGui::PopID();
+                    }
+                    if(!Matches)ImGui::TextWrapped(Tr(U8("没有匹配功能，请换个关键词。")));
+                    ImGui::EndChild();ImGui::SameLine();
+                } else {
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    if(ImGui::BeginCombo("##feature",Tr(CurrentFeature().Name))) {
+                        for(const auto& F:Features)if(F.Category==CurrentFeature().Category&&ImGui::Selectable(Tr(F.Name),IsTopic(F.TopicId)))SelectTopic(F.TopicId);
+                        ImGui::EndCombo();
+                    }
+                }
+                ImGui::BeginChild("Detail",{0,0},ImGuiChildFlags_AlwaysUseWindowPadding);
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha,MenuFade*TopicFade.Alpha);
+                ImGui::BeginDisabled(!Open || TopicFade.Current!=TopicFade.Pending);
+                const auto& F=CurrentFeature(); HoverHelp::Guide=F.Guide;
+                Title(Tr(F.Name)); ImGui::TextWrapped("%s",Tr(F.Summary)); HoverHelp::Remember();
+                if(!Wide&&DrawCustomButton(Tr(U8("停止自动化"))))StopAutomation();
+                if(IsTopic(Topic::Home))Home();
+                else if(IsTopic(Topic::Shortcuts))ShortcutSettings();
+                else {Aimbot_Menu();Visuals_Menu();ResourceHarvest_Menu();EntityList_Menu();StructureList_Menu();ItemList_Menu();Misc_Menu();Language_Menu();Configs_Menu();Lua_Menu();}
+                ImGui::EndDisabled();ImGui::PopStyleVar();
+                ImGui::EndChild();
+            } ImGui::End();
+            ImGui::PopStyleVar();
+        }
+        Welcome(); ColorPalette::Draw(); HoverHelp::Draw();
+#ifndef PHOENIX_UI_TEST
+        g_LogManager::Run();LuaManager::Get().Lua_OnPaint();
+#endif
+    }
 }

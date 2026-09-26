@@ -58,6 +58,15 @@ IMGUI_IMPL_API bool     ImGui_ImplDX12_Init(ImGui_ImplDX12_InitInfo* info);
 IMGUI_IMPL_API void     ImGui_ImplDX12_Shutdown();
 IMGUI_IMPL_API void     ImGui_ImplDX12_NewFrame();
 IMGUI_IMPL_API void     ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandList* graphics_command_list);
+// The caller must complete this slot's previous draw fence before selecting it.
+IMGUI_IMPL_API bool     ImGui_ImplDX12_SetFrameResourceIndex(unsigned int index);
+// Failed/unfinished uploads retain their allocator, texture and upload buffer.
+// A removed device is safe to release, but IsReady() remains false.
+IMGUI_IMPL_API bool     ImGui_ImplDX12_WaitForPendingUploads(unsigned int timeout_ms);
+IMGUI_IMPL_API bool     ImGui_ImplDX12_IsReady();
+// Per-call result, separate from permanent backend/device health. A transient
+// upload-buffer allocation/map failure skips submission and can retry next frame.
+IMGUI_IMPL_API bool     ImGui_ImplDX12_LastRenderSucceeded();
 
 #ifndef IMGUI_DISABLE_OBSOLETE_FUNCTIONS
 // Legacy initialization API Obsoleted in 1.91.5
@@ -87,3 +96,6 @@ struct ImGui_ImplDX12_RenderState
 #endif
 
 #endif // #ifndef IMGUI_DISABLE
+
+// phoenix: optional scene blur, isolated from normal ImGui textures.
+IMGUI_IMPL_API bool ImGui_ImplDX12_SetVibrancyTexture(ImTextureID texture);

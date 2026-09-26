@@ -64,6 +64,7 @@
 #include <d3d12.h>
 #include <dxgi1_5.h>
 #include <d3dcompiler.h>
+#include <cstdint>
 #ifdef _MSC_VER
 #pragma comment(lib, "d3dcompiler") // Automatically link with d3dcompiler.lib as we are using D3DCompile() below.
 #endif
@@ -100,6 +101,8 @@ struct ImGui_ImplDX12_Data
     ID3D12RootSignature*        pRootSignatureNearest;
     ID3D12PipelineState*        pPipelineStateLinear;
     ID3D12PipelineState*        pPipelineStateNearest;
+    ID3D12PipelineState*        pPipelineStateVibrancy;
+    ImTextureID                VibrancyTexture;
     ID3D12CommandQueue*         pCommandQueue;
     bool                        commandQueueOwned;
     DXGI_FORMAT                 RTVFormat;
@@ -108,6 +111,11 @@ struct ImGui_ImplDX12_Data
     ID3D12Fence*                Fence;
     UINT64                      FenceLastSignaledValue;
     HANDLE                      FenceEvent;
+    bool                        UploadPending;
+    bool                        UploadNeedsSignal;
+    bool                        UploadFailed;
+    bool                        DeviceLost;
+    ImTextureData*              PendingTexture;
     UINT                        numFramesInFlight;
     bool                        tearingSupport;
     bool                        LegacySingleDescriptorUsed;
@@ -120,6 +128,10 @@ struct ImGui_ImplDX12_Data
 
     ImGui_ImplDX12_RenderBuffers* pFrameResources;
     UINT                        frameIndex;
+    UINT                        explicitFrameIndex;
+    bool                        explicitFrameSelected;
+    bool                        explicitFrameRequired;
+    bool                        lastRenderSucceeded;
 
     ImGui_ImplDX12_Data()       { memset((void*)this, 0, sizeof(*this)); }
 };
@@ -129,6 +141,62 @@ struct ImGui_ImplDX12_Data
 static ImGui_ImplDX12_Data* ImGui_ImplDX12_GetBackendData()
 {
     return ImGui::GetCurrentContext() ? (ImGui_ImplDX12_Data*)ImGui::GetIO().BackendRendererUserData : nullptr;
+}
+
+bool ImGui_ImplDX12_SetFrameResourceIndex(unsigned int index)
+{
+    auto* bd = ImGui_ImplDX12_GetBackendData();
+    if (!bd) return false;
+    bd->explicitFrameRequired = true;
+    bd->explicitFrameSelected = index < bd->numFramesInFlight;
+    bd->explicitFrameIndex = index;
+    return bd->explicitFrameSelected;
+}
+
+bool ImGui_ImplDX12_WaitForPendingUploads(unsigned int timeout_ms)
+{
+    auto* bd = ImGui_ImplDX12_GetBackendData();
+    if (!bd || !bd->UploadPending) return true;
+    if (FAILED(bd->pd3dDevice->GetDeviceRemovedReason())) {
+        bd->DeviceLost = true; bd->UploadPending = false; bd->PendingTexture = nullptr;
+        return true;
+    }
+    if (!bd->Fence || !bd->pCommandQueue || !bd->FenceEvent) return false;
+    // ExecuteCommandLists has no HRESULT. If Signal failed, retain ownership
+    // and place a new fence after the already submitted upload before reuse.
+    if (bd->UploadNeedsSignal) {
+        const UINT64 value = bd->FenceLastSignaledValue + 1;
+        if (FAILED(bd->pCommandQueue->Signal(bd->Fence, value))) return false;
+        bd->FenceLastSignaledValue = value; bd->UploadNeedsSignal = false;
+    }
+    UINT64 completed = bd->Fence->GetCompletedValue();
+    if (completed == UINT64_MAX) { bd->DeviceLost = true; bd->UploadPending = false; bd->PendingTexture = nullptr; return true; }
+    if (completed < bd->FenceLastSignaledValue) {
+        if (!timeout_ms || FAILED(bd->Fence->SetEventOnCompletion(bd->FenceLastSignaledValue, bd->FenceEvent))) return false;
+        // A stale event notification is not completion proof. Always recheck.
+        if (::WaitForSingleObject(bd->FenceEvent, timeout_ms > 2000 ? 2000 : timeout_ms) != WAIT_OBJECT_0) return false;
+        completed = bd->Fence->GetCompletedValue();
+        if (completed == UINT64_MAX) { bd->DeviceLost = true; bd->UploadPending = false; bd->PendingTexture = nullptr; return true; }
+        if (completed < bd->FenceLastSignaledValue) return false;
+    }
+    bd->UploadPending = false;
+    if (bd->PendingTexture && (bd->PendingTexture->Status == ImTextureStatus_WantCreate || bd->PendingTexture->Status == ImTextureStatus_WantUpdates))
+        bd->PendingTexture->SetStatus(ImTextureStatus_OK);
+    bd->PendingTexture = nullptr;
+    return true;
+}
+
+bool ImGui_ImplDX12_IsReady()
+{
+    auto* bd = ImGui_ImplDX12_GetBackendData();
+    if (bd && FAILED(bd->pd3dDevice->GetDeviceRemovedReason())) bd->DeviceLost = true;
+    return bd && !bd->UploadFailed && !bd->DeviceLost && !bd->UploadPending && bd->pPipelineStateLinear;
+}
+
+bool ImGui_ImplDX12_LastRenderSucceeded()
+{
+    auto* bd = ImGui_ImplDX12_GetBackendData();
+    return bd && bd->lastRenderSucceeded;
 }
 
 // Buffers used during the rendering of a frame
@@ -225,11 +293,25 @@ static void ImGui_ImplDX12_DrawCallback_SetSamplerLinear(const ImDrawList*, cons
 static void ImGui_ImplDX12_DrawCallback_SetSamplerNearest(const ImDrawList*, const ImDrawCmd*)  { ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData(); ImGui_ImplDX12_SetupSamplerNearest(bd->RenderState->CommandList); }
 
 // Render function
+bool ImGui_ImplDX12_SetVibrancyTexture(ImTextureID texture) {
+    auto* bd = ImGui_ImplDX12_GetBackendData();
+    if (!bd) return false;
+    bd->VibrancyTexture = texture;
+    return bd->pPipelineStateVibrancy != nullptr;
+}
+
 void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandList* command_list)
 {
+    ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
+    if (bd) bd->lastRenderSucceeded = false;
+    if (!bd || !draw_data || !command_list || !ImGui_ImplDX12_WaitForPendingUploads(0) || !ImGui_ImplDX12_IsReady()) return;
+    if (bd->explicitFrameRequired && !bd->explicitFrameSelected) return;
     // Avoid rendering when minimized
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
+    {
+        bd->lastRenderSucceeded = true;
         return;
+    }
 
     // Catch up with texture updates. Most of the times, the list will have 1 element with an OK status, aka nothing to do.
     // (This almost always points to ImGui::GetPlatformIO().Textures[] but is part of ImDrawData to allow overriding or disabling texture updates).
@@ -239,22 +321,27 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
                 ImGui_ImplDX12_UpdateTexture(tex);
 
     // FIXME: We are assuming that this only gets called once per frame!
-    ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
-    bd->frameIndex = bd->frameIndex + 1;
+    if (!ImGui_ImplDX12_IsReady()) return;
+    if (draw_data->TotalVtxCount == 0 || draw_data->TotalIdxCount == 0)
+    {
+        bd->lastRenderSucceeded = true;
+        return;
+    }
+    bd->frameIndex = bd->explicitFrameSelected ? bd->explicitFrameIndex : bd->frameIndex + 1;
+    bd->explicitFrameSelected = false;
     ImGui_ImplDX12_RenderBuffers* fr = &bd->pFrameResources[bd->frameIndex % bd->numFramesInFlight];
 
     // Create and grow vertex/index buffers if needed
     if (fr->VertexBuffer == nullptr || fr->VertexBufferSize < draw_data->TotalVtxCount)
     {
-        SafeRelease(fr->VertexBuffer);
-        fr->VertexBufferSize = draw_data->TotalVtxCount + 5000;
+        const int new_size = draw_data->TotalVtxCount + 5000;
         D3D12_HEAP_PROPERTIES props = {};
         props.Type = D3D12_HEAP_TYPE_UPLOAD;
         props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
         props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
         D3D12_RESOURCE_DESC desc = {};
         desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        desc.Width = fr->VertexBufferSize * sizeof(ImDrawVert);
+        desc.Width = static_cast<UINT64>(new_size) * sizeof(ImDrawVert);
         desc.Height = 1;
         desc.DepthOrArraySize = 1;
         desc.MipLevels = 1;
@@ -262,20 +349,23 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
         desc.SampleDesc.Count = 1;
         desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-        if (bd->pd3dDevice->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&fr->VertexBuffer)) < 0)
+        ID3D12Resource* replacement = nullptr;
+        if (bd->pd3dDevice->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&replacement)) < 0)
             return;
+        SafeRelease(fr->VertexBuffer);
+        fr->VertexBuffer = replacement;
+        fr->VertexBufferSize = new_size;
     }
     if (fr->IndexBuffer == nullptr || fr->IndexBufferSize < draw_data->TotalIdxCount)
     {
-        SafeRelease(fr->IndexBuffer);
-        fr->IndexBufferSize = draw_data->TotalIdxCount + 10000;
+        const int new_size = draw_data->TotalIdxCount + 10000;
         D3D12_HEAP_PROPERTIES props = {};
         props.Type = D3D12_HEAP_TYPE_UPLOAD;
         props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
         props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
         D3D12_RESOURCE_DESC desc = {};
         desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        desc.Width = fr->IndexBufferSize * sizeof(ImDrawIdx);
+        desc.Width = static_cast<UINT64>(new_size) * sizeof(ImDrawIdx);
         desc.Height = 1;
         desc.DepthOrArraySize = 1;
         desc.MipLevels = 1;
@@ -283,8 +373,12 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
         desc.SampleDesc.Count = 1;
         desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-        if (bd->pd3dDevice->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&fr->IndexBuffer)) < 0)
+        ID3D12Resource* replacement = nullptr;
+        if (bd->pd3dDevice->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&replacement)) < 0)
             return;
+        SafeRelease(fr->IndexBuffer);
+        fr->IndexBuffer = replacement;
+        fr->IndexBufferSize = new_size;
     }
 
     // Upload vertex/index data into a single contiguous GPU buffer
@@ -294,7 +388,10 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
     if (fr->VertexBuffer->Map(0, &range, &vtx_resource) != S_OK)
         return;
     if (fr->IndexBuffer->Map(0, &range, &idx_resource) != S_OK)
+    {
+        fr->VertexBuffer->Unmap(0, &range);
         return;
+    }
     ImDrawVert* vtx_dst = (ImDrawVert*)vtx_resource;
     ImDrawIdx* idx_dst = (ImDrawIdx*)idx_resource;
     for (const ImDrawList* draw_list : draw_data->CmdLists)
@@ -358,14 +455,18 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
                 // Bind texture, Draw
                 D3D12_GPU_DESCRIPTOR_HANDLE texture_handle = {};
                 texture_handle.ptr = (UINT64)pcmd->GetTexID();
+                const bool Vibrancy = bd->pPipelineStateVibrancy && bd->VibrancyTexture && pcmd->GetTexID() == bd->VibrancyTexture;
+                if (Vibrancy) command_list->SetPipelineState(bd->pPipelineStateVibrancy);
                 command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
                 command_list->DrawIndexedInstanced(pcmd->ElemCount, 1, pcmd->IdxOffset + global_idx_offset, pcmd->VtxOffset + global_vtx_offset, 0);
+                if (Vibrancy) command_list->SetPipelineState(bd->pPipelineStateLinear);
             }
         }
         global_idx_offset += draw_list->IdxBuffer.Size;
         global_vtx_offset += draw_list->VtxBuffer.Size;
     }
     platform_io.Renderer_RenderState = bd->RenderState = nullptr;
+    bd->lastRenderSucceeded = true;
 }
 
 static void ImGui_ImplDX12_DestroyTexture(ImTextureData* tex)
@@ -390,6 +491,13 @@ static void ImGui_ImplDX12_DestroyTexture(ImTextureData* tex)
 void ImGui_ImplDX12_UpdateTexture(ImTextureData* tex)
 {
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
+    if (!bd || !tex || bd->UploadFailed || bd->DeviceLost || !ImGui_ImplDX12_WaitForPendingUploads(0)) return;
+    if (bd->DeviceLost) return;
+    if ((tex->Status == ImTextureStatus_WantCreate || tex->Status == ImTextureStatus_WantUpdates) &&
+        (!tex->Pixels || tex->Format != ImTextureFormat_RGBA32 || tex->Width <= 0 || tex->Height <= 0 ||
+         tex->Width > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION || tex->Height > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION)) {
+        bd->UploadFailed = true; return;
+    }
     bool need_barrier_before_copy = true; // Do we need a resource barrier before we copy new data in?
 
     if (tex->Status == ImTextureStatus_WantCreate)
@@ -400,6 +508,9 @@ void ImGui_ImplDX12_UpdateTexture(ImTextureData* tex)
         IM_ASSERT(tex->Format == ImTextureFormat_RGBA32);
         ImGui_ImplDX12_Texture* backend_tex = IM_NEW(ImGui_ImplDX12_Texture)();
         bd->InitInfo.SrvDescriptorAllocFn(&bd->InitInfo, &backend_tex->hFontSrvCpuDescHandle, &backend_tex->hFontSrvGpuDescHandle); // Allocate a desctriptor handle
+        if (!backend_tex->hFontSrvCpuDescHandle.ptr || !backend_tex->hFontSrvGpuDescHandle.ptr) {
+            IM_DELETE(backend_tex); bd->UploadFailed = true; return;
+        }
 
         D3D12_HEAP_PROPERTIES props = {};
         props.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -421,8 +532,11 @@ void ImGui_ImplDX12_UpdateTexture(ImTextureData* tex)
         desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
         ID3D12Resource* pTexture = nullptr;
-        bd->pd3dDevice->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&pTexture));
+        if (FAILED(bd->pd3dDevice->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&pTexture)))) {
+            bd->InitInfo.SrvDescriptorFreeFn(&bd->InitInfo, backend_tex->hFontSrvCpuDescHandle, backend_tex->hFontSrvGpuDescHandle);
+            IM_DELETE(backend_tex); bd->UploadFailed = true; return;
+        }
 
         // Create SRV
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
@@ -456,6 +570,11 @@ void ImGui_ImplDX12_UpdateTexture(ImTextureData* tex)
         const int upload_y = (tex->Status == ImTextureStatus_WantCreate) ? 0 : tex->UpdateRect.y;
         const int upload_w = (tex->Status == ImTextureStatus_WantCreate) ? tex->Width : tex->UpdateRect.w;
         const int upload_h = (tex->Status == ImTextureStatus_WantCreate) ? tex->Height : tex->UpdateRect.h;
+        if (upload_x < 0 || upload_y < 0 || upload_w <= 0 || upload_h <= 0 ||
+            upload_x > tex->Width - upload_w || upload_y > tex->Height - upload_h ||
+            !bd->pTexCmdAllocator || !bd->pTexCmdList || !bd->Fence || !bd->FenceEvent) {
+            bd->UploadFailed = true; return;
+        }
 
         // Update full texture or selected blocks. We only ever write to textures regions which have never been used before!
         // This backend choose to use tex->UpdateRect but you can use tex->Updates[] to upload individual regions.
@@ -495,16 +614,17 @@ void ImGui_ImplDX12_UpdateTexture(ImTextureData* tex)
 
             HRESULT hr = bd->pd3dDevice->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&bd->pTexUploadBuffer));
-            IM_ASSERT(SUCCEEDED(hr));
+            if (FAILED(hr)) { bd->UploadFailed = true; return; }
 
             D3D12_RANGE range = {0, upload_size};
             hr = bd->pTexUploadBuffer->Map(0, &range, &bd->pTexUploadBufferMapped);
-            IM_ASSERT(SUCCEEDED(hr));
+            if (FAILED(hr)) { bd->UploadFailed = true; return; }
             bd->pTexUploadBufferSize = upload_size;
         }
 
-        bd->pTexCmdAllocator->Reset();
-        bd->pTexCmdList->Reset(bd->pTexCmdAllocator, nullptr);
+        if (FAILED(bd->pTexCmdAllocator->Reset()) || FAILED(bd->pTexCmdList->Reset(bd->pTexCmdAllocator, nullptr))) {
+            bd->UploadFailed = true; return;
+        }
         ID3D12GraphicsCommandList* cmdList = bd->pTexCmdList;
 
         // Copy to upload buffer
@@ -551,20 +671,14 @@ void ImGui_ImplDX12_UpdateTexture(ImTextureData* tex)
         }
 
         HRESULT hr = cmdList->Close();
-        IM_ASSERT(SUCCEEDED(hr));
+        if (FAILED(hr)) { bd->UploadFailed = true; return; }
         ID3D12CommandQueue* cmdQueue = bd->pCommandQueue;
+        // Ownership begins before submission, including a subsequent Signal
+        // failure. No allocator/buffer/texture may be reset or released until
+        // a successful later fence proves this submission has completed.
+        bd->UploadPending = true; bd->UploadNeedsSignal = true; bd->PendingTexture = tex;
         cmdQueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)&cmdList);
-        hr = cmdQueue->Signal(bd->Fence, ++bd->FenceLastSignaledValue);
-        IM_ASSERT(SUCCEEDED(hr));
-
-        // FIXME-OPT: Suboptimal?
-        // - To remove this may need to create NumFramesInFlight x ImGui_ImplDX12_FrameContext in backend data (mimick docking version)
-        // - Store per-frame in flight: upload buffer?
-        // - Where do cmdList and cmdAlloc fit?
-        bd->Fence->SetEventOnCompletion(bd->FenceLastSignaledValue, bd->FenceEvent);
-        ::WaitForSingleObject(bd->FenceEvent, INFINITE);
-
-        tex->SetStatus(ImTextureStatus_OK);
+        ImGui_ImplDX12_WaitForPendingUploads(1000);
     }
 
     if (tex->Status == ImTextureStatus_WantDestroy && tex->UnusedFrames >= (int)bd->numFramesInFlight)
@@ -574,13 +688,13 @@ void ImGui_ImplDX12_UpdateTexture(ImTextureData* tex)
 bool    ImGui_ImplDX12_CreateDeviceObjects()
 {
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
-    if (!bd || !bd->pd3dDevice)
+    if (!bd || !bd->pd3dDevice || bd->DeviceLost || !ImGui_ImplDX12_WaitForPendingUploads(0))
         return false;
     if (bd->pPipelineStateLinear)
         ImGui_ImplDX12_InvalidateDeviceObjects();
 
     HRESULT hr = ::CreateDXGIFactory1(IID_PPV_ARGS(&bd->pdxgiFactory));
-    IM_ASSERT(hr == S_OK);
+    if (FAILED(hr)) return false;
 
     BOOL allow_tearing = FALSE;
     bd->pdxgiFactory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allow_tearing, sizeof(allow_tearing));
@@ -665,16 +779,18 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
         if (D3D12SerializeRootSignatureFn(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, nullptr) != S_OK)
             return false;
 
-        bd->pd3dDevice->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&bd->pRootSignatureLinear));
+        hr = bd->pd3dDevice->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&bd->pRootSignatureLinear));
         blob->Release();
+        if (FAILED(hr)) return false;
 
         // Nearest sampler
         staticSampler[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
         if (D3D12SerializeRootSignatureFn(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, nullptr) != S_OK)
             return false;
 
-        bd->pd3dDevice->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&bd->pRootSignatureNearest));
+        hr = bd->pd3dDevice->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&bd->pRootSignatureNearest));
         blob->Release();
+        if (FAILED(hr)) return false;
     }
 
     // By using D3DCompile() from <d3dcompiler.h> / d3dcompiler.lib, we introduce a dependency to a given version of d3dcompiler_XX.dll (see D3DCOMPILER_DLL_A)
@@ -820,6 +936,28 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
     psoDesc.pRootSignature = bd->pRootSignatureNearest;
 
     result_pipeline_state = bd->pd3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&bd->pPipelineStateNearest));
+    // A small Gaussian kernel only covers the sidebar quad. Texture dimensions
+    // keep the blur radius stable across screen resolutions. No animated shader.
+    const char* vibrancyShader = R"(
+        struct PS_INPUT { float4 pos:SV_POSITION; float4 col:COLOR0; float2 uv:TEXCOORD0; };
+        SamplerState sampler0:register(s0); Texture2D texture0:register(t0);
+        float4 main(PS_INPUT input):SV_Target {
+            uint w,h; texture0.GetDimensions(w,h); float3 sum=0; float total=0;
+            [unroll] for(int y=-3;y<=3;++y) [unroll] for(int x=-3;x<=3;++x) {
+                float weight=exp(-float(x*x+y*y)/5.0);
+                sum+=texture0.Sample(sampler0,input.uv+float2(x,y)*5.0/float2(w,h)).rgb*weight;
+                total+=weight;
+            }
+            return float4(sum/total,1)*input.col;
+        })";
+    ID3DBlob* blurBlob = nullptr;
+    if (SUCCEEDED(D3DCompile(vibrancyShader, strlen(vibrancyShader), nullptr, nullptr, nullptr,
+        "main", "ps_5_0", 0, 0, &blurBlob, nullptr))) {
+        psoDesc.pRootSignature = bd->pRootSignatureLinear;
+        psoDesc.PS = {blurBlob->GetBufferPointer(), blurBlob->GetBufferSize()};
+        bd->pd3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&bd->pPipelineStateVibrancy));
+        blurBlob->Release();
+    }
     vertexShaderBlob->Release();
     pixelShaderBlob->Release();
     if (result_pipeline_state != S_OK)
@@ -827,17 +965,17 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
 
     // Create command allocator and command list for ImGui_ImplDX12_UpdateTexture()
     hr = bd->pd3dDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&bd->pTexCmdAllocator));
-    IM_ASSERT(SUCCEEDED(hr));
+    if (FAILED(hr)) return false;
     hr = bd->pd3dDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, bd->pTexCmdAllocator, nullptr, IID_PPV_ARGS(&bd->pTexCmdList));
-    IM_ASSERT(SUCCEEDED(hr));
+    if (FAILED(hr)) return false;
     hr = bd->pTexCmdList->Close();
-    IM_ASSERT(SUCCEEDED(hr));
+    if (FAILED(hr)) return false;
 
     // Create fence.
     hr = bd->pd3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&bd->Fence));
-    IM_ASSERT(hr == S_OK);
+    if (FAILED(hr)) return false;
     bd->FenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-    IM_ASSERT(bd->FenceEvent != nullptr);
+    if (!bd->FenceEvent) return false;
 
     return true;
 }
@@ -845,17 +983,16 @@ bool    ImGui_ImplDX12_CreateDeviceObjects()
 void    ImGui_ImplDX12_InvalidateDeviceObjects()
 {
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
-    if (!bd || !bd->pd3dDevice)
+    if (!bd || !bd->pd3dDevice || !ImGui_ImplDX12_WaitForPendingUploads(0))
         return;
 
     SafeRelease(bd->pdxgiFactory);
-    if (bd->commandQueueOwned)
-        SafeRelease(bd->pCommandQueue);
-    bd->commandQueueOwned = false;
     SafeRelease(bd->pRootSignatureLinear);
     SafeRelease(bd->pRootSignatureNearest);
     SafeRelease(bd->pPipelineStateLinear);
     SafeRelease(bd->pPipelineStateNearest);
+    SafeRelease(bd->pPipelineStateVibrancy);
+    bd->VibrancyTexture = 0;
 
     if (bd->pTexUploadBufferMapped)
     {
@@ -869,6 +1006,8 @@ void    ImGui_ImplDX12_InvalidateDeviceObjects()
     SafeRelease(bd->Fence);
     CloseHandle(bd->FenceEvent);
     bd->FenceEvent = nullptr;
+    bd->pTexUploadBufferSize = 0; bd->FenceLastSignaledValue = 0;
+    bd->UploadFailed = false; bd->PendingTexture = nullptr;
 
     // Destroy all textures
     for (ImTextureData* tex : ImGui::GetPlatformIO().Textures)
@@ -891,7 +1030,7 @@ static void ImGui_ImplDX12_InitLegacySingleDescriptorMode(ImGui_ImplDX12_InitInf
     init_info->SrvDescriptorAllocFn = [](ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* out_cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE* out_gpu_handle)
     {
         ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
-        IM_ASSERT(bd->LegacySingleDescriptorUsed == false && "Only 1 simultaneous texture allowed with legacy ImGui_ImplDX12_Init() signature!");
+        if (bd->LegacySingleDescriptorUsed) { *out_cpu_handle = {}; *out_gpu_handle = {}; return; }
         *out_cpu_handle = bd->InitInfo.LegacySingleSrvCpuDescriptor;
         *out_gpu_handle = bd->InitInfo.LegacySingleSrvGpuDescriptor;
         bd->LegacySingleDescriptorUsed = true;
@@ -899,7 +1038,6 @@ static void ImGui_ImplDX12_InitLegacySingleDescriptorMode(ImGui_ImplDX12_InitInf
     init_info->SrvDescriptorFreeFn = [](ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE)
     {
         ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
-        IM_ASSERT(bd->LegacySingleDescriptorUsed == true);
         bd->LegacySingleDescriptorUsed = false;
     };
 }
@@ -908,6 +1046,20 @@ static void ImGui_ImplDX12_InitLegacySingleDescriptorMode(ImGui_ImplDX12_InitInf
 bool ImGui_ImplDX12_Init(ImGui_ImplDX12_InitInfo* init_info)
 {
     ImGuiIO& io = ImGui::GetIO();
+    if (!init_info || !init_info->Device || !init_info->CommandQueue || !init_info->SrvDescriptorHeap ||
+        init_info->NumFramesInFlight <= 0 || init_info->NumFramesInFlight > 16 || io.BackendRendererUserData) return false;
+    if ((init_info->SrvDescriptorAllocFn == nullptr) != (init_info->SrvDescriptorFreeFn == nullptr)) return false;
+    const bool legacy_descriptors = init_info->SrvDescriptorAllocFn == nullptr;
+#ifndef IMGUI_DISABLE_OBSOLETE_FUNCTIONS
+    if (legacy_descriptors && (!init_info->LegacySingleSrvCpuDescriptor.ptr || !init_info->LegacySingleSrvGpuDescriptor.ptr)) return false;
+#else
+    if (legacy_descriptors) return false;
+#endif
+    ID3D12Device* queue_device = nullptr;
+    if (FAILED(init_info->CommandQueue->GetDevice(IID_PPV_ARGS(&queue_device)))) return false;
+    const bool matching_device = queue_device == init_info->Device;
+    queue_device->Release();
+    if (!matching_device || init_info->CommandQueue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT) return false;
     IMGUI_CHECKVERSION();
     IM_ASSERT(io.BackendRendererUserData == nullptr && "Already initialized a renderer backend!");
 
@@ -939,6 +1091,7 @@ bool ImGui_ImplDX12_Init(ImGui_ImplDX12_InitInfo* init_info)
     if (init_info->SrvDescriptorAllocFn == nullptr)
         ImGui_ImplDX12_InitLegacySingleDescriptorMode(init_info);
 #endif
+    if (legacy_descriptors) io.BackendFlags &= ~ImGuiBackendFlags_RendererHasTextures;
     IM_ASSERT(init_info->SrvDescriptorAllocFn != nullptr && init_info->SrvDescriptorFreeFn != nullptr);
 
     // Create buffers with a default size (they will later be grown as needed)
@@ -974,9 +1127,10 @@ bool ImGui_ImplDX12_Init(ID3D12Device* device, int num_frames_in_flight, DXGI_FO
     queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
     queueDesc.NodeMask = 1;
     HRESULT hr = device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&init_info.CommandQueue));
-    IM_ASSERT(SUCCEEDED(hr));
+    if (FAILED(hr)) return false;
 
     bool ret = ImGui_ImplDX12_Init(&init_info);
+    if (!ret) { init_info.CommandQueue->Release(); return false; }
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
     bd->commandQueueOwned = true;
 
@@ -990,11 +1144,13 @@ bool ImGui_ImplDX12_Init(ID3D12Device* device, int num_frames_in_flight, DXGI_FO
 void ImGui_ImplDX12_Shutdown()
 {
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
+    if (!bd || !ImGui_ImplDX12_WaitForPendingUploads(0)) return;
     IM_ASSERT(bd != nullptr && "No renderer backend to shutdown, or already shutdown?");
     ImGuiIO& io = ImGui::GetIO();
     ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
 
     ImGui_ImplDX12_InvalidateDeviceObjects();
+    if (bd->commandQueueOwned) SafeRelease(bd->pCommandQueue);
     delete[] bd->pFrameResources;
 
     io.BackendRendererName = nullptr;
@@ -1007,11 +1163,12 @@ void ImGui_ImplDX12_Shutdown()
 void ImGui_ImplDX12_NewFrame()
 {
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
+    if (!bd || bd->UploadFailed || bd->DeviceLost || !ImGui_ImplDX12_WaitForPendingUploads(0)) return;
     IM_ASSERT(bd != nullptr && "Context or backend not initialized! Did you call ImGui_ImplDX12_Init()?");
 
     if (!bd->pPipelineStateLinear)
         if (!ImGui_ImplDX12_CreateDeviceObjects())
-            IM_ASSERT(0 && "ImGui_ImplDX12_CreateDeviceObjects() failed!");
+            bd->UploadFailed = true;
 }
 
 //-----------------------------------------------------------------------------

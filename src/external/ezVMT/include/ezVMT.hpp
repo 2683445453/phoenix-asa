@@ -1,317 +1,134 @@
-﻿#pragma once
-
+#pragma once
 #include <windows.h>
 #include <cstdint>
 #include <vector>
 #include <cstring>
+#include <mutex>
 
 namespace ezVMT {
-
-    // 内部结构体：保存 Hook 上下文信息
     struct HookEntry {
-        void* detour;             // 自定义钩子函数的地址（作为主键）
-        void*** classInstance;    // 类的实例地址（即 &vtable 指针）
-        void** originalVmt;       // 原始虚函数表地址
-        void** customVmt;         // 复制出的新虚函数表首地址（指向函数入口起始处）
-        void* originalFunc;       // 原始函数地址
-        size_t index;             // 挂钩的虚表索引
-        size_t totalCount;        // 虚表函数总数量
-        bool isEnabled;           // 当前是否已启用
+        void* detour = nullptr;
+        void*** classInstance = nullptr;
+        void** originalVmt = nullptr;
+        void** customVmt = nullptr;
+        void* originalFunc = nullptr;
+        size_t index = 0, totalCount = 0;
+        bool isEnabled = false, published = false;
     };
-
-    // 全局钩子记录列表
     inline std::vector<HookEntry> g_Hooks;
-
-    // 检查候选 Data Cave 是否与已存在的 Hook 内存重叠
-    inline bool IsDataCaveOverlap(uintptr_t start, size_t size) {
-        uintptr_t end = start + size;
-        for (const auto& entry : g_Hooks) {
-            if (entry.customVmt) {
-                uintptr_t usedStart = reinterpret_cast<uintptr_t>(&(entry.customVmt[-2]));
-                uintptr_t usedEnd = usedStart + ((entry.totalCount + 2) * sizeof(void*));
-
-                if (start < usedEnd && end > usedStart) {
-                    return true;
-                }
-            }
+    inline std::recursive_mutex g_Mutex;
+    inline size_t g_RetiredBytes = 0;
+    inline bool Accessible(const void* Address, size_t Size, bool Write = false) {
+        auto Cursor = reinterpret_cast<uintptr_t>(Address);
+        if (!Cursor || !Size || Cursor > UINTPTR_MAX - Size) return false;
+        const auto End = Cursor + Size;
+        while (Cursor < End) {
+            MEMORY_BASIC_INFORMATION Region{};
+            if (!VirtualQuery(reinterpret_cast<const void*>(Cursor), &Region, sizeof(Region)) ||
+                Region.State != MEM_COMMIT || (Region.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return false;
+            const DWORD P = Region.Protect & 0xff;
+            const bool Writable = P == PAGE_READWRITE || P == PAGE_WRITECOPY || P == PAGE_EXECUTE_READWRITE || P == PAGE_EXECUTE_WRITECOPY;
+            if (Write ? !Writable : !(Writable || P == PAGE_READONLY || P == PAGE_EXECUTE_READ)) return false;
+            const auto Next = reinterpret_cast<uintptr_t>(Region.BaseAddress) + Region.RegionSize;
+            if (Next <= Cursor) return false;
+            Cursor = Next < End ? Next : End;
         }
-        return false;
+        return true;
     }
-
-    // 获取模块的可执行代码内存范围
-    inline void GetTextSectionRange(uintptr_t moduleBase, uintptr_t& outStart, uintptr_t& outEnd) {
-        auto dosHeader = (PIMAGE_DOS_HEADER)moduleBase;
-        if (!dosHeader || dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-            return;
-        }
-
-        auto ntHeaders = (PIMAGE_NT_HEADERS)(moduleBase + dosHeader->e_lfanew);
-        if (!ntHeaders || ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
-            return;
-        }
-
-        outStart = moduleBase + ntHeaders->OptionalHeader.BaseOfCode;
-        outEnd = outStart + ntHeaders->OptionalHeader.SizeOfCode;
-
-        auto sectionHeader = IMAGE_FIRST_SECTION(ntHeaders);
-        for (WORD i = 0; i < ntHeaders->FileHeader.NumberOfSections; i++) {
-            if (sectionHeader[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) {
-                uintptr_t secStart = moduleBase + sectionHeader[i].VirtualAddress;
-                uintptr_t secEnd = secStart + sectionHeader[i].Misc.VirtualSize;
-
-                if (secStart < outStart) outStart = secStart;
-                if (secEnd > outEnd) outEnd = secEnd;
-            }
-        }
+    inline bool IsWritableAddress(const void* Address) { return Accessible(Address, sizeof(void*), true); }
+    inline bool IsExecutable(const void* Address) {
+        MEMORY_BASIC_INFORMATION Region{};
+        if (!Address || !VirtualQuery(Address, &Region, sizeof(Region)) || Region.State != MEM_COMMIT ||
+            (Region.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return false;
+        const DWORD P = Region.Protect & 0xff;
+        return P == PAGE_EXECUTE || P == PAGE_EXECUTE_READ || P == PAGE_EXECUTE_READWRITE || P == PAGE_EXECUTE_WRITECOPY;
     }
-
-    // 动态计算虚函数表中的函数数量
-    inline size_t GetVMTSizeDynamic(void** vmt) {
-        static uintptr_t textStart = 0, textEnd = 0;
-        if (!textStart) {
-            GetTextSectionRange((uintptr_t)GetModuleHandleA(NULL), textStart, textEnd);
-        }
-
-        if (!textStart || !vmt) {
-            return 0;
-        }
-
-        size_t count = 0;
-        while (vmt[count]) {
-            uintptr_t func = (uintptr_t)vmt[count];
-            if (func < textStart || func >= textEnd) {
-                break;
-            }
-            count++;
-        }
-        return count;
+    inline size_t GetVMTSizeDynamic(void** Vmt) {
+        size_t Count = 0;
+        while (Count < 4096 && Accessible(Vmt + Count, sizeof(void*)) && IsExecutable(Vmt[Count])) ++Count;
+        return Count;
     }
-
-    // 查找目标模块数据段中的空闲区域 (Data Cave)
-    inline uintptr_t FindGameDataCave(uintptr_t moduleBase, size_t size) {
-        auto dosHeader = (PIMAGE_DOS_HEADER)moduleBase;
-        if (!dosHeader || dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-            return 0;
-        }
-
-        auto ntHeaders = (PIMAGE_NT_HEADERS)(moduleBase + dosHeader->e_lfanew);
-        if (!ntHeaders || ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
-            return 0;
-        }
-
-        auto sectionHeader = IMAGE_FIRST_SECTION(ntHeaders);
-
-        for (WORD i = 0; i < ntHeaders->FileHeader.NumberOfSections; i++) {
-            if (memcmp(sectionHeader[i].Name, ".data", 5) == 0 ||
-                memcmp(sectionHeader[i].Name, ".bss", 4) == 0) {
-
-                uintptr_t sectionStart = moduleBase + sectionHeader[i].VirtualAddress;
-                size_t sectionSize = sectionHeader[i].Misc.VirtualSize;
-
-                size_t consecutiveZeroes = 0;
-                for (size_t offset = sectionSize - 1; offset > 0; offset--) {
-                    if (*(BYTE*)(sectionStart + offset) == 0x00) {
-                        consecutiveZeroes++;
-                        if (consecutiveZeroes >= size + 16) {
-                            uintptr_t candidate = (sectionStart + offset + 15) & ~15;
-
-                            if (IsDataCaveOverlap(candidate, size)) {
-                                consecutiveZeroes = 0;
-                                continue;
-                            }
-
-                            return candidate;
-                        }
-                    }
-                    else {
-                        consecutiveZeroes = 0;
-                    }
-                }
-            }
-        }
-        return 0;
-    }
-
-    // 查找内部 Hook 条目辅助函数
-    inline HookEntry* FindHookEntry(void* detour) {
-        for (auto& entry : g_Hooks) {
-            if (entry.detour == detour) {
-                return &entry;
-            }
-        }
+    inline HookEntry* FindHookEntry(void* Detour) {
+        for (auto& Entry : g_Hooks) if (Entry.detour == Detour) return &Entry;
         return nullptr;
     }
-
-    inline bool IsWritableAddress(const void* address) {
-        if (!address) return false;
-
-        MEMORY_BASIC_INFORMATION memoryInfo{};
-        if (VirtualQuery(address, &memoryInfo, sizeof(memoryInfo)) != sizeof(memoryInfo)) {
-            return false;
-        }
-
-        if (memoryInfo.State != MEM_COMMIT ||
-            (memoryInfo.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0) {
-            return false;
-        }
-
-        const DWORD protection = memoryInfo.Protect & 0xFF;
-        return protection == PAGE_READWRITE ||
-            protection == PAGE_WRITECOPY ||
-            protection == PAGE_EXECUTE_READWRITE ||
-            protection == PAGE_EXECUTE_WRITECOPY;
-    }
-
-    /**
-     * @brief 创建一个 VMT Hook（基于模块数据段 Cave）
-     * @param detour 自定义钩子函数的地址
-     * @param classInstance 拥有虚表的实例指针
-     * @param index 要挂钩的虚表索引
-     * @param outOriginal [可选输出] 接收原函数指针
-     * @return 成功返回 true，失败返回 false
-     */
-    inline bool CreateHook(void* detour, void* classInstance, size_t index, void** outOriginal = nullptr) {
-        if (!detour || !classInstance) {
-            return false;
-        }
-
-        if (FindHookEntry(detour) != nullptr) {
-            return false;
-        }
-
-        void*** pInstance = reinterpret_cast<void***>(classInstance);
-        void** originalVmt = *pInstance;
-
-        if (!originalVmt) {
-            return false;
-        }
-
-        size_t totalCount = GetVMTSizeDynamic(originalVmt);
-        if (index >= totalCount || totalCount == 0) {
-            return false;
-        }
-
-        uintptr_t gameModule = (uintptr_t)GetModuleHandleA(NULL);
-        size_t totalVmtBytes = (totalCount + 2) * sizeof(void*);
-
-        uintptr_t dataCaveRaw = FindGameDataCave(gameModule, totalVmtBytes);
-        if (!dataCaveRaw) {
-            return false;
-        }
-
-        void** shadowVMTBuffer = reinterpret_cast<void**>(dataCaveRaw);
-
-        shadowVMTBuffer[0] = originalVmt[-2];
-        shadowVMTBuffer[1] = originalVmt[-1];
-
-        void** customVmt = &shadowVMTBuffer[2];
-        std::memcpy(customVmt, originalVmt, totalCount * sizeof(void*));
-        customVmt[index] = detour;
-
-        if (outOriginal) {
-            *outOriginal = originalVmt[index];
-        }
-
-        HookEntry entry;
-        entry.detour = detour;
-        entry.classInstance = pInstance;
-        entry.originalVmt = originalVmt;
-        entry.customVmt = customVmt;
-        entry.originalFunc = originalVmt[index];
-        entry.index = index;
-        entry.totalCount = totalCount;
-        entry.isEnabled = false;
-
-        g_Hooks.push_back(entry);
+    inline bool CreateHook(void* Detour, void* Instance, size_t Index, void** Original = nullptr) {
+        std::scoped_lock Lock(g_Mutex);
+        if (!IsExecutable(Detour) || !IsWritableAddress(Instance) || FindHookEntry(Detour)) return false;
+        auto*** Object = reinterpret_cast<void***>(Instance);
+        for (const auto& Existing : g_Hooks) if (Existing.classInstance == Object) return false;
+        auto** Native = *Object;
+        const size_t Count = GetVMTSizeDynamic(Native);
+        if (Index >= Count || !Accessible(Native - 2, (Count + 2) * sizeof(void*))) return false;
+        // Ark .data/.bss zero bytes are game-owned state, never spare storage.
+        auto** Storage = static_cast<void**>(VirtualAlloc(nullptr, (Count + 2) * sizeof(void*), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+        if (!Storage) return false;
+        std::memcpy(Storage, Native - 2, (Count + 2) * sizeof(void*));
+        auto** Shadow = Storage + 2;
+        Shadow[Index] = Detour;
+        HookEntry Entry{Detour, Object, Native, Shadow, Native[Index], Index, Count, false, false};
+        try { g_Hooks.push_back(Entry); }
+        catch (...) { VirtualFree(Storage, 0, MEM_RELEASE); return false; }
+        if (Original) *Original = Native[Index];
         return true;
     }
-
-    /**
-     * @brief 启用钩子
-     * @param detour 自定义钩子函数的地址
-     * @return 成功返回 true，失败返回 false
-     */
-    inline bool EnableHook(void* detour) {
-        HookEntry* entry = FindHookEntry(detour);
-        if (!entry || entry->isEnabled) {
-            return false;
-        }
-
-        *(entry->classInstance) = entry->customVmt;
-        entry->isEnabled = true;
+    inline bool EnableHook(void* Detour) {
+        std::scoped_lock Lock(g_Mutex);
+        auto* Entry = FindHookEntry(Detour);
+        if (!Entry || Entry->isEnabled || !IsWritableAddress(Entry->classInstance)) return false;
+        Entry->customVmt[Entry->index] = Detour;
+        void* Previous = InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(Entry->classInstance), Entry->customVmt, Entry->originalVmt);
+        if (Previous != Entry->originalVmt) { Entry->customVmt[Entry->index] = Entry->originalFunc; return false; }
+        Entry->isEnabled = Entry->published = true;
         return true;
     }
-
-    /**
-     * @brief 禁用钩子
-     * @param detour 自定义钩子函数的地址
-     * @return 成功返回 true，失败返回 false
-     */
-    inline bool DisableHook(void* detour) {
-        HookEntry* entry = FindHookEntry(detour);
-        if (!entry || !entry->isEnabled) {
-            return false;
+    inline bool DisableEntry(HookEntry& Entry) {
+        // A delayed caller may already hold the shadow table in a register.
+        if (!Accessible(Entry.customVmt, Entry.totalCount * sizeof(void*), true)) return false;
+        InterlockedExchangePointer(reinterpret_cast<void* volatile*>(&Entry.customVmt[Entry.index]), Entry.originalFunc);
+        if (!Entry.isEnabled) return true;
+        if (!IsWritableAddress(Entry.classInstance)) {
+            if (Accessible(Entry.classInstance, sizeof(void*))) return false;
+            Entry.isEnabled = false; return true; // object memory has been unmapped
         }
-
-        *(entry->classInstance) = entry->originalVmt;
-        entry->isEnabled = false;
+        void* Previous = InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(Entry.classInstance), Entry.originalVmt, Entry.customVmt);
+        if (Previous != Entry.customVmt && Previous != Entry.originalVmt) return false;
+        Entry.isEnabled = false;
         return true;
     }
-
-    /**
-     * @brief 移除并销毁钩子
-     * @param detour 自定义钩子函数的地址
-     * @return 成功返回 true，失败返回 false
-     */
-    inline bool RemoveHook(void* detour) {
-        for (auto it = g_Hooks.begin(); it != g_Hooks.end(); ++it) {
-            if (it->detour == detour) {
-                if (it->isEnabled && IsWritableAddress(it->classInstance) &&
-                    *(it->classInstance) == it->customVmt) {
-                    *(it->classInstance) = it->originalVmt;
-                }
-
-                void** shadowBuffer = &(it->customVmt[-2]);
-                if (IsWritableAddress(shadowBuffer)) {
-                    std::memset(shadowBuffer, 0, (it->totalCount + 2) * sizeof(void*));
-                }
-
-                g_Hooks.erase(it);
-                return true;
-            }
+    inline bool DisableHook(void* Detour) {
+        std::scoped_lock Lock(g_Mutex);
+        auto* Entry = FindHookEntry(Detour);
+        return Entry && DisableEntry(*Entry);
+    }
+    inline void Retire(HookEntry& Entry) {
+        if (!Entry.published) VirtualFree(Entry.customVmt - 2, 0, MEM_RELEASE);
+        else {
+            // Published tables remain native-only until process exit. Freeing
+            // them can fault a preempted caller that already loaded the vptr.
+            g_RetiredBytes += (Entry.totalCount + 2) * sizeof(void*);
         }
-        return false;
     }
-
-    /**
-     * @brief Restores every shadow VMT before the detour module is unloaded.
-     *        Centralizing this prevents a newly added VMT hook from being
-     *        forgotten in the unload path.
-     */
-    inline void RemoveAllHooks() {
-        for (auto& entry : g_Hooks) {
-            if (entry.isEnabled && IsWritableAddress(entry.classInstance) &&
-                *(entry.classInstance) == entry.customVmt) {
-                *(entry.classInstance) = entry.originalVmt;
-            }
-
-            void** shadowBuffer = &(entry.customVmt[-2]);
-            if (IsWritableAddress(shadowBuffer)) {
-                std::memset(shadowBuffer, 0, (entry.totalCount + 2) * sizeof(void*));
-            }
+    inline bool RemoveHook(void* Detour) {
+        std::scoped_lock Lock(g_Mutex);
+        for (auto It = g_Hooks.begin(); It != g_Hooks.end(); ++It) if (It->detour == Detour) {
+            if (!DisableEntry(*It)) return false;
+            Retire(*It); g_Hooks.erase(It); return true;
         }
-
-        g_Hooks.clear();
+        return true;
     }
-
-    /**
-     * @brief 辅助函数：获取原始函数地址
-     * @param detour 自定义钩子函数的地址
-     * @return 原始函数地址，找不到则返回 nullptr
-     */
-    inline void* GetOriginal(void* detour) {
-        HookEntry* entry = FindHookEntry(detour);
-        return entry ? entry->originalFunc : nullptr;
+    inline bool RemoveAllHooks() {
+        std::scoped_lock Lock(g_Mutex);
+        bool Complete = true;
+        for (auto It = g_Hooks.begin(); It != g_Hooks.end();) {
+            if (!DisableEntry(*It)) { Complete = false; ++It; continue; }
+            Retire(*It); It = g_Hooks.erase(It);
+        }
+        return Complete;
     }
-
-} // namespace ezVMT
+    inline void* GetOriginal(void* Detour) {
+        std::scoped_lock Lock(g_Mutex);
+        auto* Entry = FindHookEntry(Detour);
+        return Entry ? Entry->originalFunc : nullptr;
+    }
+}

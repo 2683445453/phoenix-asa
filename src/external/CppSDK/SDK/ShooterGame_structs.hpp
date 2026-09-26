@@ -3603,6 +3603,7 @@ public:
 	TArray<struct FSecondaryMountedDinoSetup>     SecondaryMountedDinoSetups;                        // 0x0DF8(0x0010)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, NativeAccessSpecifierPublic)
 	uint8                                         bUseBPAddAlwaysHitMeleeActors : 1;                 // 0x0E08(0x0001)(BitIndex: 0x00, PropSize: 0x0001 (Edit, BlueprintVisible, DisableEditOnInstance, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic))
 	uint8                                         bPreventCrosshairDraw : 1;                         // 0x0E08(0x0001)(BitIndex: 0x01, PropSize: 0x0001 (Edit, BlueprintVisible, DisableEditOnInstance, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic))
+	uint8                                         bUseBPOnImpactEffectSpawned : 1;                   // 0x0E08(0x0001)(BitIndex: 0x02, PropSize: 0x0001 (Edit, BlueprintVisible, DisableEditOnInstance, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic))
 	uint8                                         Pad_E09[0x3];                                      // 0x0E09(0x0003)(Fixing Size After Last Property [ Dumper-7 ])
 	float                                         MaxRepairHealthPercentage;                         // 0x0E0C(0x0004)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 };

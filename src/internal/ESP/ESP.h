@@ -1,11 +1,16 @@
 // ESP.h
 #pragma once
 #include <vector>
+#include <array>
 #include <string>
 #include "../../external/CppSDK/SDK.hpp"
 #include "../../external/Shadow-Gui/include/Shadow.h"
 
 namespace g_ESP {
+    void BeginProjectionFrame(SDK::UCanvas* Canvas);
+    bool ProjectToCanvas(SDK::UCanvas* Canvas, SDK::APlayerController* PC,
+        const SDK::FVector& World, SDK::FVector2D* Screen);
+
     struct BoxRect {
         Shadow::Vec2 topLeft;
         Shadow::Vec2 bottomRight;
@@ -69,12 +74,32 @@ namespace g_ESP {
             bottomY = 0.0f;
         }
 
-        void AddFlag(SDK::UCanvas* Canvas, BoxRect rect, const std::string& text, Shadow::Color color, FlagPos pos, float alphaMult, const BarManager* barMgr);
+        void AddFlag(SDK::UCanvas* Canvas, BoxRect rect, const std::string& text,
+            Shadow::Color color, FlagPos pos, float alphaMult,
+            const BarManager* barMgr, float scaleMultiplier = 1.0f);
     };
 
+    struct EntityInfo {
+        std::string Name;
+        std::string Detail;
+        std::string Armor, Weapon, Ammo;
+        std::array<SDK::UTexture2D*, 5> ArmorIcons{};
+        SDK::UTexture2D* WeaponIcon = nullptr;
+        std::array<Shadow::Color, 5> ArmorQualityColors{};
+        Shadow::Color WeaponQualityColor{};
+        std::vector<std::string> LootItems;
+        Shadow::Color ArmorColor{}, WeaponColor{}, AmmoColor{};
+        float Distance = 0, Health = 0, MaxHealth = 0, Torpor = 0, MaxTorpor = 0;
+        float Scale = 1, Alpha = 1;
+        bool ShowDistance = false, ShowHealth = false, ShowTorpor = false;
+        Shadow::Color NameColor{}, DetailColor{}, DistanceColor{}, HealthColor{}, TorporColor{};
+    };
+    void DrawEntityInfo(SDK::UCanvas* Canvas, const BoxRect& Box, const EntityInfo& Info, int& PreviousSlot);
     void BeginLabelFrame();
     BoxRect GetBox(SDK::UCanvas* Canvas, SDK::AActor* entity, float width_scale,
-        bool useCharacterMeshBounds = true);
+        bool useCharacterMeshBounds = true,
+        const SDK::FVector* visualBoundsOrigin = nullptr,
+        const SDK::FVector* visualBoundsExtent = nullptr);
     void DrawBox(SDK::UCanvas* Canvas, const BoxRect& rect, Shadow::Color color, float alpha);
 
     void DrawHealthBar(SDK::UCanvas* Canvas, BoxRect rect, float healthPercent, float maxHealth, float a);

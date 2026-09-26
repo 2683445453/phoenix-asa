@@ -4,6 +4,38 @@
 #include <vector>
 
 namespace g_Hack {
+    using NativeGameplayEvent = void(__fastcall*)(SDK::UObject*, SDK::UFunction*, void*);
+    bool HandlePlacementExperiment(SDK::UObject* Object, SDK::UFunction* Function, void* Args, NativeGameplayEvent Original);
+    void PlacementExperimentTick(SDK::UWorld* World);
+    void ResetPlacementExperiment();
+    std::string GetFloatingStructureStatus();
+    bool SuppressTekHeatEvent(SDK::UObject* Object, SDK::UFunction* Function);
+    void FeatureExpansionTick(SDK::UWorld* World);
+    void ResetFeatureExpansion();
+    void ResetInstantThrowables();
+    // 秒换弹（Hack/InstantReload.inl）
+    void ResetInstantReload();
+    bool ShouldForceFullChargeShot(SDK::AShooterWeapon* Weapon);
+    std::string GetInstantReloadStatus();
+    std::string GetInstantChargeStatus();
+    std::string GetTekLauncherSlotStatus();
+    bool IsHusbandryInventoryActive();
+    std::string GetExpansionCombatStatus();
+    std::string GetNativeMountStatus();
+    void TraceDeinoActionEvent(SDK::UObject* Object,SDK::UFunction* Function,void* Parameters,bool After);
+    bool SuppressDeinoFlightInput(SDK::UObject* Object,SDK::UFunction* Function);
+    std::string GetDeinoFlightStatus();
+    std::string GetDeinoAirLatchStatus();
+    std::string GetDeinoGlideProbeStatus();
+    std::string GetDeinoGlideProbePath();
+    void NativeMountPhysicsHook(SDK::UMovementComponent* Movement);
+    std::string GetHusbandryStatus();
+    void RequestAllocateLevel(int Stat);
+    bool CanAllocateLevel();
+    void GameplayExtensionsTick(SDK::UWorld* World);
+    void ResetGameplayExtensions();
+    std::string GetWeaponFireRateStatus();
+    std::string GetAutoLootStatus();
     struct SkillModifierView {
         std::string ModifierName;
         int Rank = 0;
@@ -39,13 +71,6 @@ namespace g_Hack {
         std::vector<SkillDataEntryView> Skills;
     };
 
-    struct SkillCooldownView {
-        std::string SkillName;
-        float RemainingSeconds = 0.0f;
-        float DurationSeconds = 0.0f;
-        bool MatchedLostColony = false;
-    };
-
     struct DlcSkillDataView {
         int DragontopiaTrees = 0;
         int DragontopiaTables = 0;
@@ -76,7 +101,18 @@ namespace g_Hack {
 
     void DumpServerInfo();
     void Suicide(SDK::UWorld* World);
-    void UnlockExplorerNotes(SDK::UWorld* World);
+    void RequestNoteXPBuff();
+    void CancelNoteXPBuff();
+    std::string GetNoteXPBuffStatus();
+    void RequestOpenUploadTerminal();
+    std::string GetUploadTerminalStatus();
+    bool IsUploadTerminalActive();
+    void TickNativeFreeCamera();
+    void TekEquipmentTick(SDK::UWorld* World);
+    void ResetTekEquipment();
+    std::string GetTekEquipmentStatus();
+    void WorldUtilitiesTick(SDK::UWorld* World);
+    void ResetWorldUtilities();
     void AutoFeed(SDK::UWorld* World);
     std::string GetAutoFeedStatus();
     void RequestEnableNearbyDaeodonHealing();
@@ -84,18 +120,32 @@ namespace g_Hack {
     std::string GetDaeodonHealingStatus();
     void AutoOpenGachaCrystals(SDK::UWorld* World);
     std::string GetAutoPullGachaStatus();
+    void BackpackToolsTick(SDK::UWorld* World);
+    void ResetBackpackTools();
+    void UpdateSessionSnapshot(SDK::UWorld* World);
+    std::string GetAutoDropStatus();
+    std::string GetUnderwaterWeaponStatus();
+    void AutoDepositItems(SDK::UWorld* World);
+    void ResetAutoDeposit();
+    bool IsAutomaticDepositActive();
+    std::string GetGrinderDepositStatus();
+    std::string GetBlueprintDepositStatus();
     void AutoFishingQTE(SDK::UWorld* World);
     std::string GetFishingQTEStatus();
     void AutoEatDrink(SDK::UWorld* World);
     std::string GetAutoEatDrinkStatus();
     void AutoUseBrews(SDK::UWorld* World);
     std::string GetAutoBrewStatus();
+    void AutoBuffSoup(SDK::UWorld* World);
+    std::string GetAutoBuffSoupStatus();
+    void AutoFireExtinguish(SDK::UWorld* World);
+    std::string GetFireExtinguishStatus();
+    void AutoPickupDroppedItems(SDK::UWorld* World);
+    std::string GetAutoPickupStatus();
+    void AutoRepairItems(SDK::UWorld* World);
+    std::string GetAutoRepairStatus();
     void MaintainFishingRod(SDK::UWorld* World);
     std::string GetFishingRodMaintenanceStatus();
-    void TekChestJetNoCooldown(SDK::UWorld* World);
-    std::string GetTekChestJetStatus();
-    void TekGloveDashNoCooldown(SDK::UWorld* World);
-    std::string GetTekGloveDashStatus();
     void PumpShotgunNoReload(SDK::UWorld* World);
     void AutoCraft(SDK::UWorld* World);
     std::vector<AutoCraftStationView> GetAutoCraftCatalog(SDK::UWorld* World);
@@ -104,15 +154,9 @@ namespace g_Hack {
     int GetSelectedAutoCraftStation();
     int GetSelectedAutoCraftRecipe();
     std::string GetAutoCraftStatus();
-    void AutoImprint(SDK::UWorld* World);
-    std::string GetAutoImprintStatus();
-    void AutoGrindHelicoprionInventory(SDK::UWorld* World);
-    std::string GetAutoGrindHelicoprionStatus();
-    void ExpandPlayerInventory(SDK::UWorld* World);
     void DinoAttackSpeed(SDK::UWorld* World);
     void DragontopiaSkillTuning(SDK::UWorld* World);
     DlcSkillDataView GetDlcSkillDataView();
-    std::vector<SkillCooldownView> GetLostColonyCooldowns(SDK::UWorld* World);
     void RequestSkillModifierDiagnostics();
     void ProcessSkillModifierDiagnostics(SDK::UWorld* World);
     SkillModifierDiagnosticsView GetSkillModifierDiagnostics();
@@ -120,13 +164,26 @@ namespace g_Hack {
     void TastyBaitSkillOverride(SDK::UWorld* World);
     std::string GetTastyBaitOverrideStatus();
     void AutoHarvestResources(SDK::UWorld* World);
+    void MaintainAutoHarvestCameraAim(
+        SDK::AShooterPlayerCameraManager* CameraManager);
+    bool ResetAutoHarvestForUnload();
     std::string GetAutoHarvestStatus();
     void SuperFlyer(SDK::UWorld* World);
     void ForceTurn(SDK::UMovementComponent* rcx, float DeltaTime);
     void DamageLog(SDK::AActor* _this, float DamageAmount, SDK::FDamageEvent* DamageEvent, SDK::AController* Instigator, SDK::AActor* DamageCauser);
     void AutoSwapBrokenEquipment();
-    void RequestTekStriderRigChange(int HeadRigIndex, int BodyRigIndex);
-    void ProcessTekStriderRigRequest(SDK::UWorld* World);
-    std::string GetTekStriderRigStatus();
-    void OutBody();
+    std::string GetArmorSwapStatus();
+    bool HandleFreeCameraKey(unsigned int Key, bool Pressed, bool Repeated);
+    bool IsFreeCameraActive();
+    bool IsFreeCameraBuilding();
+    bool GetFreeCameraBuildView(SDK::UObject* Caller, SDK::APrimalCharacter* Character,
+        SDK::FVector& Location, SDK::FVector& Direction);
+    std::string GetFreeCameraStatus();
+    void PrepareFreeCameraUpdate(SDK::AShooterPlayerCameraManager* Camera);
+    void UpdateFreeCamera(SDK::AShooterPlayerCameraManager* Camera, float DeltaTime);
+    void ResetFreeCamera();
+    void UpdateDinoHarvestRange(SDK::APrimalDinoCharacter* Dino, bool Enabled, float Multiplier, uint64_t NowMs);
+    void ResetDinoHarvestRange();
+    bool GetDinoHarvestReachMeters(SDK::APrimalDinoCharacter* Dino, float& OutMeters);
+    std::string GetDinoHarvestRangeStatus();
 }

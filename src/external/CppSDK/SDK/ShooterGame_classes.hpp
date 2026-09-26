@@ -8157,6 +8157,7 @@ public:
 	void BPOnDinoStartled(class UAnimMontage* StartledAnimPlayed, bool bFromAIController);
 	void BPOnEndCharging();
 	void BPOnGestationChange(bool bIsGestating);
+	void BPOnImpactEffectSpawned(class UFXSystemComponent* Effect);
 	void BPOnMountCharacterChangedWeapons(class AShooterCharacter* theRider);
 	void BPOnRefreshColorization(const TArray<struct FLinearColor>& Colors);
 	void BPOnRepIsCharging();
@@ -8623,7 +8624,7 @@ public:
 DUMPER7_ASSERTS_APrimalDinoCharacter;
 
 // Class ShooterGame.PrimalShip
-// 0x0C70 (0x36F0 - 0x2A80)
+// 0x0C90 (0x3710 - 0x2A80)
 class APrimalShip : public APrimalDinoCharacter
 {
 public:
@@ -8996,6 +8997,7 @@ public:
 	float                                         MaxExtraRammingImpulseMultiplierFromDistanceToRamSocket; // 0x36E4(0x0004)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 	float                                         MaxExtraRammingImpulseMitigationMultiplierFromDistanceToRamSocket; // 0x36E8(0x0004)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 	float                                         MaxExtraRammingDamageMultiplierFromDistanceToRamSocket; // 0x36EC(0x0004)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+	uint8                                         Pad_36F0[0x20];                                    // 0x36F0(0x0020)(Fixing Struct Size After Last Property [ Dumper-7 ])
 
 public:
 	void AddForceToBeApplied(const struct FVector& Location, const struct FVector& Force, class FName ForceName);
@@ -29036,17 +29038,17 @@ public:
 DUMPER7_ASSERTS_APrimalStructureTurret;
 
 // Class ShooterGame.PrimalPlayerFollowingShip
-// 0x0030 (0x3720 - 0x36F0)
+// 0x0030 (0x3740 - 0x3710)
 class APrimalPlayerFollowingShip final : public APrimalShip
 {
 public:
-	TSubclassOf<class APirateFleetCoordinator>    FleetCoordinatorClass;                             // 0x36F0(0x0008)(Edit, BlueprintVisible, ZeroConstructor, NoDestructor, UObjectWrapper, HasGetValueTypeHash, NativeAccessSpecifierPublic)
-	float                                         ShipScale;                                         // 0x36F8(0x0004)(Edit, BlueprintVisible, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
-	struct FLinearColor                           SailColorOverride;                                 // 0x36FC(0x0010)(Edit, BlueprintVisible, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
-	int32                                         LevelColorBandRegion;                              // 0x370C(0x0004)(Edit, BlueprintVisible, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
-	int32                                         NumLevelColorBands;                                // 0x3710(0x0004)(Edit, BlueprintVisible, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
-	uint8                                         bUseLevelColorBands : 1;                           // 0x3714(0x0001)(BitIndex: 0x00, PropSize: 0x0001 (Edit, BlueprintVisible, BlueprintReadOnly, DisableEditOnInstance, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic))
-	uint8                                         Pad_3715[0xB];                                     // 0x3715(0x000B)(Fixing Struct Size After Last Property [ Dumper-7 ])
+	TSubclassOf<class APirateFleetCoordinator>    FleetCoordinatorClass;                             // 0x3710(0x0008)(Edit, BlueprintVisible, ZeroConstructor, NoDestructor, UObjectWrapper, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+	float                                         ShipScale;                                         // 0x3718(0x0004)(Edit, BlueprintVisible, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+	struct FLinearColor                           SailColorOverride;                                 // 0x371C(0x0010)(Edit, BlueprintVisible, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+	int32                                         LevelColorBandRegion;                              // 0x372C(0x0004)(Edit, BlueprintVisible, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+	int32                                         NumLevelColorBands;                                // 0x3730(0x0004)(Edit, BlueprintVisible, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+	uint8                                         bUseLevelColorBands : 1;                           // 0x3734(0x0001)(BitIndex: 0x00, PropSize: 0x0001 (Edit, BlueprintVisible, BlueprintReadOnly, DisableEditOnInstance, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic))
+	uint8                                         Pad_3735[0xB];                                     // 0x3735(0x000B)(Fixing Struct Size After Last Property [ Dumper-7 ])
 
 public:
 	void FireAtPlayer();

@@ -201,7 +201,7 @@ namespace g_Util {
         return false;
     }
 
-    __forceinline SDK::APlayerController* GetLocalPC() {
+    __forceinline SDK::APlayerController* GetActiveLocalPC() {
         SDK::UWorld* World = SDK::UWorld::GetWorld();
 
         if (!World) {
@@ -229,6 +229,19 @@ namespace g_Util {
         return PC;
     }
 
+    __forceinline SDK::APlayerController* GetLocalPC() {
+        auto* PC = GetActiveLocalPC();
+        // Native debug flight swaps ULocalPlayer.PlayerController. Gameplay
+        // helpers must keep their survivor controller, never cast the debug PC.
+        auto* DebugClass = SDK::ADebugCameraController::StaticClass();
+        if (PC && PC->Class && DebugClass && PC->IsA(DebugClass)) {
+            auto* Original = static_cast<SDK::ADebugCameraController*>(PC)->OriginalControllerRef;
+            auto* ShooterClass = SDK::AShooterPlayerController::StaticClass();
+            return Original && Original->Class && ShooterClass && Original->IsA(ShooterClass) ? Original : nullptr;
+        }
+        return PC;
+    }
+
     __forceinline float GetAngleDistance(SDK::FVector CamLoc, SDK::FVector TargetLoc, SDK::FRotator CamRot) {
         SDK::FVector Diff = { TargetLoc.X - CamLoc.X, TargetLoc.Y - CamLoc.Y, TargetLoc.Z - CamLoc.Z };
         SDK::FVector DirToTarget = SDK::UKismetMathLibrary::Normal(Diff, 0.0001f);
@@ -246,7 +259,7 @@ namespace g_Util {
     }
 
     __forceinline bool ProcessDinoFeed(SDK::AShooterPlayerController* PC, SDK::APrimalDinoCharacter* Dino) {
-        if (!PC || !Dino || Dino->IsDead()) return false;
+        if (!PC || !Dino || Dino->IsDead() || !Dino->bIsCarnivore) return false;
 
         SDK::UPrimalInventoryComponent* Inv = Dino->MyInventoryComponent;
         if (!Inv) return false;
@@ -443,9 +456,25 @@ namespace g_Util {
         return Address;
     }
 
-    __forceinline void PotatoGraphics(SDK::UObject* WorldContextObject, SDK::UGameViewportClient* GameViewportClient) {
-        if (!WorldContextObject) return;
-        if (!GameViewportClient) return;
+    // A request starts the preset; subsequent PostRender calls advance it on
+    // the game thread without executing every console command in one frame.
+    __forceinline bool PotatoGraphics(SDK::UObject* WorldContextObject,
+        SDK::UGameViewportClient* GameViewportClient, bool Request) {
+        static bool Pending = false;
+        static size_t NextCommand = 0;
+        static SDK::UObject* PendingWorld = nullptr;
+        static SDK::UGameViewportClient* PendingViewport = nullptr;
+        if (!WorldContextObject || !GameViewportClient) return false;
+        if (Request) {
+            Pending = true; NextCommand = 0;
+            PendingWorld = WorldContextObject;
+            PendingViewport = GameViewportClient;
+        }
+        else if (Pending && (PendingWorld != WorldContextObject ||
+            PendingViewport != GameViewportClient)) Pending = false;
+        if (!Pending) return Request;
+
+        if (Request) {
 
         // 禁用后处理
         // [2] -> (ByteOffset: +0x0, Bit: 2)
@@ -466,18 +495,24 @@ namespace g_Util {
         // 解决水面闪烁
         // [220] -> (ByteOffset: +0x1B, Bit: 4)
         GameViewportClient->EngineShowFlags[0x1B] &= ~(1 << 4);
+        }
 
-        // 辅助宏：通过 KismetSystemLibrary 执行虚幻引擎控制台指令
-        auto Exec = [WorldContextObject](const wchar_t* Cmd) {
+        const ULONGLONG Started = GetTickCount64();
+        size_t Seen = 0, Applied = 0;
+        auto Exec = [&](const wchar_t* Cmd) {
+            const size_t Index = Seen++;
+            if (Index != NextCommand + Applied || Applied >= 2 ||
+                (Applied > 0 && GetTickCount64() - Started >= 2)) return;
             SDK::UKismetSystemLibrary::ExecuteConsoleCommand(WorldContextObject, SDK::FString(Cmd), nullptr);
-            };
+            ++Applied;
+        };
 
         Exec(L"r.TemporalAA.Upsampling 1");     // 开启 TAA 时空抗锯齿超采样 (提高边缘平滑度与画面重建质量)
         Exec(L"r.AntiAliasingMethod 2");        // 将抗锯齿算法切换为 TAA (0 = 关闭, 1 = FXAA, 2 = TAA, 3 = TSR)
         Exec(L"r.SkeletalMeshLODBias 2");       // 骨骼网格体 (如角色、生物模型) 细节等级偏移，强行降低模型面数以提升性能
         Exec(L"r.MaterialQualityLevel 0");      // 将全局材质质量设为最低级 (0 = Low, 1 = Medium, 2 = High)，简化复杂材质计算
         Exec(L"r.SubsurfaceScattering 0");      // 禁用次表面散射 (SSS) 特效，关闭皮肤、树叶等透光与漫射计算
-        Exec(L"r.ParticleLODBias 5");           // 粒子系统细节等级偏移，大幅简化或远距离隐藏烟雾、火花等粒子特效
+        // r.ParticleLODBias 10 below supersedes the old intermediate value.
         Exec(L"p.ClothPhysics 0");              // 禁用服装与布料物理模拟 (如斗篷、装备披风)，降低 CPU 物理计算负担
         Exec(L"r.DisableDistortion 1");         // 禁用画面扭曲效果 (如爆炸热浪、水下波纹等折射特效)
 
@@ -548,216 +583,14 @@ namespace g_Util {
         // 8. 水体系统
         // Exec(L"r.Water.SingleLayer 0");                 // 关闭单层水体 (Single Layer Water) 渲染管线
         // Exec(L"r.Water.SingleLayer.Reflection 0");      // 关闭水面反射计算
+        NextCommand += Applied;
+        if (NextCommand >= Seen) Pending = false;
+        return Request;
     }
 
-    __forceinline bool Welcome(SDK::UWorld* World, SDK::UCanvas* Canvas)
-    {
-        if (g_Config::bInitWelcome) return true;
-
-        // 只播放一次
-        static bool bFinished = false;
-        if (bFinished) {
-            g_Config::bInitWelcome = true;
-            return true;
-        }
-
-        if (!World || !Canvas || Canvas->SizeX <= 0 || Canvas->SizeY <= 0)
-            return bFinished;
-
-        // 使用游戏世界 DeltaTime 驱动一次性启动动画。
-        float dt = SDK::UGameplayStatics::GetWorldDeltaSeconds(World);
-        static float CurrentTime = 0.0f;
-        CurrentTime += dt;
-
-        // 短促的卡片式节奏：等待 -> 弹入/加载 -> 确认 -> 退出。
-        constexpr float DelayDuration = 0.35f;
-        constexpr float EnterDuration = 0.45f;
-        constexpr float HoldDuration = 1.65f;
-        constexpr float ExitDuration = 0.40f;
-        constexpr float TotalDuration = DelayDuration + EnterDuration + HoldDuration + ExitDuration;
-
-        // 延迟阶段：静默等待
-        if (CurrentTime < DelayDuration)
-            return false;
-
-        // 动画整体结束
-        if (CurrentTime >= TotalDuration)
-        {
-            bFinished = true;
-            g_Config::bInitWelcome = true;
-            return true;
-        }
-
-        Shadow::ShadowDrawList* DrawList = Shadow::GetBackgroundDrawList();
-        if (!DrawList)
-            return false;
-
-        const float ScreenW = static_cast<float>(Canvas->SizeX);
-        const float ScreenH = static_cast<float>(Canvas->SizeY);
-        const Shadow::Vec2 Center = { ScreenW * 0.5f, ScreenH * 0.5f };
-
-        auto EaseOutCubic = [](float t) -> float {
-            t = std::clamp(t, 0.0f, 1.0f);
-            const float Inv = 1.0f - t;
-            return 1.0f - Inv * Inv * Inv;
-            };
-        auto EaseInCubic = [](float t) -> float {
-            t = std::clamp(t, 0.0f, 1.0f);
-            return t * t * t;
-            };
-
-        const float ActiveTime = CurrentTime - DelayDuration;
-        const float EnterProgress = std::clamp(ActiveTime / EnterDuration, 0.0f, 1.0f);
-        const float ExitProgress = std::clamp(
-            (ActiveTime - EnterDuration - HoldDuration) / ExitDuration, 0.0f, 1.0f);
-        const float EnterEase = EaseOutCubic(EnterProgress);
-        const float ExitEase = EaseInCubic(ExitProgress);
-        const float ContentAlpha = std::clamp(EnterEase * (1.0f - ExitEase), 0.0f, 1.0f);
-
-        auto MakeCol = [](float r, float g, float b, float a) -> Shadow::Color {
-            return Shadow::Color(
-                std::clamp(r, 0.0f, 1.0f),
-                std::clamp(g, 0.0f, 1.0f),
-                std::clamp(b, 0.0f, 1.0f),
-                std::clamp(a, 0.0f, 1.0f)
-            );
-            };
-
-        // 与菜单一致的高对比纯色：白底、硬黑框、荧光粉和黄绿色。
-        const Shadow::Color Overlay = MakeCol(0.0f, 0.0f, 0.0f, ContentAlpha * 0.18f);
-        const Shadow::Color Black = MakeCol(0.0f, 0.0f, 0.0f, ContentAlpha);
-        const Shadow::Color White = MakeCol(1.0f, 1.0f, 1.0f, ContentAlpha);
-        const Shadow::Color Pink = MakeCol(1.0f, 0.0f, 0.431f, ContentAlpha);
-        const Shadow::Color Lime = MakeCol(0.8f, 1.0f, 0.0f, ContentAlpha);
-
-        DrawList->AddRectFilled({ 0.0f, 0.0f }, { ScreenW, ScreenH }, Overlay);
-        if (ContentAlpha <= 0.005f)
-            return false;
-
-        const float UiScale = std::clamp(
-            std::min(ScreenW / 1920.0f, ScreenH / 1080.0f), 0.75f, 1.60f);
-        const float PanelW = 460.0f * UiScale;
-        const float PanelH = 210.0f * UiScale;
-        const float ExitOffset = ExitEase * -24.0f * UiScale;
-        const float EnterOffset = (1.0f - EnterEase) * 36.0f * UiScale;
-        const Shadow::Vec2 PanelPos = {
-            Center.x - PanelW * 0.5f,
-            Center.y - PanelH * 0.5f + EnterOffset + ExitOffset
-        };
-        const Shadow::Vec2 PanelSize = { PanelW, PanelH };
-        const float ShadowOffset = 10.0f * UiScale;
-        const float Border = std::max(3.0f, 4.0f * UiScale);
-        const float HeaderH = 30.0f * UiScale;
-
-        // 硬边卡片与右下偏移阴影。
-        DrawList->AddRectFilled(
-            { PanelPos.x + ShadowOffset, PanelPos.y + ShadowOffset }, PanelSize, Black);
-        DrawList->AddRectFilled(PanelPos, PanelSize, White);
-
-        const float HeaderReveal = EaseOutCubic(std::clamp(EnterProgress * 1.45f, 0.0f, 1.0f));
-        if (HeaderReveal > 0.001f) {
-            DrawList->AddRectFilled(PanelPos, { PanelW * HeaderReveal, HeaderH }, Pink);
-        }
-        DrawList->AddLine(
-            { PanelPos.x, PanelPos.y + HeaderH },
-            { PanelPos.x + PanelW, PanelPos.y + HeaderH }, Black, Border * 0.75f);
-        DrawList->AddRect(PanelPos, PanelSize, Black, Border);
-
-#if defined(__cpp_char8_t)
-        const char* BrandText = reinterpret_cast<const char*>(u8"38s自用");
-        const char* LoadingText = reinterpret_cast<const char*>(u8"正在初始化界面");
-        const char* ReadyText = reinterpret_cast<const char*>(u8"界面已就绪");
-#else
-        const char* BrandText = u8"38s自用";
-        const char* LoadingText = u8"正在初始化界面";
-        const char* ReadyText = u8"界面已就绪";
-#endif
-
-        SDK::UFont* Font = Shadow::DefaultFont;
-        auto MeasureText = [&](const char* Text, float FontScale) -> Shadow::Vec2 {
-            if (!Font) return { 0.0f, 0.0f };
-            Shadow::PushFont(Font, FontScale);
-            const Shadow::Vec2 Size = Shadow::MeasureTextSize(Text);
-            Shadow::PopFont();
-            return Size;
-            };
-        auto DrawFlatText = [&](const char* Text, float FontScale,
-            Shadow::Vec2 Pos, Shadow::Color Color) {
-                if (!Font) return;
-                const Shadow::Color Transparent = MakeCol(0.0f, 0.0f, 0.0f, 0.0f);
-                DrawList->AddText(Font, FontScale, Transparent, Transparent, Pos, Color, Text);
-            };
-
-        const float TextReveal = std::clamp((EnterProgress - 0.10f) / 0.45f, 0.0f, 1.0f);
-        const Shadow::Color TextBlack = MakeCol(0.0f, 0.0f, 0.0f, ContentAlpha * TextReveal);
-        const Shadow::Color TextMuted = MakeCol(0.235f, 0.235f, 0.235f, ContentAlpha * TextReveal);
-        const float TitleScale = 1.12f * UiScale;
-        const float StatusScale = 0.72f * UiScale;
-        const Shadow::Vec2 TitleSize = MeasureText(BrandText, TitleScale);
-        DrawFlatText(BrandText, TitleScale,
-            { PanelPos.x + 28.0f * UiScale,
-              PanelPos.y + 53.0f * UiScale - TitleSize.y * 0.08f },
-            TextBlack);
-
-        constexpr int SegmentCount = 9;
-        const float ProgressDuration = EnterDuration + HoldDuration * 0.75f;
-        const float Progress = std::clamp(
-            (ActiveTime - EnterDuration * 0.25f) / ProgressDuration, 0.0f, 1.0f);
-        const char* StatusText = Progress >= 0.999f ? ReadyText : LoadingText;
-        DrawFlatText(StatusText, StatusScale,
-            { PanelPos.x + 29.0f * UiScale, PanelPos.y + 105.0f * UiScale },
-            TextMuted);
-
-        // 分段进度条逐格跳变，避免柔和渐变，与菜单的纯色块一致。
-        const float BarX = PanelPos.x + 28.0f * UiScale;
-        const float BarY = PanelPos.y + 154.0f * UiScale;
-        const float BarW = PanelW - 56.0f * UiScale;
-        const float BarH = 22.0f * UiScale;
-        const float Gap = 5.0f * UiScale;
-        const float SegmentW = (BarW - Gap * (SegmentCount - 1)) / SegmentCount;
-        const int FilledSegments = std::min(
-            SegmentCount, static_cast<int>(std::floor(Progress * SegmentCount + 0.001f)));
-
-        for (int i = 0; i < SegmentCount; ++i) {
-            const Shadow::Vec2 SegmentPos = {
-                BarX + i * (SegmentW + Gap), BarY
-            };
-            const Shadow::Vec2 SegmentSize = { SegmentW, BarH };
-            DrawList->AddRectFilled(SegmentPos, SegmentSize,
-                i < FilledSegments ? Lime : White);
-            DrawList->AddRect(SegmentPos, SegmentSize, Black,
-                std::max(1.5f, 2.0f * UiScale));
-        }
-
-        // 最后一格完成时弹出确认块。
-        const float ReadyProgress = std::clamp((Progress - 0.90f) / 0.10f, 0.0f, 1.0f);
-        if (ReadyProgress > 0.001f) {
-            const float ReadyAlpha = ContentAlpha * EaseOutCubic(ReadyProgress);
-            const Shadow::Color ReadyBlack = MakeCol(0.0f, 0.0f, 0.0f, ReadyAlpha);
-            const Shadow::Color ReadyLime = MakeCol(0.8f, 1.0f, 0.0f, ReadyAlpha);
-            const float BoxSize = 38.0f * UiScale;
-            const float BoxRise = (1.0f - EaseOutCubic(ReadyProgress)) * 14.0f * UiScale;
-            const Shadow::Vec2 BoxPos = {
-                PanelPos.x + PanelW - 66.0f * UiScale,
-                PanelPos.y + 55.0f * UiScale + BoxRise
-            };
-            DrawList->AddRectFilled(
-                { BoxPos.x + 5.0f * UiScale, BoxPos.y + 5.0f * UiScale },
-                { BoxSize, BoxSize }, ReadyBlack);
-            DrawList->AddRectFilled(BoxPos, { BoxSize, BoxSize }, ReadyLime);
-            DrawList->AddRect(BoxPos, { BoxSize, BoxSize }, ReadyBlack,
-                std::max(2.0f, 3.0f * UiScale));
-            DrawList->AddLine(
-                { BoxPos.x + 9.0f * UiScale, BoxPos.y + 20.0f * UiScale },
-                { BoxPos.x + 16.0f * UiScale, BoxPos.y + 28.0f * UiScale },
-                ReadyBlack, std::max(2.0f, 3.0f * UiScale));
-            DrawList->AddLine(
-                { BoxPos.x + 16.0f * UiScale, BoxPos.y + 28.0f * UiScale },
-                { BoxPos.x + 30.0f * UiScale, BoxPos.y + 11.0f * UiScale },
-                ReadyBlack, std::max(2.0f, 3.0f * UiScale));
-        }
-
-        return false;
+    __forceinline bool Welcome(SDK::UWorld* World, SDK::UCanvas* Canvas) {
+        if (World && Canvas && Canvas->SizeX > 0 && Canvas->SizeY > 0) g_Config::bInitWelcome = true;
+        return g_Config::bInitWelcome;
     }
 
     __forceinline SDK::AShooterGameState* GetAShooterGameState() {

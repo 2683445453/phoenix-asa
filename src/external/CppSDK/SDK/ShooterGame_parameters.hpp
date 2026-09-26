@@ -20544,6 +20544,15 @@ public:
 };
 DUMPER7_ASSERTS_PrimalDinoCharacter_BPOnGestationChange;
 
+// Function ShooterGame.PrimalDinoCharacter.BPOnImpactEffectSpawned
+// 0x0008 (0x0008 - 0x0000)
+struct PrimalDinoCharacter_BPOnImpactEffectSpawned final
+{
+public:
+	class UFXSystemComponent*                     Effect;                                            // 0x0000(0x0008)(Parm, ZeroConstructor, InstancedReference, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+};
+DUMPER7_ASSERTS_PrimalDinoCharacter_BPOnImpactEffectSpawned;
+
 // Function ShooterGame.PrimalDinoCharacter.BPOnMountCharacterChangedWeapons
 // 0x0008 (0x0008 - 0x0000)
 struct PrimalDinoCharacter_BPOnMountCharacterChangedWeapons final

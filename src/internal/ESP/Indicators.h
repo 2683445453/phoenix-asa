@@ -1,4 +1,4 @@
-﻿// Indicators.h
+// Indicators.h
 #pragma once
 #define U8(str) reinterpret_cast<const char*>(u8##str)
 
@@ -40,7 +40,7 @@ namespace g_Indicators {
     }
 
     __forceinline void OnRender() {
-        if (!g_Config::bShowInfo && !g_Config::bShowLostColonyCooldowns) return;
+        if (!g_Config::bShowInfo) return;
 
         // 每帧开始前重置位置
         g_Indicators::Reset();
@@ -91,19 +91,5 @@ namespace g_Indicators {
             }
         }
 
-        if (g_Config::bShowLostColonyCooldowns) {
-            const std::vector<g_Hack::SkillCooldownView> Cooldowns =
-                g_Hack::GetLostColonyCooldowns(SDK::UWorld::GetWorld());
-            if (!Cooldowns.empty()) {
-                static const Shadow::Color HeaderColor = { 1.0f, 0.72f, 0.20f, 1.0f };
-                static const Shadow::Color CooldownColor = { 1.0f, 0.92f, 0.72f, 1.0f };
-                g_Indicators::AddTop(HeaderColor, LanguageManager::Misc_Menu::LostColonyCooldownHeader);
-                for (const g_Hack::SkillCooldownView& Cooldown : Cooldowns) {
-                    g_Indicators::AddTop(CooldownColor,
-                        std::format("{}: {:.1f}s / {:.1f}s", Cooldown.SkillName,
-                            Cooldown.RemainingSeconds, Cooldown.DurationSeconds));
-                }
-            }
-        }
     }
 }

@@ -8,6 +8,7 @@
 #include <string>
 #include <atomic>
 #include <unordered_set>
+#include "SwapChainQueueTracker.h"
 
 #pragma warning(disable: 26451)
 #pragma warning(disable: 26812)
@@ -37,6 +38,10 @@ typedef HRESULT(WINAPI* PFN_CreateDXGIFactory1)(REFIID, void**);
 
 // Main namespace for all globals
 namespace g_MDX12 {
+    extern PhoenixD3D12::SwapChainQueueTracker g_QueueTracker;
+    void RenderOverlayFrame(IDXGISwapChain3* SwapChain);
+    HRESULT ResizeOverlayBuffers(IDXGISwapChain* SwapChain, UINT BufferCount, UINT Width,
+        UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags);
     // Fonts
     // extern ImFont* g_Alibaba_PuHuiTi_Regular;
     // extern ImFont* g_Alibaba_PuHuiTi_Bold;
@@ -129,15 +134,12 @@ namespace g_MDX12 {
     namespace g_InputState {
         extern std::atomic<bool> g_blockMouseInput;
         extern std::atomic<bool> g_blockKeyboardInput;
-        extern std::atomic<bool> g_bypassOutBodyHotkeyForFishing;
     }
 
     // Menu state namespace
     namespace g_MenuState {
         extern bool g_isOpen;
-        extern UINT g_openKey;
-        extern bool g_isOutBodyActive;
-        extern UINT g_OutBodyKey;
+        extern UINT& g_openKey;
         extern UINT* g_pCurrentBindingKey;
         extern bool g_bindingFinished;
         extern bool g_wasOpenLastFrame;
@@ -147,7 +149,8 @@ namespace g_MDX12 {
     // Input hook functions
     namespace inputhook {
         void Init(HWND hWindow);
-        void Remove(HWND hWindow);
+        bool Remove(HWND hWindow);
+        bool RemoveAll();
         void UpdateInputBlockState();
         void ReinstallWindowHook();
     }
@@ -167,11 +170,11 @@ namespace g_MDX12 {
     }
 
     // Rendering and cleanup functions
-    void UpdateImGuiFont();
     void InitProcessName();
     void CleanupRenderResources();
     void CleanupRenderResources_NoInput();
-    void FinalCleanupAll();
+    bool FinalCleanupAll();
+    bool WaitForOverlayGpu(UINT timeoutMs);
     void SetupImGui(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT Flags);
     void SetupActorTick(SDK::AActor* rcx);
     void SetupHandleDisconnect(SDK::UNetConnection* rcx);
@@ -206,7 +209,7 @@ namespace g_MDX12 {
     }
 
     // Public API
-    void Initialize(LPVOID lpParam);
+    bool Initialize(LPVOID lpParam);
     void SetSetupImGuiCallback(SetupImGuiCallback callback);
     void SetSetupActorTickCallback(SetupActorTickCallback callback);
     void SetSetupHandleDisconnectCallback(SetupHandleDisconnectCallback callback);

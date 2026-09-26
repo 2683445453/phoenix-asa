@@ -56175,6 +56175,26 @@ void APrimalDinoCharacter::BPOnGestationChange(bool bIsGestating)
 }
 
 
+// Function ShooterGame.PrimalDinoCharacter.BPOnImpactEffectSpawned
+// (Event, Public, BlueprintEvent)
+// Parameters:
+// class UFXSystemComponent*               Effect                                                 (Parm, ZeroConstructor, InstancedReference, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+
+void APrimalDinoCharacter::BPOnImpactEffectSpawned(class UFXSystemComponent* Effect)
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("PrimalDinoCharacter", "BPOnImpactEffectSpawned");
+
+	Params::PrimalDinoCharacter_BPOnImpactEffectSpawned Parms{};
+
+	Parms.Effect = Effect;
+
+	UObject::ProcessEvent(Func, &Parms);
+}
+
+
 // Function ShooterGame.PrimalDinoCharacter.BPOnMountCharacterChangedWeapons
 // (Event, Public, BlueprintEvent)
 // Parameters:

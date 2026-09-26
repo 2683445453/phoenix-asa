@@ -7,6 +7,9 @@
 #include "../Log/LogManager.h"
 #include "../Config/Configs.h"
 #include "LuaManager.h"
+#include "SessionSnapshot.h"
+#include "../Language/LanguageManager.h"
+#include "../Config/InterfaceRules.h"
 #include <algorithm>
 #include <iostream>
 #include <shellapi.h>
@@ -224,6 +227,26 @@ void LuaManager::BindClient() {
     if (!m_lua) return;
 
     sol::table client = m_lua->create_named_table("Client");
+
+    client.set_function("GetTimeMilliseconds", []() { return double(GetTickCount64()); });
+    client.set_function("IsEnglish", []() { return LanguageManager::Get().IsEnglish(); });
+    client.set_function("GetSessionSnapshot", [](sol::this_state State) {
+        const auto S=PhoenixSession::Read(GetTickCount64());
+        sol::state_view Lua(State); auto T=Lua.create_table();
+        T["valid"]=S.Valid; T["input_ready"]=S.InputReady;
+        T["session"]=double(S.Session); T["x"]=S.X; T["y"]=S.Y; T["z"]=S.Z;
+        T["health"]=S.Health; T["oxygen"]=S.Oxygen; T["weight"]=S.Weight;
+        return T;
+    });
+    client.set_function("IsChordDown", [](unsigned Chord) {
+        if (!PhoenixInterface::IsAssignable(Chord) || g_MDX12::g_MenuState::g_isOpen ||
+            !PhoenixSession::Read(GetTickCount64()).InputReady) return false;
+        DWORD PID=0; GetWindowThreadProcessId(GetForegroundWindow(),&PID);
+        if (PID!=GetCurrentProcessId()) return false;
+        const auto Down=[](int Key){return (GetAsyncKeyState(Key)&0x8000)!=0;};
+        return Down(Chord&255) && Down(VK_CONTROL)==bool(Chord&PhoenixInterface::Ctrl) &&
+            Down(VK_MENU)==bool(Chord&PhoenixInterface::Alt) && Down(VK_SHIFT)==bool(Chord&PhoenixInterface::Shift);
+    });
 
     client.set_function("AddLog", [](float r, float g, float b, float a, const std::string& text) {
         g_LogManager::AddLog(r, g, b, a, text);

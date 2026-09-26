@@ -1385,11 +1385,30 @@ namespace Shadow {
         }
     }
 
+    // Render at the requested font size instead of magnifying a small glyph.
+    // UFont is shared with the game, so restore its size after each call.
+    struct ScopedSharpFontSize {
+        SDK::UFont* Font;
+        int32_t OriginalSize;
+        ScopedSharpFontSize(SDK::UFont* font, float scale) :
+            Font(font), OriginalSize(font ? font->LegacyFontSize : 0) {
+            if (!Font) return;
+            const float SafeScale = std::isfinite(scale) && scale > 0 ? scale : 1.0f;
+            const int32_t BaseSize = OriginalSize > 0 ? OriginalSize : 12;
+            const float Target = std::clamp(BaseSize * SafeScale, 1.0f, 10000.0f);
+            Font->LegacyFontSize = static_cast<int32_t>(std::lround(Target));
+        }
+        ~ScopedSharpFontSize() { if (Font) Font->LegacyFontSize = OriginalSize; }
+        ScopedSharpFontSize(const ScopedSharpFontSize&) = delete;
+        ScopedSharpFontSize& operator=(const ScopedSharpFontSize&) = delete;
+    };
+
     inline void InternalDrawText(const std::string& text, Vec2 pos, Color color, SDK::UFont* font, float fontScale, Color textShadowColor, Color textOutlineColor) {
         if (!g_Ctx.Canvas || !font) return;
 
         float finalScale = fontScale * g_Ctx.Style.FontScaleDpi;
-        SDK::FVector2D scale{ static_cast<float>(finalScale), static_cast<float>(finalScale) };
+        ScopedSharpFontSize SharpFont(font, finalScale);
+        SDK::FVector2D scale{ 1.0f, 1.0f };
         SDK::FLinearColor ueColor{ color.r, color.g, color.b, color.a };
         SDK::FVector2D uePos{ static_cast<float>(pos.x), static_cast<float>(pos.y) };
 
@@ -1442,7 +1461,8 @@ namespace Shadow {
         if (!g_Ctx.Canvas || !font) return { 0.f, 0.f };
 
         float finalScale = scaleVal * g_Ctx.Style.FontScaleDpi;
-        SDK::FVector2D scale{ static_cast<float>(finalScale), static_cast<float>(finalScale) };
+        ScopedSharpFontSize SharpFont(font, finalScale);
+        SDK::FVector2D scale{ 1.0f, 1.0f };
 
         std::wstring wstr = ToWString(text);
         SDK::FVector2D size = g_Ctx.Canvas->K2_TextSize(font, SDK::FString(wstr.c_str()), scale);
@@ -1459,7 +1479,8 @@ namespace Shadow {
         if (!g_Ctx.Canvas || !font) return 0.f;
 
         float finalScale = scaleVal * g_Ctx.Style.FontScaleDpi;
-        SDK::FVector2D scale{ static_cast<float>(finalScale), static_cast<float>(finalScale) };
+        ScopedSharpFontSize SharpFont(font, finalScale);
+        SDK::FVector2D scale{ 1.0f, 1.0f };
 
         std::wstring single(1, ch);
         SDK::FVector2D size = g_Ctx.Canvas->K2_TextSize(font, SDK::FString(single.c_str()), scale);

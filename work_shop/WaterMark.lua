@@ -32,7 +32,7 @@ local COL_BG     = nil
 local COL_TRANSPARENT = ImGui.Color(0, 0, 0, 0)
 
 local staticSegments = {
-    { text = "Begeerte     ", color = COL_WHITE, _w = 0 },
+    { text = "phoenix     ", color = COL_WHITE, _w = 0 },
     { text = "0", color = COL_Accent, _w = 0 },         -- [2] FPS
     { text = " FPS    ", color = COL_WHITE, _w = 0 },
     { text = "0", color = COL_Accent, _w = 0 },         -- [4] PING

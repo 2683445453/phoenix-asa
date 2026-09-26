@@ -1,7 +1,21 @@
-#pragma once
+﻿#pragma once
 #include "../../external/CppSDK/SDK.hpp"
 
 namespace g_Config {
+#define PHX_BOOL(Name, Default) inline bool Name = Default;
+#define PHX_FLOAT(Name, Default, Min, Max) inline float Name = Default;
+#define PHX_COLOR(Name, R, G, B, A) inline float Name[4] = {R,G,B,A};
+#include "FeatureExpansion.inc"
+#include "DeinoLegacyRuntime.inc"
+#undef PHX_BOOL
+#undef PHX_FLOAT
+#undef PHX_COLOR
+    inline bool bShowFeatureHelp = true;
+    inline bool bAutoDropResources = false;
+    inline int AutoDropResourceMask = 0;
+    inline bool bUnderwaterWeapons = false;
+    inline bool bShowWelcome = true;
+    inline bool bStaticThreatIndicators = true;
     // 菜单设置
     inline bool bMenuNeedReset = false;
     inline bool bMenuLockResize = false;
@@ -10,6 +24,28 @@ namespace g_Config {
 
     inline bool bInitWelcome = false;
 
+    inline bool bWeaponFireRate = false;
+    inline float WeaponFireRateMultiplier = 2.0f;
+    // 射速修改枪械类型筛选
+    inline bool bFireRateTekRifle = true;
+    inline bool bFireRateRifle = true;
+    inline bool bFireRateShotgun = true;
+    inline bool bFireRateSniper = true;
+    inline bool bFireRatePistol = true;
+    inline bool bFireRateBow = true;
+    inline bool bFireRateOther = true;
+    inline bool bProjectilePrediction = false;
+    inline float ProjectilePredictionMaxSeconds = 3.0f;
+    inline float ProjectilePredictionDelayMs = 0.0f;
+    inline bool bAutoLootContainers = false;
+    inline bool bAutoLootSupplyCrates = true;
+    inline bool bAutoLootBags = true;
+    inline bool bAutoLootBeaverDams = false;
+    inline bool bAutoLootWildEggs = true;
+    inline float AutoLootRangeMeters = 10.0f;
+    inline float AutoLootIntervalMs = 750.0f;
+    inline float AutoLootMaxWeightPercent = 85.0f;
+
     // 其他功能
     inline bool bSuperFlyer = false;
     inline bool bForceTurn = false;
@@ -17,10 +53,20 @@ namespace g_Config {
     inline float AutoFeedRangeMeters = 50.0f;
     inline float AutoFeedIntervalSeconds = 1.0f;
     inline char AutoFeedDinoFilter[256] = "";
+    inline bool bAutoPickupDroppedItems = false;
+    inline float AutoPickupRangeMeters = 2.5f;
+    inline float AutoPickupIntervalMs = 350.0f;
+    inline float AutoPickupMaxWeightPercent = 85.0f;
+    inline bool bAutoPickupUseDroppedItemFilter = true;
     inline bool bAutoOpenGachaCrystals = false;
+    // Delay between batches of up to 32 crystals, not between individual uses.
     inline float AutoOpenGachaIntervalMs = 50.0f;
     inline bool bAutoPullGachaCrystals = false;
     inline float AutoPullGachaRangeMeters = 12.0f;
+    inline bool bAutoDepositGachaGear = false;
+    inline float AutoDepositGrinderRangeMeters = 12.0f;
+    inline bool bAutoDepositFishingBlueprints = false;
+    inline float AutoDepositVaultRangeMeters = 12.0f;
     inline bool bAutoFishingQTE = false;
     inline bool bAutoFishingRecast = false;
     inline bool bAutoEatDrink = false;
@@ -29,21 +75,30 @@ namespace g_Config {
     inline float MedicalBrewThresholdPercent = 50.0f;
     inline bool bAutoEnergyBrew = false;
     inline float EnergyBrewThresholdPercent = 35.0f;
+    // 自动汤类增益（buff 到期自动续）
+    inline bool bAutoBuffSoup = false;
+    inline bool bSoupBattleTartare = true;
+    inline bool bSoupCactusBroth = true;
+    inline bool bSoupFocalChili = true;
+    inline bool bSoupFriaCurry = true;
+    inline bool bSoupCalienSoup = true;
+    inline bool bSoupLazarusChowder = true;
+    inline bool bSoupEnduroStew = true;
+    inline bool bSoupShadowSteak = true;
+    inline bool bSoupMushroomBrew = true;
+    // 身体着火自动投掷灭火手雷
+    inline bool bAutoFireExtinguish = false;
+    inline float FireExtinguishIntervalSeconds = 5.0f;
     inline bool bAutoSwitchFishingRod = false;
     inline bool bAutoRecoverFishingBait = false;
-    inline bool bTekChestJetNoCooldown = false;
-    inline bool bTekGloveDashNoCooldown = false;
     inline bool bPumpShotgunNoReload = false;
+    inline bool bAutoRepairItems = false;
+    inline float AutoRepairThresholdPercent = 35.0f;
+    inline float AutoRepairIntervalSeconds = 2.0f;
+    inline bool bAutoRepairIncludeBackpack = false;
     inline bool bAutoCraft = false;
     inline float AutoCraftRangeMeters = 30.0f;
     inline float AutoCraftIntervalSeconds = 1.0f;
-    inline bool bAutoImprint = false;
-    inline float AutoImprintRangeMeters = 12.0f;
-    // Session-only destructive action. It is intentionally not persisted by
-    // ConfigManager and must be enabled again after each injection.
-    inline bool bAutoGrindHelicoprionInventory = false;
-    inline bool bExpandPlayerInventory = false;
-    inline float PlayerInventorySlotLimit = 1000.0f;
     inline bool bDinoAttackSpeed = false;
     inline float DinoAttackSpeedMultiplier = 2.0f;
     inline bool bDragontopiaSkillTuning = false;
@@ -53,11 +108,9 @@ namespace g_Config {
     inline float DragontopiaStaminaCostMultiplier = 1.0f;
     inline float DragontopiaCooldownMultiplier = 1.0f;
     inline float DragontopiaSkillDamageMultiplier = 1.0f;
-    inline bool bShowLostColonyCooldowns = false;
     inline bool bTastyBaitOverride = false;
     inline float TastyBaitRank1ReductionPercent = 30.0f;
     inline float TastyBaitRank2ReductionPercent = 60.0f;
-    inline bool bUnlockExplorerNotes = false;
     inline bool bSuicide = false;
     inline bool bDropItem = false;
     inline SDK::FItemNetID dropItemID;
@@ -90,10 +143,44 @@ namespace g_Config {
 
     // 自瞄
     inline bool bAimbotEnabled = false;
-    inline float AimbotFOV = 30.0f;
-    inline float AimbotSmooth = 50.0f;
-    inline float AimbotRCX = 100.0f;
-    inline float AimbotRCY = 100.0f;
+    inline bool bAimPlayers = true;
+    inline bool bAimWildDinos = true;
+    inline bool bAimTamedDinos = false;
+    inline bool bAimBosses = true;
+    // 泰克长矛招架目标类型筛选（玩家 / 生物 / Boss）
+    inline bool bSpearAimPlayers = true;
+    inline bool bSpearAimCreatures = true;
+    inline bool bSpearAimBosses = true;
+    inline bool bAimHead = true;
+    inline bool bAimBody = true;
+    inline bool bAimRemoveSpread = true;
+    inline bool bTekPistolHoldTarget = true;
+    inline bool bShotgunConverge = true;
+    inline bool bTekSpearAutoBlock = false;
+    inline bool bTekSpearAutoDeflect = false;
+    inline int TekSpearTargetCount = 1;
+    inline bool bTekSpearAutoFace = true;
+    inline float TekSpearTargetRangeMeters = 300.0f;
+    inline bool bDrawTekSpearCircle = true;
+    inline bool bDrawTekSpearTargetLine = true;
+    inline bool bDrawTekSpearTargetInfo = true;
+    inline float TekSpearTargetColor[4] = {0.15f, 0.9f, 1.0f, 0.9f};
+    inline float TekSpearMeleeRangeMeters = 4.5f;
+    inline float TekSpearParryLeadSeconds = 0.04f;
+    inline float TekSpearParryTapSeconds = 0.08f;
+    inline float TekSpearProjectileRangeMeters = 60.0f;
+    inline float TekSpearLookAheadSeconds = 0.35f;
+    inline float AimbotMaxDistanceMeters = 300.0f;
+    inline float AimbotCircleRadiusPercent = 30.0f;
+    inline bool bDrawAimCircle = true;
+    inline bool bDrawAimTargetLine = true;
+    inline bool bDrawAimTargetInfo = true;
+    inline float AimTargetInfoScale = 1.0f;
+    inline float AimCircleThickness = 1.5f;
+    inline float AimTargetLineThickness = 1.5f;
+    inline float AimTargetMarkerSize = 5.0f;
+    inline float AimCircleColor[4] = {1.0f, 1.0f, 1.0f, 0.65f};
+    inline float AimTargetLineColor[4] = {1.0f, 0.25f, 0.1f, 0.95f};
 
     // 扳机
     inline bool bTriggerbotEnabled = false;
@@ -154,6 +241,19 @@ namespace g_Config {
 
     // 建筑
     inline bool bDrawStructures = false;
+    inline bool bStructureTypeFilter = false;
+    inline bool bStructureAutoTurret = true;
+    inline bool bStructureHeavyTurret = true;
+    inline bool bStructureTekTurret = true;
+    inline bool bStructureGenerator = true;
+    inline bool bStructureTekGenerator = true;
+    inline bool bStructureWindTurbine = true;
+    inline bool bStructureSupplyDrop = true;
+    inline bool bStructureLootCrate = true;
+    inline bool bStructureBuriedTreasure = true;
+    inline bool bStructureOther = false;
+    inline bool bStructureShowLootContents = false;
+    inline bool bStructureShowOwner = true;
     inline bool bOnlyDrawStructuresEnemy = false;
     inline float StructureMaxDistance = 10000.0f;
     inline float StructureNameColor[4] = { 1.0f, 1.0f, 0.7f, 1.0f };
@@ -176,7 +276,8 @@ namespace g_Config {
     inline float WaterDistanceColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 
     // 附近资源点（独立于全局 ESP 开关）
-    inline bool bTekHelmetNightVision = false;
+    inline float ModelHighlightIntensity = 3.0f;
+    inline float ModelHighlightOpacity = 1.0f;
     inline bool bResourceESPEnabled = false;
     inline float ResourceESPMaxDistance = 300.0f;
     inline bool bResourceModelHighlight = true;
@@ -188,7 +289,9 @@ namespace g_Config {
     inline bool bResourcePearl = false;
     inline bool bResourceElementShard = false;
     inline bool bAutoHarvestResources = false;
-    inline bool bAutoHarvestTekStriderElementShard = false;
+    inline bool bDinoHarvestRange = false;
+    inline float DinoHarvestRangeMultiplier = 2.0f;
+    inline bool bAutoHarvestTekStrider = false;
     inline bool bAutoHarvestApproach = true;
     inline bool bAutoHarvestSprint = true;
     inline bool bAutoHarvestSafeNavigation = true;
@@ -206,7 +309,24 @@ namespace g_Config {
     inline float ResourcePearlColor[4] = { 0.95f, 0.95f, 0.88f, 1.0f };
     inline float ResourceElementShardColor[4] = { 0.45f, 1.0f, 0.45f, 1.0f };
 
+    inline float ESPFontPixels = 16.0f;
+    inline float ESPIconPixels = 18.0f;
+    inline float ESPMinFontPixels = 13.0f;
+    inline float ESPBoxPaddingPixels = 2.0f;
+    inline float ESPBoxThicknessPixels = 1.25f;
+    inline bool bESPCornerBox = true;
+    inline bool bESPPreventOverlap = true;
+
     // 全局
+    inline bool bModelHighlightEnabled = false;
+    inline bool bESPPlayers = true;
+    inline bool bESPCreatures = true;
+    inline bool bShowCreatureAggro = false;
+    inline float ModelHighlightMaxDistance = 300.0f;
+    inline bool ESPCharacterEnabled(bool IsCreature) {
+        return IsCreature ? bESPCreatures : bESPPlayers;
+    }
+    // The old master is retained only for loading legacy configurations.
     inline bool bESPEnabled = false;
 	inline int ESPScaleIdx = 1;
 	inline float ESPScale = 1.0f;
@@ -245,6 +365,13 @@ namespace g_Config {
     inline float DinoRagdollColor[4] = { 1.0f, 0.0f, 0.25f, 0.75f };
     inline bool bDinoDrawDistance = false;
     inline float DinoDistanceColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    inline bool bDinoDistanceTextScale = true;
+    inline float DinoNearTextScale = 1.25f;
+    inline float DinoFarTextScale = 0.80f;
+    inline float DinoTextScaleDistance = 300.0f;
+    inline bool bDinoModelHighlight = false;
+    inline bool bDinoModelOnly = false;
+    inline float DinoModelHighlightMaxDistance = 300.0f;
 
     // 队友
     inline bool bESPTeamEnabled = false;
@@ -278,12 +405,15 @@ namespace g_Config {
     inline float TeamDinoRagdollColor[4] = { 1.0f, 0.0f, 0.25f, 0.75f };
     inline bool bTeamDinoDrawDistance = false;
     inline float TeamDinoDistanceColor[4] = { 0.0f, 0.5f, 1.0f, 1.0f };
+    inline bool bTeamDinoModelHighlight = false;
+    inline bool bTeamDinoModelOnly = false;
 
     // OOF
     inline bool bEnableOOF = false;
     inline float OOFColor[4] = { 1.0f, 1.0f, 1.0f, 0.75f };
     inline float OOFRadius = 1.00f;
     inline float OOFSize = 12.0f;
+    inline float OOFMaxDistance = 300.0f;
     inline float OOFBreathSpeed = 0.1f;
     inline float OOFMinAlpha = 0.25f;
     inline float OOFMaxAlpha = 1.0f;
@@ -291,7 +421,17 @@ namespace g_Config {
     //自动换甲
     inline bool bAutomatic = false;
     inline float ArmorRange = 20.0f;
+    // 参与自动换甲的部位（5 个身体部位 + 副手盾牌）
+    inline bool bArmorSwapHead = true;
+    inline bool bArmorSwapShirt = true;
+    inline bool bArmorSwapPants = true;
+    inline bool bArmorSwapBoots = true;
+    inline bool bArmorSwapGloves = true;
+    inline bool bArmorSwapShield = true;
+    // 只替换已装备部位：空槽位不自动穿戴
+    inline bool bArmorSwapOnlyEquipped = true;
 
-    //灵魂出窍
-    inline bool bOutBodyChecked = false;
+    // The camera shortcut toggles this runtime state; activation is never persisted.
+    inline bool bFreeCameraEnabled = false;
+    inline float FreeCameraSpeedMeters = 15.0f;
 }

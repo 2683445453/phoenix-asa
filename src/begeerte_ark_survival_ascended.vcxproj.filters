@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="external">
@@ -384,6 +384,21 @@
     <ClInclude Include="internal\Lua\LuaManager.h">
       <Filter>internal\Lua</Filter>
     </ClInclude>
+    <ClInclude Include="internal\Menu\FeatureCatalog.h">
+      <Filter>internal\Menu</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Menu\ShortcutRuntime.h">
+      <Filter>internal\Menu</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Menu\FeatureShortcuts.h">
+      <Filter>internal\Menu</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Menu\VibrancyBackdrop.h">
+      <Filter>internal\Menu</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Config\InterfaceRules.h">
+      <Filter>internal\Config</Filter>
+    </ClInclude>
     <ClInclude Include="internal\Menu\ConfigImGui.h">
       <Filter>internal\Menu</Filter>
     </ClInclude>
@@ -420,7 +435,33 @@
     <ClInclude Include="internal\Log\LogManager.h">
       <Filter>internal\Log</Filter>
     </ClInclude>
+    <ClInclude Include="internal\ESP\ESPLayout.h" />
+    <ClInclude Include="internal\ESP\StructureESP.h" />
+    <ClInclude Include="internal\ESP\ESPStyle.inl" />
+    <ClInclude Include="internal\Hack\FireRateRules.h" />
+    <ClInclude Include="internal\Hack\BuffSoupRules.h" />
+    <ClInclude Include="internal\Hack\FireExtinguishRules.h" />
+    <ClInclude Include="internal\Hack\AutoLootRules.h" />
+    <ClInclude Include="internal\Hack\CameraControls.h" />
+    <ClInclude Include="internal\Hack\WorldUtilityRules.h" />
+    <ClInclude Include="internal\Hack\GachaOpenScheduler.h" />
+    <ClInclude Include="internal\Hack\GachaOpen.inl" />
+    <ClInclude Include="internal\Hack\FreeCamera.inl" />
+    <ClInclude Include="internal\Hack\WorldUtilities.inl" />
+    <ClInclude Include="internal\Hack\HarvestRules.h" />
+    <ClInclude Include="internal\Hack\HarvestEfficiency.inl" />
+    <ClInclude Include="internal\Legit\Aimbot\TekBowRules.h" />
+    <ClInclude Include="internal\Legit\Aimbot\TekBowProfile.inl" />
+    <ClInclude Include="internal\Hack\GameplayExtensions.inl" />
+    <ClInclude Include="internal\Legit\Aimbot\ProjectilePrediction.h" />
+    <ClInclude Include="internal\Legit\Aimbot\ProjectileAim.inl" />
     <ClInclude Include="internal\Hack\Hack.h">
+      <Filter>internal\Hack</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Hack\TekSpear.h">
+      <Filter>internal\Hack</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Hack\TekSpearRules.h">
       <Filter>internal\Hack</Filter>
     </ClInclude>
     <ClInclude Include="internal\Menu\Misc_Menu.h">
@@ -457,6 +498,18 @@
       <Filter>external\Minimal-D3D12-Hook-ImGui\MinHook\src\hde</Filter>
     </ClInclude>
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\hooks.h">
+      <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
+    </ClInclude>
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\D3D12Overlay.inl">
+      <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
+    </ClInclude>
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\SwapChainQueueTracker.h">
+      <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
+    </ClInclude>
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\UnloadBarrier.h">
+      <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
+    </ClInclude>
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\WindowProcedureRoutes.h">
       <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
     </ClInclude>
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\ImGui\imconfig.h">
@@ -613,6 +666,9 @@
     <ClCompile Include="internal\Hack\Hack.cpp">
       <Filter>internal\Hack</Filter>
     </ClCompile>
+    <ClCompile Include="internal\Hack\TekSpear.cpp">
+      <Filter>internal\Hack</Filter>
+    </ClCompile>
     <ClCompile Include="internal\Menu\Misc_Menu.cpp">
       <Filter>internal\Menu</Filter>
     </ClCompile>
@@ -705,5 +761,24 @@
     <None Include="external\CppSDK\NameCollisions.inl">
       <Filter>external\CppSDK</Filter>
     </None>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="phoenix.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="internal\Hack\BackpackRules.h" />
+    <ClInclude Include="internal\Hack\BackpackTools.inl" />
+    <ClInclude Include="internal\Hack\WeaponWaterAccess.inl" />
+    <ClInclude Include="internal\Hack\DinoHarvestRange.inl" />
+    <ClInclude Include="internal\Hack\UnderwaterWeapons.inl" />
+    <ClInclude Include="internal\Hack\InventoryDeposit.inl" />
+    <ClInclude Include="internal\Hack\InventoryTransferRules.h" />
+    <ClInclude Include="internal\Hack\SessionSnapshot.inl" />
+    <ClInclude Include="internal\Lua\SessionSnapshot.h" />
+    <ClInclude Include="internal\Menu\InterfaceMotion.h" />
+    <ClInclude Include="internal\Menu\StartupPresentation.h" />
+    <ClInclude Include="internal\Menu\HoverHelp.h" />
+    <ClInclude Include="internal\Menu\ColorPalette.h" />
+    <ClInclude Include="internal\Language\InterfaceText.inc" />
   </ItemGroup>
 </Project>

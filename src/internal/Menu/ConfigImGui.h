@@ -1,1134 +1,198 @@
+#pragma once
 #if defined(__cpp_char8_t)
 #define U8(str) reinterpret_cast<const char*>(u8##str)
 #else
 #define U8(str) u8##str
 #endif
-
 #include "../../external/Minimal-D3D12-Hook-ImGui/Main/mdx12_api.h"
 #include "../Config/Configs.h"
+#include "../Config/InterfaceRules.h"
 #include "DrawImGui.h"
 #include "../Util/Util.h"
 #include "../Language/LanguageManager.h"
-
-#include <cstdio>
-#include <string>
+#include "FeatureShortcuts.h"
+#include "InterfaceMotion.h"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
-#include <map>
+#include <cstdio>
+#include <string>
+#include <vector>
 
 namespace g_DrawImGui {
-	enum class MenuPage {
-		Combat,
-		Visuals,
-		TeamVisuals,
-		ResourceHarvest,
-		Automation,
-		Inventory,
-		CreatureList,
-		StructureList,
-		Lua,
-		InterfaceSettings,
-		Configs,
-		Language
-	};
-
-	// Menu pages used to be coupled directly to a horizontal ImGui tab bar.
-	// The sidebar layout uses the same page bodies without duplicating any
-	// feature UI, while retaining a tab fallback for any legacy caller.
-	extern bool g_UseSidebarNavigation;
-	extern MenuPage g_ActiveMenuPage;
-
-	inline bool BeginMenuPage(MenuPage Page, const char* LegacyTabLabel)
-	{
-		return g_UseSidebarNavigation
-			? g_ActiveMenuPage == Page
-			: ImGui::BeginTabItem(LegacyTabLabel);
-	}
-
-	inline void EndMenuPage()
-	{
-		if (!g_UseSidebarNavigation) ImGui::EndTabItem();
-	}
-	namespace ThemeColors {
-		// 新野兽派：纯色、高对比、硬边界，不使用玻璃和渐变。
-		const ImVec4 BG = ImVec4(1.000f, 1.000f, 1.000f, 1.000f);
-		const ImVec4 MENUBAR_BG = ImVec4(0.800f, 1.000f, 0.000f, 1.000f); // #CCFF00
-		const ImVec4 MUTED = ImVec4(0.235f, 0.235f, 0.235f, 1.000f);
-		const ImVec4 TEXT = ImVec4(0.000f, 0.000f, 0.000f, 1.000f);
-
-		inline ImVec4 GetAccent() { return ImVec4(1.000f, 0.000f, 0.431f, 1.000f); } // #FF006E
-		const ImVec4 ACCENT2 = ImVec4(0.800f, 1.000f, 0.000f, 1.000f);              // #CCFF00
-		const ImVec4 CYAN = ImVec4(0.000f, 0.851f, 1.000f, 1.000f);                 // #00D9FF
-		const ImVec4 YELLOW = ImVec4(1.000f, 0.950f, 0.000f, 1.000f);
-		const ImVec4 ORANGE = ImVec4(1.000f, 0.584f, 0.000f, 1.000f);
-
-		const ImVec4 GLASS_BORDER = ImVec4(0.000f, 0.000f, 0.000f, 1.000f);
-		const ImVec4 SHADOW = ImVec4(0.000f, 0.000f, 0.000f, 1.000f);
-		const ImVec4 WHITE_LOW = ImVec4(1.000f, 1.000f, 1.000f, 1.000f);
-		const ImVec4 WHITE_MID = ImVec4(1.000f, 0.950f, 0.000f, 1.000f);
-		const ImVec4 WHITE_HIGH = ImVec4(0.800f, 1.000f, 0.000f, 1.000f);
-		const ImVec4 BLACK_LOW = ImVec4(0.000f, 0.000f, 0.000f, 1.000f);
-		const ImVec4 BLACK_MID = ImVec4(0.000f, 0.000f, 0.000f, 1.000f);
-	}
-
-	inline void SetupCustomImGuiStyle()
-	{
-		ImGuiStyle& style = ImGui::GetStyle();
-
-		style.WindowRounding = 0.0f;
-		style.ChildRounding = 0.0f;
-		style.FrameRounding = 0.0f;
-		style.PopupRounding = 0.0f;
-		style.ScrollbarRounding = 0.0f;
-		style.GrabRounding = 0.0f;
-		style.TabRounding = 0.0f;
-		style.WindowBorderSize = 4.0f;
-		style.ChildBorderSize = 3.0f;
-		style.PopupBorderSize = 3.0f;
-		style.FrameBorderSize = 2.0f;
-		style.TabBorderSize = 2.0f;
-		style.WindowPadding = ImVec2(20.0f, 20.0f);
-		style.FramePadding = ImVec2(14.0f, 9.0f);
-		style.CellPadding = ImVec2(10.0f, 8.0f);
-		style.ItemSpacing = ImVec2(14.0f, 10.0f);
-		style.ItemInnerSpacing = ImVec2(10.0f, 8.0f);
-		style.IndentSpacing = 22.0f;
-		style.ScrollbarSize = 12.0f;
-		style.GrabMinSize = 20.0f;
-		style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
-		style.WindowMenuButtonPosition = ImGuiDir_None;
-		style.ColorButtonPosition = ImGuiDir_Right;
-		style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
-		style.SelectableTextAlign = ImVec2(0.0f, 0.0f);
-		style.DisplaySafeAreaPadding = ImVec2(3.0f, 3.0f);
-
-		style.AntiAliasedLines = true;
-		style.AntiAliasedFill = true;
-
-		style.Colors[ImGuiCol_Text] = ThemeColors::TEXT;
-		style.Colors[ImGuiCol_TextDisabled] = ThemeColors::MUTED;
-		style.Colors[ImGuiCol_WindowBg] = ThemeColors::BG;
-		style.Colors[ImGuiCol_ChildBg] = ThemeColors::BG;
-		style.Colors[ImGuiCol_PopupBg] = ThemeColors::BG;
-		style.Colors[ImGuiCol_Border] = ThemeColors::GLASS_BORDER;
-		style.Colors[ImGuiCol_BorderShadow] = ThemeColors::SHADOW;
-
-		style.Colors[ImGuiCol_FrameBg] = ThemeColors::WHITE_LOW;
-		style.Colors[ImGuiCol_FrameBgHovered] = ThemeColors::YELLOW;
-		style.Colors[ImGuiCol_FrameBgActive] = ThemeColors::ACCENT2;
-
-		style.Colors[ImGuiCol_TitleBg] = ThemeColors::ACCENT2;
-		style.Colors[ImGuiCol_TitleBgActive] = ThemeColors::GetAccent();
-		style.Colors[ImGuiCol_TitleBgCollapsed] = ThemeColors::CYAN;
-
-		style.Colors[ImGuiCol_MenuBarBg] = ImVec4(ThemeColors::MENUBAR_BG);
-
-		style.Colors[ImGuiCol_ScrollbarBg] = ThemeColors::BG;
-		style.Colors[ImGuiCol_ScrollbarGrab] = ThemeColors::TEXT;
-		style.Colors[ImGuiCol_ScrollbarGrabHovered] = ThemeColors::CYAN;
-		style.Colors[ImGuiCol_ScrollbarGrabActive] = ThemeColors::GetAccent();
-
-		style.Colors[ImGuiCol_CheckMark] = ThemeColors::GetAccent();
-
-		style.Colors[ImGuiCol_SliderGrab] = ThemeColors::GetAccent();
-		style.Colors[ImGuiCol_SliderGrabActive] = ThemeColors::GetAccent(); // ThemeColors::ACCENT2
-
-		style.Colors[ImGuiCol_Button] = ThemeColors::GetAccent();
-		style.Colors[ImGuiCol_ButtonHovered] = ThemeColors::YELLOW;
-		style.Colors[ImGuiCol_ButtonActive] = ThemeColors::ACCENT2;
-
-		style.Colors[ImGuiCol_Header] = ThemeColors::CYAN;
-		style.Colors[ImGuiCol_HeaderHovered] = ThemeColors::YELLOW;
-		style.Colors[ImGuiCol_HeaderActive] = ThemeColors::GetAccent();
-
-		style.Colors[ImGuiCol_Separator] = ThemeColors::GLASS_BORDER;
-		style.Colors[ImGuiCol_SeparatorHovered] = ThemeColors::CYAN;
-		style.Colors[ImGuiCol_SeparatorActive] = ThemeColors::GetAccent();
-
-		style.Colors[ImGuiCol_ResizeGrip] = ThemeColors::TEXT;
-		style.Colors[ImGuiCol_ResizeGripHovered] = ThemeColors::CYAN;
-		style.Colors[ImGuiCol_ResizeGripActive] = ThemeColors::GetAccent();
-
-		style.Colors[ImGuiCol_Tab] = ThemeColors::BG;
-		style.Colors[ImGuiCol_TabHovered] = ThemeColors::YELLOW;
-		style.Colors[ImGuiCol_TabActive] = ThemeColors::GetAccent();
-		style.Colors[ImGuiCol_TabUnfocused] = ThemeColors::BG;
-		style.Colors[ImGuiCol_TabUnfocusedActive] = ThemeColors::CYAN;
-		style.Colors[ImGuiCol_TableHeaderBg] = ThemeColors::ACCENT2;
-		style.Colors[ImGuiCol_TableBorderStrong] = ThemeColors::TEXT;
-		style.Colors[ImGuiCol_TableBorderLight] = ThemeColors::TEXT;
-		style.Colors[ImGuiCol_TableRowBg] = ThemeColors::BG;
-		style.Colors[ImGuiCol_TableRowBgAlt] = ImVec4(0.94f, 0.94f, 0.94f, 1.0f);
-
-		style.Colors[ImGuiCol_TextSelectedBg] = ThemeColors::CYAN;
-		style.Colors[ImGuiCol_DragDropTarget] = ThemeColors::ORANGE;
-		style.Colors[ImGuiCol_NavHighlight] = ThemeColors::TEXT;
-		style.Colors[ImGuiCol_NavWindowingHighlight] = ThemeColors::YELLOW;
-		style.Colors[ImGuiCol_NavWindowingDimBg] = ImVec4(ThemeColors::BLACK_LOW);
-		style.Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(ThemeColors::BLACK_MID);
-	}
-
-	extern float g_MenuAlpha;
-	static float g_saved_color[4] = { 1.0f,1.0f,1.0f,1.0f };
-	static bool style_initialized = false;
-
-	struct CustomComboItem {
-		const char* label = nullptr; // 子项显示的文本
-		bool        selected = false;   // 子项自身在下拉框中的选中状态
-		float* color_ptr = nullptr; // 调色盘绑定的颜色指针（float[4]），为 nullptr 则不显示调色盘
-		bool* checkbox_ptr = nullptr;  // 外部绑定的逻辑指针。若不为 nullptr，其勾选状态将与外部变量同步（等价于复选框）
-	};
-
-	struct ColorPickerData {
-		const char* label_id;
-		float* col_ptr;
-	};
-
-	static float CalcPopupMinWidthForItems(const char* items[], int count)
-	{
-		ImGuiStyle& style = ImGui::GetStyle();
-		float max_text_w = 0.0f;
-		for (int i = 0; i < count; ++i) {
-			ImVec2 ts = ImGui::CalcTextSize(items[i]);
-			if (ts.x > max_text_w) max_text_w = ts.x;
-		}
-
-		float extra = style.FramePadding.x * 2.0f + style.WindowPadding.x * 2.0f + 24.0f;
-		return max_text_w + extra;
-	}
-
-	inline void DrawCustomColorPicker(const char* label_id, float* col_ptr, bool active, const char* display_text)
-	{
-		ImGuiContext& g = *GImGui;
-		ImGuiStorage* storage = ImGui::GetStateStorage();
-		ImGuiID anim_id = ImGui::GetID(label_id);
-
-		float enable_anim = active ? 1.0f : 0.0f;
-
-		float frame_h = ImGui::GetFrameHeight();
-		float pad_y = g.Style.FramePadding.y;
-		float btn_size = frame_h - pad_y * 2.0f;
-		if (btn_size <= 0.0f) btn_size = frame_h * 0.8f;
-		ImVec2 btn_size_vec(btn_size, btn_size);
-
-		ImGui::BeginGroup();
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5.0f, 5.0f));
-
-		if (display_text && display_text[0] != '\0')
-		{
-			ImGui::AlignTextToFramePadding();
-			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, enable_anim * g_MenuAlpha);
-			const char* text_end = ImGui::FindRenderedTextEnd(display_text);
-			ImGui::TextUnformatted(display_text, text_end);
-			ImGui::PopStyleVar();
-
-			ImGui::SameLine();
-			float avail_x = ImGui::GetContentRegionAvail().x;
-			if (avail_x > btn_size) {
-				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail_x - btn_size);
-			}
-		}
-
-		if (enable_anim > 0.0f)
-		{
-			char button_id[256];
-			char popup_picker_id[256];
-			char popup_menu_id[256];
-			std::snprintf(button_id, sizeof(button_id), "##ColorBtn_%s", label_id);
-			std::snprintf(popup_picker_id, sizeof(popup_picker_id), "##ColorPickerPopup_%s", label_id);
-			std::snprintf(popup_menu_id, sizeof(popup_menu_id), "##ColorMenuPopup_%s", label_id);
-
-			ImVec4 cur = ImVec4(col_ptr[0], col_ptr[1], col_ptr[2], col_ptr[3]);
-			ImDrawList* draw_list = ImGui::GetWindowDrawList();
-			ImVec2 btn_pos = ImGui::GetCursorScreenPos();
-			float final_alpha = enable_anim * g_MenuAlpha;
-			float hover_anim = storage->GetFloat(anim_id, 0.0f);
-
-			draw_list->AddRectFilled(ImVec2(btn_pos.x + 3.0f, btn_pos.y + 3.0f), ImVec2(btn_pos.x + btn_size + 3.0f, btn_pos.y + btn_size + 3.0f), IM_COL32_BLACK);
-
-			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, final_alpha);
-			if (ImGui::ColorButton(button_id, cur, ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoTooltip, btn_size_vec))
-			{
-				ImGui::OpenPopup(popup_picker_id);
-			}
-			ImGui::PopStyleVar();
-			draw_list->AddRect(btn_pos, ImVec2(btn_pos.x + btn_size, btn_pos.y + btn_size), IM_COL32_BLACK, 0.0f, 0, 2.0f);
-
-			bool hovered = ImGui::IsItemHovered();
-			hover_anim = hovered ? std::min(hover_anim + g.IO.DeltaTime * 8.0f, 1.0f) : std::max(hover_anim - g.IO.DeltaTime * 8.0f, 0.0f);
-			storage->SetFloat(anim_id, hover_anim);
-
-			if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
-			{
-				ImGui::OpenPopup(popup_menu_id);
-			}
-
-			// ==================== 弹窗 1：纯右键菜单（复制/粘贴） ====================
-			const char* popup_items[] = { LanguageManager::ConfigImGui_Menu::Copy, LanguageManager::ConfigImGui_Menu::Paste };
-			float padding_w = g.Style.WindowPadding.x * 2.0f;
-
-			// 计算文本宽度，用于完美对齐和匹配
-			float text_only_w = ImGui::CalcTextSize(LanguageManager::ConfigImGui_Menu::Copy).x;
-			// 精确计算“复制/粘贴”四个字的实际占用宽度，扣除任何默认对齐边距
-			float tight_w = text_only_w + padding_w + g.Style.FramePadding.x * 2.0f;
-
-			// 严格限制弹窗的最小和最大宽度，使其完美匹配“复制/粘贴”四个字的宽度。
-			ImGui::SetNextWindowSizeConstraints(ImVec2(tight_w, 0.0f), ImVec2(tight_w, FLT_MAX));
-
-			if (ImGui::BeginPopup(popup_menu_id, ImGuiWindowFlags_AlwaysAutoResize))
-			{
-				// 临时消除 Item 内部的额外边距，强制菜单项自适应最窄宽度
-				ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, g.Style.ItemSpacing.y));
-
-				// 临时将圆角（FrameRounding）设置为你需要的值，用于此弹出窗口中的所有控件。
-				// 这是解决悬浮效果是方角矩形的核心。
-				float original_frame_rounding = g.Style.FrameRounding;
-				g.Style.FrameRounding = 0.0f;
-
-				// 我们不使用 MenuItem，因为 MenuItem 默认设计就是直角，并且不提供自定义圆角的选项。
-				// 我们自定义一个“圆角、文本居中、宽度匹配”的按钮来替代它。
-
-				// 计算按钮的宽度：窗口的可用宽度扣除窗口内部边距
-				float btn_w = ImGui::GetContentRegionAvail().x;
-
-				// 绘制“复制”按钮
-				if (ImGui::Button(LanguageManager::ConfigImGui_Menu::Copy, ImVec2(btn_w, 0))) {
-					g_saved_color[0] = col_ptr[0]; g_saved_color[1] = col_ptr[1];
-					g_saved_color[2] = col_ptr[2]; g_saved_color[3] = col_ptr[3];
-					ImGui::CloseCurrentPopup(); // 点击按钮后关闭弹出窗口
-				}
-
-				// 绘制“粘贴”按钮
-				if (ImGui::Button(LanguageManager::ConfigImGui_Menu::Paste, ImVec2(btn_w, 0))) {
-					col_ptr[0] = g_saved_color[0]; col_ptr[1] = g_saved_color[1];
-					col_ptr[2] = g_saved_color[2]; col_ptr[3] = g_saved_color[3];
-					ImGui::CloseCurrentPopup(); // 点击按钮后关闭弹出窗口
-				}
-
-				// 恢复原来的 FrameRounding 设置
-				g.Style.FrameRounding = original_frame_rounding;
-
-				ImGui::PopStyleVar();
-				ImGui::EndPopup();
-			}
-
-			// ==================== 弹窗 2：纯左键菜单（只显示调色盘） ====================
-			ImGui::SetNextWindowSizeConstraints(ImVec2(frame_h * 9.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
-			if (ImGui::BeginPopup(popup_picker_id, ImGuiWindowFlags_AlwaysAutoResize))
-			{
-				ImGui::SetNextItemWidth(frame_h * 9.0f);
-				// 此处加入了 ImGuiColorEditFlags_NoSidePreview 标志，用于干掉右侧的 "Current" 预览区域
-				ImGui::ColorPicker4("##Picker", col_ptr, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_DisplayHex | ImGuiColorEditFlags_NoOptions | ImGuiColorEditFlags_NoSmallPreview | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoSidePreview);
-				ImGui::EndPopup();
-			}
-		}
-		else
-		{
-			ImGui::Dummy(btn_size_vec);
-		}
-
-		ImGui::PopStyleVar();
-		ImGui::EndGroup();
-	}
-
-	inline void DrawCustomColorPicker(const char* label_id, float* col_ptr, const char* display_text)
-	{
-		DrawCustomColorPicker(label_id, col_ptr, true, display_text);
-	}
-
-	inline void DrawMultiColorPicker(const char* display_text, bool active, std::initializer_list<ColorPickerData> pickers)
-	{
-		ImGuiContext& g = *GImGui;
-		ImGuiStorage* storage = ImGui::GetStateStorage();
-
-		float frame_h = ImGui::GetFrameHeight();
-		float pad_y = g.Style.FramePadding.y;
-		float btn_size = frame_h - pad_y * 2.0f;
-		if (btn_size <= 0.0f) btn_size = frame_h * 0.8f;
-		ImVec2 btn_size_vec(btn_size, btn_size);
-		float item_spacing_x = g.Style.ItemSpacing.x;
-
-		ImGui::BeginGroup();
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5.0f, 5.0f));
-
-		// 1. 处理左侧文本
-		if (display_text && display_text[0] != '\0')
-		{
-			ImGui::AlignTextToFramePadding();
-			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, g_MenuAlpha);
-			const char* text_end = ImGui::FindRenderedTextEnd(display_text);
-			ImGui::TextUnformatted(display_text, text_end);
-			ImGui::PopStyleVar();
-		}
-
-		int index = 0;
-		int total_count = (int)pickers.size();
-
-		// 2. 渲染颜色选择器
-		for (const auto& picker : pickers)
-		{
-			// 每个 Picker 都必须在同一行，除非它是 Group 的第一个元素且没文本
-			// 我们直接在循环开始就强制 SameLine，ImGui 会自动处理第一个元素的特殊情况
-			if (index > 0 || (display_text && display_text[0] != '\0'))
-				ImGui::SameLine();
-
-			ImGuiID anim_id = ImGui::GetID(picker.label_id);
-			float* col_ptr = picker.col_ptr;
-
-			float enable_anim = active ? 1.0f : 0.0f;
-
-			if (enable_anim > 0.0f)
-			{
-				// --- 核心修复：精确对齐计算 ---
-				float remaining_items_count = (float)(total_count - index);
-				float total_needed_w = (remaining_items_count * btn_size) + ((remaining_items_count - 1) * item_spacing_x);
-
-				float avail_x = ImGui::GetContentRegionAvail().x;
-				if (avail_x > total_needed_w) {
-					// 使用 SetCursorPosX 之前不应有其他换行逻辑
-					ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail_x - total_needed_w);
-				}
-
-				char button_id[256];
-				char popup_picker_id[256];
-				char popup_menu_id[256];
-				std::snprintf(button_id, sizeof(button_id), "##ColorBtn_%s", picker.label_id);
-				std::snprintf(popup_picker_id, sizeof(popup_picker_id), "##ColorPickerPopup_%s", picker.label_id);
-				std::snprintf(popup_menu_id, sizeof(popup_menu_id), "##ColorMenuPopup_%s", picker.label_id);
-
-				ImVec4 cur = ImVec4(col_ptr[0], col_ptr[1], col_ptr[2], col_ptr[3]);
-				ImDrawList* draw_list = ImGui::GetWindowDrawList();
-				ImVec2 btn_pos = ImGui::GetCursorScreenPos();
-				float final_alpha = enable_anim * g_MenuAlpha;
-				float hover_anim = storage->GetFloat(anim_id, 0.0f);
-
-				draw_list->AddRectFilled(ImVec2(btn_pos.x + 3.0f, btn_pos.y + 3.0f), ImVec2(btn_pos.x + btn_size + 3.0f, btn_pos.y + btn_size + 3.0f), IM_COL32_BLACK);
-
-				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, final_alpha);
-				if (ImGui::ColorButton(button_id, cur, ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoTooltip, btn_size_vec))
-				{
-					ImGui::OpenPopup(popup_picker_id);
-				}
-				ImGui::PopStyleVar();
-				draw_list->AddRect(btn_pos, ImVec2(btn_pos.x + btn_size, btn_pos.y + btn_size), IM_COL32_BLACK, 0.0f, 0, 2.0f);
-
-				bool hovered = ImGui::IsItemHovered();
-				hover_anim = hovered ? std::min(hover_anim + g.IO.DeltaTime * 8.0f, 1.0f) : std::max(hover_anim - g.IO.DeltaTime * 8.0f, 0.0f);
-				storage->SetFloat(anim_id, hover_anim);
-
-				if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
-				{
-					ImGui::OpenPopup(popup_menu_id);
-				}
-
-				// 右键菜单
-				float padding_w = g.Style.WindowPadding.x * 2.0f;
-				float text_only_w = ImGui::CalcTextSize(LanguageManager::ConfigImGui_Menu::Copy).x;
-				float tight_w = text_only_w + padding_w + g.Style.FramePadding.x * 2.0f;
-				ImGui::SetNextWindowSizeConstraints(ImVec2(tight_w, 0.0f), ImVec2(tight_w, FLT_MAX));
-				if (ImGui::BeginPopup(popup_menu_id, ImGuiWindowFlags_AlwaysAutoResize))
-				{
-					ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, g.Style.ItemSpacing.y));
-					float original_frame_rounding = g.Style.FrameRounding;
-					g.Style.FrameRounding = 0.0f;
-					float btn_w = ImGui::GetContentRegionAvail().x;
-					if (ImGui::Button(LanguageManager::ConfigImGui_Menu::Copy, ImVec2(btn_w, 0))) {
-						g_saved_color[0] = col_ptr[0]; g_saved_color[1] = col_ptr[1];
-						g_saved_color[2] = col_ptr[2]; g_saved_color[3] = col_ptr[3];
-						ImGui::CloseCurrentPopup();
-					}
-					if (ImGui::Button(LanguageManager::ConfigImGui_Menu::Paste, ImVec2(btn_w, 0))) {
-						col_ptr[0] = g_saved_color[0]; col_ptr[1] = g_saved_color[1];
-						col_ptr[2] = g_saved_color[2]; col_ptr[3] = g_saved_color[3];
-						ImGui::CloseCurrentPopup();
-					}
-					g.Style.FrameRounding = original_frame_rounding;
-					ImGui::PopStyleVar();
-					ImGui::EndPopup();
-				}
-
-				// 左键 Picker
-				ImGui::SetNextWindowSizeConstraints(ImVec2(frame_h * 9.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
-				if (ImGui::BeginPopup(popup_picker_id, ImGuiWindowFlags_AlwaysAutoResize))
-				{
-					ImGui::SetNextItemWidth(frame_h * 9.0f);
-					ImGui::ColorPicker4("##Picker", col_ptr, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_DisplayHex | ImGuiColorEditFlags_NoOptions | ImGuiColorEditFlags_NoSmallPreview | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoSidePreview);
-					ImGui::EndPopup();
-				}
-			}
-			else
-			{
-				// 隐藏状态下也保持在当前行，使用 Dummy 占位或跳过
-				ImGui::Dummy(ImVec2(0, 0));
-			}
-
-			index++;
-		}
-
-		ImGui::PopStyleVar();
-		ImGui::EndGroup();
-	}
-
-	inline bool DrawCustomCheckbox(const char* label, bool* v)
-	{
-		ImGuiContext& g = *GImGui;
-		ImGuiWindow* window = g.CurrentWindow;
-		if (window->SkipItems) return false;
-
-		ImGuiID id = window->GetID(label);
-		float square_sz = g.FontSize * 1.35f;
-
-		const ImVec2 label_size = ImGui::CalcTextSize(label, NULL, true);
-		float frame_h = ImGui::GetFrameHeight();
-		float pad_y = g.Style.FramePadding.y;
-
-		ImVec2 pos = window->DC.CursorPos;
-		float total_w = square_sz + (label_size.x > 0.0f ? g.Style.ItemInnerSpacing.x + label_size.x : 0.0f);
-		ImRect total_bb(pos, ImVec2(pos.x + total_w, pos.y + frame_h));
-
-		ImGui::ItemSize(total_bb, pad_y);
-		if (!ImGui::ItemAdd(total_bb, id)) return false;
-
-		bool hovered, held;
-		bool pressed = ImGui::ButtonBehavior(total_bb, id, &hovered, &held);
-		if (pressed) {
-			*v = !(*v);
-			ImGui::MarkItemEdited(id);
-		}
-
-		ImDrawList* draw_list = window->DrawList;
-		float box_offset_y = (frame_h - square_sz) * 0.5f;
-		ImVec2 box_min = ImVec2(pos.x, pos.y + box_offset_y);
-		ImVec2 box_max = ImVec2(pos.x + square_sz, pos.y + box_offset_y + square_sz);
-		const float press_offset = held ? 3.0f : 0.0f;
-		box_min.x += press_offset;
-		box_min.y += press_offset;
-		box_max.x += press_offset;
-		box_max.y += press_offset;
-
-		if (!held)
-			draw_list->AddRectFilled(ImVec2(box_min.x + 4.0f, box_min.y + 4.0f), ImVec2(box_max.x + 4.0f, box_max.y + 4.0f), IM_COL32_BLACK);
-
-		ImVec4 fill = *v ? ThemeColors::ACCENT2 : (hovered ? ThemeColors::YELLOW : ThemeColors::BG);
-		draw_list->AddRectFilled(box_min, box_max, ImGui::GetColorU32(fill));
-		draw_list->AddRect(box_min, box_max, IM_COL32_BLACK, 0.0f, 0, 3.0f);
-
-		if (*v) {
-			const float inset = square_sz * 0.25f;
-			draw_list->AddLine(ImVec2(box_min.x + inset, box_min.y + inset), ImVec2(box_max.x - inset, box_max.y - inset), IM_COL32_BLACK, 3.0f);
-			draw_list->AddLine(ImVec2(box_max.x - inset, box_min.y + inset), ImVec2(box_min.x + inset, box_max.y - inset), IM_COL32_BLACK, 3.0f);
-		}
-
-		if (label_size.x > 0.0f) {
-			ImVec2 text_pos = ImVec2(pos.x + square_sz + g.Style.ItemInnerSpacing.x + press_offset, pos.y + pad_y + press_offset);
-			draw_list->AddText(text_pos, IM_COL32_BLACK, label, ImGui::FindRenderedTextEnd(label));
-		}
-
-		return pressed;
-	}
-
-	inline bool DrawCustomSliderFloat(const char* label, float* v, float v_min, float v_max, const char* fmt = "%.1f", float step = 1.0f, const char* custom_text = nullptr)
-	{
-		if (v_max <= v_min) return false;
-
-		ImGuiWindow* window = ImGui::GetCurrentWindow();
-		if (window->SkipItems)
-			return false;
-
-		ImGuiContext& g = *GImGui;
-		const ImGuiStyle& style = g.Style;
-
-		ImGuiID id = window->GetID(label);
-		const char* label_end = ImGui::FindRenderedTextEnd(label);
-		ImVec2 label_size = ImGui::CalcTextSize(label, label_end);
-		float full_w = ImGui::GetContentRegionAvail().x;
-		const float TRACK_HEIGHT = 12.0f;
-		const float HANDLE_WIDTH = 14.0f;
-		const float VALUE_TEXT_PAD = 8.0f;
-
-		ImVec2 pos = window->DC.CursorPos;
-		ImVec2 size = ImVec2(full_w, std::max(style.FramePadding.y * 2.0f + TRACK_HEIGHT, label_size.y + style.FramePadding.y * 2.0f));
-		ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
-		ImGui::ItemSize(bb, 0.0f);
-		if (!ImGui::ItemAdd(bb, id))
-			return false;
-
-		float label_area_width = label_size.x + style.ItemInnerSpacing.x;
-		ImVec2 track_min = ImVec2(pos.x + label_area_width, pos.y + (size.y - TRACK_HEIGHT) * 0.5f);
-		ImVec2 track_max = ImVec2(pos.x + size.x - style.FramePadding.x, track_min.y + TRACK_HEIGHT);
-
-		ImVec2 track_size = ImVec2(track_max.x - track_min.x, track_max.y - track_min.y);
-		if (track_size.x < 30.0f) {
-			track_max.x = track_min.x + 30.0f;
-			track_size.x = 30.0f;
-		}
-
-		ImGui::SetCursorScreenPos(pos);
-		ImGui::InvisibleButton(label, bb.GetSize());
-		bool hovered = ImGui::IsItemHovered();
-		bool active = ImGui::IsItemActive();
-
-		if (g.NavId == id && ImGui::IsMouseClicked(0) && !hovered) {
-			ImGui::ClearActiveID(); // 清理活跃状态
-			g.NavId = 0;            // 清除当前控件焦点
-		}
-
-		float t;
-		{
-			ImVec2 mp = g.IO.MousePos;
-			float handle_min_x = track_min.x;
-			float handle_max_x = track_max.x;
-			if (active && g.IO.MouseDown[0]) {
-				float mx = mp.x;
-				t = (mx - handle_min_x) / (handle_max_x - handle_min_x);
-			}
-			else {
-				t = (*v - v_min) / (v_max - v_min);
-			}
-			if (t < 0.0f) t = 0.0f;
-			if (t > 1.0f) t = 1.0f;
-		}
-
-		bool value_changed = false;
-
-		// 键盘方向键微调功能逻辑
-		// 条件：当前滑块拥有焦点（点过一次）且未按住鼠标左键（防止与拖拽冲突）
-		if (g.NavId == id && !g.IO.MouseDown[0]) {
-			float keyboard_delta = 0.0f;
-			if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true)) keyboard_delta -= step;
-			if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, true)) keyboard_delta += step;
-
-			if (keyboard_delta != 0.0f) {
-				*v += keyboard_delta;
-				if (*v < v_min) *v = v_min;
-				if (*v > v_max) *v = v_max;
-				value_changed = true;
-			}
-		}
-
-		if (active && g.IO.MouseDown[0]) {
-			float mx = g.IO.MousePos.x;
-			float handle_min_x = track_min.x;
-			float handle_max_x = track_max.x;
-			float new_t = (mx - handle_min_x) / (handle_max_x - handle_min_x);
-			new_t = new_t < 0.0f ? 0.0f : (new_t > 1.0f ? 1.0f : new_t);
-			float new_value = v_min + new_t * (v_max - v_min);
-
-			if (step > 0.0f) {
-				float steps_f = roundf((new_value - v_min) / step);
-				new_value = v_min + steps_f * step;
-				if (new_value < v_min) new_value = v_min;
-				if (new_value > v_max) new_value = v_max;
-			}
-
-			if (new_value != *v) {
-				*v = new_value;
-				value_changed = true;
-			}
-			t = (*v - v_min) / (v_max - v_min);
-			if (t < 0.0f) t = 0.0f;
-			if (t > 1.0f) t = 1.0f;
-		}
-
-		ImDrawList* draw = ImGui::GetWindowDrawList();
-
-		ImU32 col_text = IM_COL32_BLACK;
-		draw->AddRectFilled(track_min, track_max, IM_COL32_WHITE);
-
-		ImVec2 filled_max = ImVec2(track_min.x + track_size.x * t, track_max.y);
-		if (filled_max.x > track_min.x + 1.0f) {
-			draw->AddRectFilled(track_min, filled_max, ImGui::GetColorU32(ThemeColors::GetAccent()));
-		}
-		draw->AddRect(track_min, track_max, IM_COL32_BLACK, 0.0f, 0, 2.0f);
-
-		ImVec2 handle_center = ImVec2(track_min.x + track_size.x * t, (track_min.y + track_max.y) * 0.5f);
-		ImVec2 handle_min(handle_center.x - HANDLE_WIDTH * 0.5f, handle_center.y - HANDLE_WIDTH * 0.5f);
-		ImVec2 handle_max(handle_center.x + HANDLE_WIDTH * 0.5f, handle_center.y + HANDLE_WIDTH * 0.5f);
-		draw->AddRectFilled(ImVec2(handle_min.x + 4.0f, handle_min.y + 4.0f), ImVec2(handle_max.x + 4.0f, handle_max.y + 4.0f), IM_COL32_BLACK);
-		draw->AddRectFilled(handle_min, handle_max, ImGui::GetColorU32(active ? ThemeColors::ACCENT2 : (hovered ? ThemeColors::YELLOW : ThemeColors::CYAN)));
-		draw->AddRect(handle_min, handle_max, IM_COL32_BLACK, 0.0f, 0, 2.0f);
-
-		ImVec2 label_pos = ImVec2(pos.x, pos.y + (size.y - label_size.y) * 0.5f);
-		draw->AddText(g.Font, g.FontSize, label_pos, col_text, label, label_end);
-
-		char valbuf[128];
-		int n = std::snprintf(valbuf, sizeof(valbuf), fmt, *v);
-		if (custom_text && custom_text[0] != '\0') {
-			size_t cur = (n > 0 && n < (int)sizeof(valbuf)) ? (size_t)n : strlen(valbuf);
-			std::snprintf(valbuf + cur, sizeof(valbuf) - cur, "%s", custom_text);
-		}
-
-		ImVec2 value_text_size = ImGui::CalcTextSize(valbuf);
-		ImVec2 value_pos = ImVec2(handle_center.x - value_text_size.x * 0.5f, track_min.y - VALUE_TEXT_PAD - value_text_size.y);
-
-		float left_limit = track_min.x;
-		float right_limit = track_max.x - value_text_size.x;
-		if (value_pos.x < left_limit) value_pos.x = left_limit;
-		if (value_pos.x > right_limit) value_pos.x = right_limit;
-
-		ImVec2 val_bb_min = ImVec2(value_pos.x - 7.0f, value_pos.y - 4.0f);
-		ImVec2 val_bb_max = ImVec2(value_pos.x + value_text_size.x + 7.0f, value_pos.y + value_text_size.y + 4.0f);
-		draw->AddRectFilled(ImVec2(val_bb_min.x + 3.0f, val_bb_min.y + 3.0f), ImVec2(val_bb_max.x + 3.0f, val_bb_max.y + 3.0f), IM_COL32_BLACK);
-		draw->AddRectFilled(val_bb_min, val_bb_max, ImGui::GetColorU32(ThemeColors::YELLOW));
-		draw->AddRect(val_bb_min, val_bb_max, IM_COL32_BLACK, 0.0f, 0, 2.0f);
-		draw->AddText(value_pos, col_text, valbuf);
-
-		return value_changed;
-	}
-
-	inline void DrawColorPickerRow(const char* checkbox_label, bool* checkbox_value, const char* color_picker_label, float* color_value)
-	{
-		DrawCustomCheckbox(checkbox_label, checkbox_value);
-
-		float avail = ImGui::GetContentRegionAvail().x;
-		float frame_h = ImGui::GetFrameHeight();
-		float pad_y = ImGui::GetStyle().FramePadding.y;
-		float btn_sz = frame_h - pad_y * 2.0f;
-		if (btn_sz <= 0.0f) btn_sz = frame_h * 0.8f;
-
-		ImGui::SameLine();
-		float target_x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - btn_sz;
-		ImGui::SetCursorPosX(target_x);
-
-		DrawCustomColorPicker(color_picker_label, color_value, *checkbox_value, nullptr);
-	}
-
-	inline bool CustomSelectable(const char* label, bool selected, float rounding = 0.0f) {
-		ImGuiWindow* window = ImGui::GetCurrentWindow();
-		if (window->SkipItems) return false;
-
-		ImGuiContext& g = *GImGui;
-		const ImGuiStyle& style = g.Style;
-		const ImGuiID id = window->GetID(label);
-		const ImVec2 label_size = ImGui::CalcTextSize(label, NULL, true);
-
-		const float horizontal_pad = 6.0f;
-		const float vertical_pad = 2.0f;
-
-		ImVec2 pos = window->DC.CursorPos;
-		pos.y += window->DC.CurrLineTextBaseOffset;
-
-		ImRect bb(pos, ImVec2(pos.x + label_size.x + horizontal_pad * 2.0f,
-			pos.y + label_size.y + vertical_pad * 2.0f));
-
-		ImGui::ItemSize(bb);
-		if (!ImGui::ItemAdd(bb, id)) return false;
-
-		bool hovered, held;
-		bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-
-		if (selected || hovered) {
-			window->DrawList->AddRectFilled(ImVec2(bb.Min.x + 3.0f, bb.Min.y + 3.0f), ImVec2(bb.Max.x + 3.0f, bb.Max.y + 3.0f), IM_COL32_BLACK);
-			window->DrawList->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(selected ? ThemeColors::GetAccent() : ThemeColors::YELLOW));
-			window->DrawList->AddRect(bb.Min, bb.Max, IM_COL32_BLACK, 0.0f, 0, 2.0f);
-		}
-
-		window->DrawList->AddText(ImVec2(bb.Min.x + horizontal_pad, bb.Min.y + vertical_pad), IM_COL32_BLACK, label, ImGui::FindRenderedTextEnd(label));
-
-		return pressed;
-	}
-
-	inline bool DrawCustomButton(const char* label, const ImVec2& size_arg = ImVec2(0, 0))
-	{
-		ImGuiWindow* window = ImGui::GetCurrentWindow();
-		if (window->SkipItems)
-			return false;
-
-		ImGuiContext& g = *GImGui;
-		const ImGuiStyle& style = g.Style;
-		const ImGuiID id = window->GetID(label);
-		const ImVec2 label_size = ImGui::CalcTextSize(label, NULL, true);
-
-		ImVec2 pos = window->DC.CursorPos;
-		ImVec2 size = ImGui::CalcItemSize(size_arg, label_size.x + style.FramePadding.x * 2.0f, label_size.y + style.FramePadding.y * 2.0f);
-
-		const ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
-		ImGui::ItemSize(size, style.FramePadding.y);
-		if (!ImGui::ItemAdd(bb, id))
-			return false;
-
-		bool hovered, held;
-		bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-
-		ImDrawList* draw_list = window->DrawList;
-		const float offset = held ? 4.0f : 0.0f;
-		ImRect body(ImVec2(bb.Min.x + offset, bb.Min.y + offset), ImVec2(bb.Max.x + offset, bb.Max.y + offset));
-		if (!held) {
-			const float shadow = hovered ? 7.0f : 4.0f;
-			draw_list->AddRectFilled(ImVec2(bb.Min.x + shadow, bb.Min.y + shadow), ImVec2(bb.Max.x + shadow, bb.Max.y + shadow), IM_COL32_BLACK);
-		}
-		ImVec4 fill = held ? ThemeColors::ACCENT2 : (hovered ? ThemeColors::YELLOW : ThemeColors::GetAccent());
-		draw_list->AddRectFilled(body.Min, body.Max, ImGui::GetColorU32(fill));
-		draw_list->AddRect(body.Min, body.Max, IM_COL32_BLACK, 0.0f, 0, 3.0f);
-
-		ImVec2 text_pos = ImVec2(
-			bb.Min.x + (size.x - label_size.x) * 0.5f,
-			bb.Min.y + (size.y - label_size.y) * 0.5f
-		);
-
-		text_pos.x += offset;
-		text_pos.y += offset;
-
-		ImU32 text_col = IM_COL32_BLACK;
-		const char* label_end = ImGui::FindRenderedTextEnd(label);
-
-		draw_list->AddText(NULL, 0.0f, text_pos, text_col, label, label_end);
-
-		return pressed;
-	}
-
-	inline bool DrawCustomCombo(const char* label, int* current_item, const std::vector<const char*>& items, const char* custom_text = nullptr)
-	{
-		if (items.empty() || current_item == nullptr) return false;
-
-		ImGuiWindow* window = ImGui::GetCurrentWindow();
-		if (window->SkipItems) return false;
-
-		ImGuiContext& g = *GImGui;
-		const ImGuiStyle& style = g.Style;
-		const ImGuiID id = window->GetID(label);
-
-		// 检查 label 是否为隐藏 ID (以 ## 开头)
-		bool has_label_text = (label[0] != '#' || (label[1] != '\0' && label[1] != '#'));
-		const ImVec2 label_size = has_label_text ? ImGui::CalcTextSize(label, NULL, true) : ImVec2(0.0f, 0.0f);
-
-		// 1. 【核心改进】动态计算下拉框主体的目标宽度
-		float combo_box_w = 0.0f;
-
-		// 如果外部通过 ImGui::SetNextItemWidth() 强行指定了宽度，则尊重外部设定
-		if (window->DC.ItemWidthStack.Size > 0) {
-			combo_box_w = ImGui::CalcItemWidth();
-		}
-		else {
-			// 否则：根据 items 里面最长的文本自适应宽度，并加上 padding 和右侧小箭头的空间
-			float max_text_w = 0.0f;
-			for (const char* item : items) {
-				float tw = ImGui::CalcTextSize(item).x;
-				if (tw > max_text_w) max_text_w = tw;
-			}
-			// 如果有附加的 custom_text 后缀，也算上它的宽度
-			if (custom_text && custom_text[0] != '\0') {
-				max_text_w += ImGui::CalcTextSize(custom_text).x;
-			}
-
-			// 额外留白：左边距 + 右边距 + 箭头大小(10px) + 间隙
-			combo_box_w = max_text_w + style.FramePadding.x * 2.0f + 18.0f;
-		}
-
-		// 2. 重新计算整体总宽度 (Label 区域 + 间距 + 下拉框主体)
-		float label_area_width = label_size.x > 0.0f ? label_size.x + style.ItemInnerSpacing.x : 0.0f;
-		float total_w = label_area_width + combo_box_w;
-
-		float frame_h = ImGui::GetFrameHeight();
-		float box_rounding = 0.0f;
-
-		ImVec2 pos = window->DC.CursorPos;
-		ImVec2 size = ImVec2(total_w, std::max(frame_h, label_size.y + style.FramePadding.y * 2.0f));
-		ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
-
-		ImGui::ItemSize(bb, style.FramePadding.y);
-		if (!ImGui::ItemAdd(bb, id)) return false;
-
-		// 交互逻辑
-		bool hovered, held;
-		bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-
-		char popup_id[256];
-		std::snprintf(popup_id, sizeof(popup_id), "##ComboPopup_%s", label);
-
-		if (pressed) {
-			ImGui::OpenPopup(popup_id);
-		}
-
-		// ==========================================
-		// 高质感分层渲染（空间已裁剪，不再顶满）
-		// ==========================================
-		ImDrawList* draw_list = window->DrawList;
-		// 精确确定右侧选择框的真实起始与结束坐标
-		ImVec2 combo_min = ImVec2(pos.x + label_area_width, pos.y + (size.y - frame_h) * 0.5f);
-		ImVec2 combo_max = ImVec2(combo_min.x + combo_box_w, combo_min.y + frame_h);
-
-		if (!held)
-			draw_list->AddRectFilled(ImVec2(combo_min.x + 4.0f, combo_min.y + 4.0f), ImVec2(combo_max.x + 4.0f, combo_max.y + 4.0f), IM_COL32_BLACK);
-		draw_list->AddRectFilled(combo_min, combo_max, ImGui::GetColorU32(held ? ThemeColors::ACCENT2 : (hovered ? ThemeColors::YELLOW : ThemeColors::BG)), box_rounding);
-
-		// [第二层] 渲染当前选中项文本与右侧小箭头
-		int selected_idx = (*current_item >= 0 && *current_item < (int)items.size()) ? *current_item : 0;
-		char preview_buf[256];
-		std::snprintf(preview_buf, sizeof(preview_buf), "%s", items[selected_idx]);
-		if (custom_text && custom_text[0] != '\0') {
-			std::strncat(preview_buf, custom_text, sizeof(preview_buf) - std::strlen(preview_buf) - 1);
-		}
-
-		// 文本居左对齐（带Padding）
-		ImVec2 text_pos = ImVec2(combo_min.x + style.FramePadding.x, combo_min.y + style.FramePadding.y);
-		draw_list->AddText(text_pos, ImGui::GetColorU32(ThemeColors::TEXT), preview_buf);
-
-		// 绘制极简三角箭头
-		float arrow_sz = 10.0f;
-		ImVec2 arrow_center = ImVec2(combo_max.x - style.FramePadding.x - arrow_sz * 0.5f, combo_min.y + frame_h * 0.5f);
-		ImU32 arrow_col = IM_COL32_BLACK;
-
-		ImVec2 p1 = ImVec2(arrow_center.x - arrow_sz * 0.5f, arrow_center.y - arrow_sz * 0.25f);
-		ImVec2 p2 = ImVec2(arrow_center.x + arrow_sz * 0.5f, arrow_center.y - arrow_sz * 0.25f);
-		ImVec2 p3 = ImVec2(arrow_center.x, arrow_center.y + arrow_sz * 0.35f);
-		draw_list->AddTriangleFilled(p1, p2, p3, arrow_col);
-
-		draw_list->AddRect(combo_min, combo_max, IM_COL32_BLACK, box_rounding, 0, 2.0f);
-
-		// 渲染左侧 Label 文本
-		if (label_size.x > 0.0f) {
-			ImVec2 label_pos = ImVec2(pos.x, pos.y + (size.y - label_size.y) * 0.5f);
-			ImGui::RenderText(label_pos, label);
-		}
-
-		// ==========================================
-		// 弹窗渲染：展开下拉菜单列表
-		// ==========================================
-		bool value_changed = false;
-
-		// 弹出窗宽度精确限制在 combo_box_w，使其与选择框严丝合缝
-		ImGui::SetNextWindowSizeConstraints(ImVec2(combo_box_w, 0.0f), ImVec2(combo_box_w, frame_h * 8.0f));
-
-		if (ImGui::BeginPopup(popup_id, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
-		{
-			float original_frame_rounding = g.Style.FrameRounding;
-			g.Style.FrameRounding = 0.0f;
-
-			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, g.Style.ItemSpacing.y));
-
-			for (int i = 0; i < (int)items.size(); ++i)
-			{
-				bool is_selected = (*current_item == i);
-
-				ImGui::PushID(i);
-				if (CustomSelectable(items[i], is_selected, 0.0f))
-				{
-					*current_item = i;
-					value_changed = true;
-					ImGui::CloseCurrentPopup();
-				}
-				ImGui::PopID();
-			}
-
-			ImGui::PopStyleVar();
-			g.Style.FrameRounding = original_frame_rounding;
-			ImGui::EndPopup();
-		}
-
-		return value_changed;
-	}
-
-	// 针对传统 C 风格数组的重载接口（保持你代码一设的多态扩展性）
-	inline bool DrawCustomCombo(const char* label, int* current_item, const char* items[], int items_count, const char* custom_text = nullptr)
-	{
-		std::vector<const char*> vec_items(items, items + items_count);
-		return DrawCustomCombo(label, current_item, vec_items, custom_text);
-	}
-
-	inline bool DrawCustomMultiCombo(const char* label, std::vector<CustomComboItem>& items, const char* placeholder = nullptr)
-	{
-		if (items.empty()) return false;
-
-		ImGuiWindow* window = ImGui::GetCurrentWindow();
-		if (window->SkipItems) return false;
-
-		ImGuiContext& g = *GImGui;
-		const ImGuiStyle& style = g.Style;
-		const ImGuiID id = window->GetID(label);
-
-		bool has_label_text = (label[0] != '#' || (label[1] != '\0' && label[1] != '#'));
-		const ImVec2 label_size = has_label_text ? ImGui::CalcTextSize(label, NULL, true) : ImVec2(0.0f, 0.0f);
-
-		// ==========================================
-		// 1. 【动态生成预览文本】
-		// ==========================================
-		std::string preview_str = "";
-		int selected_count = 0;
-		for (size_t i = 0; i < items.size(); ++i) {
-			if (items[i].checkbox_ptr != nullptr) items[i].selected = *(items[i].checkbox_ptr);
-			if (items[i].selected) {
-				selected_count++;
-				if (selected_count <= 2) {
-					if (!preview_str.empty()) preview_str += ", ";
-					preview_str += items[i].label;
-				}
-			}
-		}
-
-		if (selected_count == 0) {
-			preview_str = (placeholder && placeholder[0] != '\0') ? placeholder : U8("未选择...");
-		}
-		else if (selected_count > 2) {
-			char count_buf[64];
-			std::snprintf(count_buf, sizeof(count_buf), U8("%dx"), selected_count);
-			preview_str = count_buf;
-		}
-
-		// ==========================================
-		// 2. 【精准宽度计算】
-		// ==========================================
-		float combo_box_w = 0.0f;
-		float frame_h = ImGui::GetFrameHeight();
-
-		if (window->DC.ItemWidthStack.Size > 0) {
-			combo_box_w = ImGui::CalcItemWidth();
-		}
-		else {
-			// 计算弹窗内所有项中，内容最宽的一行
-			float max_content_w = ImGui::CalcTextSize(U8("1x")).x;
-
-			for (const auto& item : items) {
-				if (!item.label) continue;
-				float item_w = ImGui::CalcTextSize(item.label).x;
-
-				// 无论该项是否有调色盘，我们按“统一对齐”的逻辑计算宽度
-				// 宽度 = 调色盘(frame_h) + 间距(6.0f) + 文本宽度(item_w)
-				float total_row_w = frame_h + 6.0f + item_w;
-
-				if (total_row_w > max_content_w) max_content_w = total_row_w;
-			}
-
-			// 最终宽度 = 内容最宽处 + 左右内边距 + 箭头预留位(约等于frame_h)
-			combo_box_w = max_content_w + (style.FramePadding.x * 2.0f);
-		}
-
-		float label_area_width = label_size.x > 0.0f ? label_size.x + style.ItemInnerSpacing.x : 0.0f;
-		float total_w = label_area_width + combo_box_w;
-
-		ImVec2 pos = window->DC.CursorPos;
-		ImVec2 size = ImVec2(total_w, std::max(frame_h, label_size.y + style.FramePadding.y * 2.0f));
-		ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
-
-		ImGui::ItemSize(bb, style.FramePadding.y);
-		if (!ImGui::ItemAdd(bb, id)) return false;
-
-		// 交互逻辑
-		bool hovered, held;
-		bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-
-		char popup_id[256];
-		std::snprintf(popup_id, sizeof(popup_id), "##MultiComboPopup_%s", label);
-		if (pressed) ImGui::OpenPopup(popup_id);
-
-		// ==========================================
-		// 3. 【渲染预览框】
-		// ==========================================
-		ImDrawList* draw_list = window->DrawList;
-		float box_rounding = 0.0f;
-
-		ImVec2 combo_min = ImVec2(pos.x + label_area_width, pos.y + (size.y - frame_h) * 0.5f);
-		ImVec2 combo_max = ImVec2(combo_min.x + combo_box_w, combo_min.y + frame_h);
-
-		if (!held)
-			draw_list->AddRectFilled(ImVec2(combo_min.x + 4.0f, combo_min.y + 4.0f), ImVec2(combo_max.x + 4.0f, combo_max.y + 4.0f), IM_COL32_BLACK);
-		draw_list->AddRectFilled(combo_min, combo_max, ImGui::GetColorU32(held ? ThemeColors::ACCENT2 : (hovered ? ThemeColors::YELLOW : ThemeColors::BG)), box_rounding);
-		draw_list->AddRect(combo_min, combo_max, IM_COL32_BLACK, 0.0f, 0, 2.0f);
-
-		// 裁剪文本防止溢出预览框
-		ImGui::PushClipRect(combo_min, ImVec2(combo_max.x - 25.0f, combo_max.y), true);
-		draw_list->AddText(ImVec2(combo_min.x + style.FramePadding.x, combo_min.y + style.FramePadding.y), ImGui::GetColorU32(ThemeColors::TEXT), preview_str.c_str());
-		ImGui::PopClipRect();
-
-		// 箭头
-		float arrow_sz = 10.0f;
-		ImVec2 arrow_center = ImVec2(combo_max.x - style.FramePadding.x - arrow_sz * 0.5f, combo_min.y + frame_h * 0.5f);
-		draw_list->AddTriangleFilled(
-			ImVec2(arrow_center.x - 5, arrow_center.y - 2),
-			ImVec2(arrow_center.x + 5, arrow_center.y - 2),
-			ImVec2(arrow_center.x, arrow_center.y + 4),
-			IM_COL32_BLACK
-		);
-
-		if (label_size.x > 0.0f) {
-			ImGui::RenderText(ImVec2(pos.x, pos.y + (size.y - label_size.y) * 0.5f), label);
-		}
-
-		// ==========================================
-		// 4. 【多选弹窗逻辑】
-		// ==========================================
-		bool value_changed = false;
-
-		// 设置弹窗宽度刚好等于预览框宽度，不再盲目扩充
-		ImGui::SetNextWindowSizeConstraints(ImVec2(combo_box_w, 0.0f), ImVec2(combo_box_w, frame_h * 15.0f));
-
-		if (ImGui::BeginPopup(popup_id, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
-		{
-			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, style.ItemSpacing.y));
-			float text_align_pos_x = style.FramePadding.x + frame_h + 6.0f;
-
-			for (int i = 0; i < (int)items.size(); ++i)
-			{
-				ImGui::PushID(i);
-				ImGui::BeginGroup();
-
-				if (items[i].color_ptr != nullptr) {
-					DrawCustomColorPicker("##cp", items[i].color_ptr, true, nullptr);
-					ImGui::SameLine();
-					ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6.0f);
-					text_align_pos_x = ImGui::GetCursorPosX(); // 捕捉真实的对齐线
-				}
-				else {
-					ImGui::SetCursorPosX(text_align_pos_x);
-				}
-
-				// 计算文本可用的剩余宽度
-				float avail_w = ImGui::GetContentRegionAvail().x - style.FramePadding.x;
-				if (CustomSelectable(items[i].label, items[i].selected, 0.0f))
-				{
-					items[i].selected = !items[i].selected;
-					if (items[i].checkbox_ptr != nullptr) *(items[i].checkbox_ptr) = items[i].selected;
-					value_changed = true;
-				}
-
-				ImGui::EndGroup();
-				ImGui::PopID();
-			}
-			ImGui::PopStyleVar();
-			ImGui::EndPopup();
-		}
-
-		return value_changed;
-	}
-
-	inline void DrawKeyBindButton(const char* label, UINT& bindKey) {
-		// ImGui::Text("%s:", label);
-		// ImGui::SameLine();
-
-		char btnLabel[64];
-		if (g_MDX12::g_MenuState::g_pCurrentBindingKey == &bindKey) {
-			strcpy_s(btnLabel, "Press any key...");
-		}
-		else {
-			sprintf_s(btnLabel, "%s##%s", g_Util::GetKeyName(bindKey), label);
-		}
-
-		if (DrawCustomButton(btnLabel)) {
-			g_MDX12::g_MenuState::g_pCurrentBindingKey = &bindKey;
-		}
-	}
-
-	inline void BeginTabRegion(const char* id)
-	{
-		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ThemeColors::BG);
-		ImGui::BeginChild(id, ImVec2(0, 0), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-	}
-
-	inline void EndTabRegion()
-	{
-		ImGui::EndChild();
-		ImGui::PopStyleColor();
-		ImGui::PopStyleVar();
-	}
-
-	inline void DrawAnimatedSeparator()
-	{
-		ImDrawList* draw = ImGui::GetWindowDrawList();
-		ImVec2 pos = ImGui::GetCursorScreenPos();
-		float width = ImGui::GetContentRegionAvail().x;
-		draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + 3.0f), IM_COL32_BLACK);
-		ImGui::Dummy(ImVec2(0, 5.0f));
-	}
+    inline const char* Tr(const char* Source) { return LanguageManager::Get().Translate(Source); }
+    enum class MenuPage { Home, Combat, Visuals, ResourceHarvest, Automation, Inventory, CreatureList,
+        StructureList, Lua, InterfaceSettings, Configs, Language, Shortcuts };
+    enum class Topic { Home, Aim, Weapons, Indicators, Spear, Objects, Typography, Structures, World,
+        Harvest, Resources, Diagnostics, Loot, Survival, Fishing, Gacha, Craft, Repair, Taming,
+        Travel, Utilities, Inventory, Creatures, StructureList, Scripts, Interface, Shortcuts, System, Configs, Language, Care };
+    extern bool g_UseSidebarNavigation;
+    extern MenuPage g_ActiveMenuPage;
+    inline Topic g_ActiveTopic = Topic::Home;
+    inline ImFont* g_TitleFont = nullptr;
+    extern float g_MenuAlpha;
+    inline bool style_initialized = false;
+    inline bool IsTopic(Topic T) { return g_ActiveTopic == T; }
+    inline bool BeginMenuPage(MenuPage P, const char* L) { return g_UseSidebarNavigation ? g_ActiveMenuPage == P : ImGui::BeginTabItem(L); }
+    inline void EndMenuPage() { if (!g_UseSidebarNavigation) ImGui::EndTabItem(); }
+    namespace ThemeColors {
+        inline const ImVec4 BG{28/255.f,28/255.f,30/255.f,1}, PANEL{44/255.f,44/255.f,46/255.f,1}, SURFACE{58/255.f,58/255.f,60/255.f,1};
+        inline const ImVec4 TEXT{1,1,1,.95f}, MUTED{1,1,1,.70f}, GLASS_BORDER{1,1,1,.10f};
+        inline const ImVec4 MENUBAR_BG = BG, ACCENT2 = SURFACE, YELLOW = SURFACE, CYAN = SURFACE;
+        inline ImVec4 GetAccent() { return {10/255.f,132/255.f,1,1}; }
+    }
+    inline void SetupCustomImGuiStyle() {
+        ImGuiStyle& S = ImGui::GetStyle();
+        ImGui::StyleColorsDark();
+        S.WindowRounding=12; S.ChildRounding=8; S.FrameRounding=8; S.PopupRounding=10;
+        S.ScrollbarRounding=6; S.GrabRounding=4; S.TabRounding=8;
+        S.WindowBorderSize=S.ChildBorderSize=S.PopupBorderSize=S.FrameBorderSize=S.TabBorderSize=1;
+        S.WindowPadding={16,16}; S.FramePadding={10,7}; S.ItemSpacing={12,10}; S.ItemInnerSpacing={8,6}; S.CellPadding={10,8};
+        S.TabBarBorderSize=1; S.TabBarOverlineSize=1; S.SeparatorTextBorderSize=1;
+        S.ScrollbarSize=10; S.GrabMinSize=12; S.WindowTitleAlign={0, .5f}; S.WindowMenuButtonPosition=ImGuiDir_None;
+        S.Colors[ImGuiCol_Text]=ThemeColors::TEXT; S.Colors[ImGuiCol_TextDisabled]=ThemeColors::MUTED;
+        for (auto C : {ImGuiCol_WindowBg,ImGuiCol_PopupBg,ImGuiCol_FrameBg,ImGuiCol_TitleBg,ImGuiCol_TitleBgActive,ImGuiCol_TitleBgCollapsed,ImGuiCol_MenuBarBg,ImGuiCol_ScrollbarBg}) S.Colors[C]=ThemeColors::BG;
+        S.Colors[ImGuiCol_ChildBg]=ThemeColors::PANEL;
+        for (auto C : {ImGuiCol_Button,ImGuiCol_ButtonHovered,ImGuiCol_ButtonActive,ImGuiCol_Header,ImGuiCol_HeaderHovered,ImGuiCol_HeaderActive,ImGuiCol_FrameBgHovered,ImGuiCol_FrameBgActive,ImGuiCol_Tab,ImGuiCol_TabHovered,ImGuiCol_TabActive,ImGuiCol_TabUnfocused,ImGuiCol_TabUnfocusedActive,ImGuiCol_TableHeaderBg,ImGuiCol_ScrollbarGrab,ImGuiCol_ScrollbarGrabHovered,ImGuiCol_ScrollbarGrabActive,ImGuiCol_SliderGrab,ImGuiCol_SliderGrabActive}) S.Colors[C]=ThemeColors::SURFACE;
+        for (auto C : {ImGuiCol_Border,ImGuiCol_Separator,ImGuiCol_TableBorderStrong,ImGuiCol_TableBorderLight}) S.Colors[C]=ThemeColors::GLASS_BORDER;
+        S.Colors[ImGuiCol_BorderShadow]={0,0,0,0};
+        S.Colors[ImGuiCol_CheckboxSelectedBg]=ThemeColors::SURFACE;
+        S.Colors[ImGuiCol_ButtonHovered]={.29f,.29f,.30f,1}; // white / 8 hover over the surface
+        S.Colors[ImGuiCol_ButtonActive]=ThemeColors::PANEL;
+        S.Colors[ImGuiCol_TabSelectedOverline]=S.Colors[ImGuiCol_TabDimmedSelectedOverline]=ThemeColors::GLASS_BORDER;
+        S.Colors[ImGuiCol_DragDropTarget]=ThemeColors::GetAccent();
+        S.Colors[ImGuiCol_DragDropTargetBg]={1,1,1,.08f};
+        S.Colors[ImGuiCol_TreeLines]=ThemeColors::GLASS_BORDER;
+        S.Colors[ImGuiCol_TextLink]=ThemeColors::GetAccent();
+        S.Colors[ImGuiCol_CheckMark]=ThemeColors::GetAccent(); S.Colors[ImGuiCol_NavHighlight]=ThemeColors::GetAccent();
+        S.Colors[ImGuiCol_TextSelectedBg]={1,1,1,.12f}; S.Colors[ImGuiCol_TableRowBg]=ThemeColors::PANEL;
+        S.Colors[ImGuiCol_TableRowBgAlt]=ThemeColors::PANEL;
+        S.Colors[ImGuiCol_ModalWindowDimBg]={28/255.f,28/255.f,30/255.f,.8f};
+        S.Colors[ImGuiCol_ResizeGrip]=S.Colors[ImGuiCol_ResizeGripHovered]=S.Colors[ImGuiCol_ResizeGripActive]=ThemeColors::SURFACE;
+        S.Colors[ImGuiCol_SeparatorHovered]=S.Colors[ImGuiCol_SeparatorActive]=ThemeColors::GLASS_BORDER;
+        S.Colors[ImGuiCol_NavWindowingHighlight]=ThemeColors::GLASS_BORDER;
+        S.Colors[ImGuiCol_NavWindowingDimBg]=S.Colors[ImGuiCol_ModalWindowDimBg];
+        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    }
+#include "HoverHelp.h"
+    inline void Title(const char* Text) { if(g_TitleFont) ImGui::PushFont(g_TitleFont); ImGui::TextUnformatted(Tr(Text)); if(g_TitleFont) ImGui::PopFont(); HoverHelp::Remember(); }
+    struct ParameterFade {
+        float Alpha=0;
+        explicit ParameterFade(const char* Id,bool Enabled) {
+            auto* Store=ImGui::GetStateStorage();const auto Key=ImGui::GetID(Id);
+            Alpha=PhoenixMotion::Approach(Store->GetFloat(Key,0),Enabled?1.f:0.f,ImGui::GetIO().DeltaTime,.12f);
+            Store->SetFloat(Key,Alpha);
+            if(Alpha>0) {ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*Alpha);ImGui::BeginDisabled(!Enabled);}
+        }
+        ParameterFade(const ParameterFade&)=delete;
+        explicit operator bool() const {return Alpha>0;}
+        ~ParameterFade(){if(Alpha>0){ImGui::EndDisabled();ImGui::PopStyleVar();}}
+    };
+    template<typename... T> inline void HelpText(const char* Format, T... Args) { HoverHelp::Add(Format,Args...); }
+    struct CustomComboItem { const char* label=nullptr; bool selected=false; float* color_ptr=nullptr; bool* checkbox_ptr=nullptr; };
+    struct ColorPickerData { const char* label_id; float* col_ptr; };
+    inline float g_saved_color[4]={1,1,1,1};
+    inline bool g_has_saved_color=false;
+#include "ColorPalette.h"
+    inline bool DrawCustomButton(const char* Label, const ImVec2& Size={0,0}) {
+        Label = Tr(Label);
+        auto* W=ImGui::GetCurrentWindow(); if(W->SkipItems)return false;
+        auto& G=*GImGui; const ImGuiID Id=W->GetID(Label);
+        const ImVec2 TextSize=ImGui::CalcTextSize(Label,nullptr,true);
+        const ImVec2 Actual=ImGui::CalcItemSize(Size,TextSize.x+G.Style.FramePadding.x*2,TextSize.y+G.Style.FramePadding.y*2);
+        const auto P=ImGui::GetCursorScreenPos();
+        const bool Hover=!(G.CurrentItemFlags&ImGuiItemFlags_Disabled)&&ImGui::IsWindowHovered()&&ImGui::IsMouseHoveringRect(P,{P.x+Actual.x,P.y+Actual.y});
+        auto* Store=ImGui::GetStateStorage();
+        float T=Store->GetFloat(Id,0);T=std::clamp(T+(Hover?1.f:-1.f)*G.IO.DeltaTime/.2f,0.f,1.f);Store->SetFloat(Id,T);
+        float E=1-(1-T)*(1-T);const ImVec4 Base=ThemeColors::SURFACE;
+        ImVec4 Face{Base.x+.06f*E,Base.y+.06f*E,Base.z+.06f*E,1};
+        ImGui::PushStyleColor(ImGuiCol_Button,Face);ImGui::PushStyleColor(ImGuiCol_ButtonHovered,Face);
+        const bool Pressed=ImGui::Button(Label,Size);ImGui::PopStyleColor(2);HoverHelp::Remember();return Pressed;
+    }
+    inline bool DrawCustomCheckbox(const char* Label, bool* Value) {
+        if (ImGui::CalcTextSize(Label,nullptr,true).x+ImGui::GetFrameHeight()+ImGui::GetStyle().ItemInnerSpacing.x <= ImGui::GetContentRegionAvail().x)
+            { const bool Changed=ImGui::Checkbox(Label,Value); HoverHelp::Remember(); return Changed; }
+        ImGui::PushID(Label);bool Changed=ImGui::Checkbox("##toggle",Value); HoverHelp::Remember();
+        ImGui::SameLine();ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(Label,ImGui::FindRenderedTextEnd(Label));ImGui::PopTextWrapPos(); if(ImGui::IsItemHovered()) HoverHelp::Remember();
+        if (!(GImGui->CurrentItemFlags&ImGuiItemFlags_Disabled) && ImGui::IsItemClicked()) {*Value=!*Value;Changed=true;}
+        ImGui::PopID();return Changed;
+    }
+    inline bool DrawCustomSliderFloat(const char* Label,float* V,float Min,float Max,const char* Format="%.1f",float Step=1,const char* Unit=nullptr) {
+        if(Max<=Min) return false;
+        ImGui::PushID(Label); ImGui::TextUnformatted(Label,ImGui::FindRenderedTextEnd(Label));
+        std::string F=Format; if(Unit && *Unit) { F+=' '; for(const char* P=Unit;*P;++P) { F+=*P; if(*P=='%') F+='%'; } }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        bool Changed=ImGui::SliderFloat("##value",V,Min,Max,F.c_str(),ImGuiSliderFlags_AlwaysClamp);
+        if(Changed) {
+            if(Step>0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !ImGui::TempInputIsActive(ImGui::GetItemID())) *V=Min+std::round((*V-Min)/Step)*Step;
+            *V=PhoenixInterface::FiniteClamp(*V,Min,Max,Min);
+        }
+        HoverHelp::Remember(); HelpText(Tr(U8("Ctrl + 点击输入精确数值；方向键微调。范围 %.2f – %.2f")),Min,Max);
+        ImGui::PopID(); return Changed;
+    }
+    inline void DrawCustomColorPicker(const char* Id,float* Color,bool Active,const char* Text) {
+        if(!Active) return;
+        ImGui::PushID(Id);
+        if(Text && *Text) { ImGui::TextUnformatted(Tr(Text)); ImGui::SameLine(); }
+        if(ImGui::ColorButton("##color",{Color[0],Color[1],Color[2],Color[3]},ImGuiColorEditFlags_NoTooltip,{32,24}))
+            ColorPalette::Show(Color,ImGui::GetItemRectMax());
+        HoverHelp::Remember(U8("打开调色板：拖动选色区、色相条或透明度条；也可输入 HEX，使用预设色、复制、粘贴和还原。"));
+        ImGui::PopID();
+    }
+    inline void DrawCustomColorPicker(const char* Id,float* Color,const char* Text) { DrawCustomColorPicker(Id,Color,true,Text); }
+    inline void DrawMultiColorPicker(const char* Text,bool Active,std::initializer_list<ColorPickerData> Colors) {
+        if(!Active) return;
+        if(Text && *Text) ImGui::TextUnformatted(Tr(Text));
+        int I=0; for(const auto& C:Colors) { if(I++) ImGui::SameLine(); DrawCustomColorPicker(C.label_id,C.col_ptr,true,nullptr); }
+    }
+    inline void DrawColorPickerRow(const char* Label,bool* Enabled,const char* Id,float* Color) {
+        DrawCustomCheckbox(Label,Enabled); if(*Enabled) { ImGui::SameLine(); DrawCustomColorPicker(Id,Color,true,nullptr); }
+    }
+    inline bool CustomSelectable(const char* Label,bool Selected,float=8) { return ImGui::Selectable(Label,Selected); }
+    inline bool DrawCustomCombo(const char* Label,int* Current,const std::vector<const char*>& Items,const char* Suffix=nullptr) {
+        if(!Current || Items.empty()) return false;
+        *Current=std::clamp(*Current,0,static_cast<int>(Items.size())-1);
+        std::string Preview=Items[*Current]; if(Suffix) Preview+=Suffix;
+        ImGui::PushID(Label);
+        if(Label[0]!='#') ImGui::TextUnformatted(Label);
+        ImGui::SetNextItemWidth(-FLT_MIN); bool Changed=false;
+        if(ImGui::BeginCombo("##select",Preview.c_str())) {
+            for(int I=0;I<static_cast<int>(Items.size());++I) { if(ImGui::Selectable(Items[I],I==*Current)) { *Current=I;Changed=true; } if(I==*Current) ImGui::SetItemDefaultFocus(); }
+            ImGui::EndCombo();
+        }
+        ImGui::PopID();return Changed;
+    }
+    inline bool DrawCustomCombo(const char* Label,int* Current,const char* Items[],int Count,const char* Suffix=nullptr) { return DrawCustomCombo(Label,Current,std::vector<const char*>(Items,Items+Count),Suffix); }
+    inline bool DrawCustomMultiCombo(const char* Label,std::vector<CustomComboItem>& Items,const char* Placeholder=nullptr) {
+        int Count=0; for(auto& I:Items) { if(I.checkbox_ptr) I.selected=*I.checkbox_ptr; Count+=I.selected; }
+        std::string Preview=Count?std::to_string(Count)+Tr(U8(" 项已选择")):(Placeholder?Placeholder:Tr(U8("选择类型")));
+        bool Changed=false; ImGui::SetNextItemWidth(-FLT_MIN);
+        if(ImGui::BeginCombo(Label,Preview.c_str())) {
+            for(size_t N=0;N<Items.size();++N) { auto& I=Items[N]; ImGui::PushID(static_cast<int>(N));
+                if(ImGui::Checkbox(I.label,&I.selected)) { if(I.checkbox_ptr)*I.checkbox_ptr=I.selected; Changed=true; }
+                if(I.selected && I.color_ptr) { ImGui::SameLine();DrawCustomColorPicker("color",I.color_ptr,true,nullptr); }
+                ImGui::PopID();
+            } ImGui::EndCombo();
+        } return Changed;
+    }
+    inline std::string KeyName(unsigned Key) {
+        if(!Key) return Tr(U8("未绑定")); std::string Name;
+        if(Key&PhoenixInterface::Ctrl)Name+="Ctrl + "; if(Key&PhoenixInterface::Alt)Name+="Alt + "; if(Key&PhoenixInterface::Shift)Name+="Shift + ";
+        Name+=g_Util::GetKeyName(Key&0xff);return Name;
+    }
+    inline void DrawKeyBindButton(const char* Label,UINT& Key) {
+        Label = Tr(Label);
+        ImGui::PushID(Label); ImGui::TextUnformatted(Label); ImGui::SameLine();
+        const bool Recording=g_MDX12::g_MenuState::g_pCurrentBindingKey==&Key;
+        if(ImGui::Button(Recording?Tr(U8("按组合键… Esc 取消")):KeyName(Key).c_str())) {
+            PhoenixShortcuts::BindingError.clear(); g_MDX12::g_MenuState::g_pCurrentBindingKey=&Key;
+        }
+        if(&Key!=&PhoenixShortcuts::MenuKey && &Key!=&PhoenixShortcuts::StopKey) {
+            ImGui::SameLine(); if(ImGui::SmallButton(Tr(U8("清除")))) { PhoenixShortcuts::Assign(Key,0); g_MDX12::g_MenuState::g_pCurrentBindingKey=nullptr; }
+        }
+        ImGui::PopID();
+    }
+    inline void BeginTabRegion(const char* Id) { ImGui::BeginChild(Id,{0,0},false); ImGui::PushTextWrapPos(0); }
+    inline void EndTabRegion() { ImGui::PopTextWrapPos(); ImGui::EndChild(); }
+    inline void DrawAnimatedSeparator() { ImGui::Separator(); }
 }

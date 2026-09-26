@@ -115,6 +115,10 @@
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\ImGui\imstb_textedit.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\ImGui\imstb_truetype.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\hooks.h" />
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\D3D12Overlay.inl" />
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\SwapChainQueueTracker.h" />
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\UnloadBarrier.h" />
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\WindowProcedureRoutes.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\mdx12_api.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\MinHook\include\MinHook.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\MinHook\src\buffer.h" />
@@ -137,12 +141,44 @@
     <ClInclude Include="internal\ESP\DrawESP.h" />
     <ClInclude Include="internal\ESP\ESP.h" />
     <ClInclude Include="internal\ESP\Indicators.h" />
+    <ClInclude Include="internal\ESP\ESPLayout.h" />
+    <ClInclude Include="internal\ESP\StructureESP.h" />
+    <ClInclude Include="internal\ESP\ESPStyle.inl" />
+    <ClInclude Include="internal\Hack\FireRateRules.h" />
+    <ClInclude Include="internal\Hack\BuffSoupRules.h" />
+    <ClInclude Include="internal\Hack\FireExtinguishRules.h" />
+    <ClInclude Include="internal\Hack\AutoLootRules.h" />
+    <ClInclude Include="internal\Hack\CameraControls.h" />
+    <ClInclude Include="internal\Hack\WorldUtilityRules.h" />
+    <ClInclude Include="internal\Hack\GachaOpenScheduler.h" />
+    <ClInclude Include="internal\Hack\GachaOpen.inl" />
+    <ClInclude Include="internal\Hack\FreeCamera.inl" />
+    <ClInclude Include="internal\Hack\WorldUtilities.inl" />
+    <ClInclude Include="internal\Hack\HarvestRules.h" />
+    <ClInclude Include="internal\Hack\HarvestEfficiency.inl" />
+    <ClInclude Include="internal\Legit\Aimbot\TekBowRules.h" />
+    <ClInclude Include="internal\Legit\Aimbot\TekBowProfile.inl" />
+    <ClInclude Include="internal\Hack\GameplayExtensions.inl" />
+    <ClInclude Include="internal\Legit\Aimbot\ProjectilePrediction.h" />
+    <ClInclude Include="internal\Legit\Aimbot\ProjectileAim.inl" />
     <ClInclude Include="internal\Hack\Hack.h" />
+    <ClInclude Include="internal\Hack\TekSpear.h" />
+    <ClInclude Include="internal\Hack\TekSpearRules.h" />
     <ClInclude Include="internal\Language\LanguageManager.h" />
     <ClInclude Include="internal\Legit\Aimbot\Aimbot.h" />
+    <ClInclude Include="internal\Legit\Aimbot\AimSelection.h" />
+    <ClInclude Include="internal\Legit\Aimbot\AimViewArguments.h" />
+    <ClInclude Include="internal\Legit\Aimbot\AimTargetRules.h" />
+    <ClInclude Include="internal\Legit\Aimbot\AimHitValidation.h" />
+    <ClInclude Include="internal\Legit\Aimbot\AimCollisionGeometry.h" />
     <ClInclude Include="internal\Log\LogManager.h" />
     <ClInclude Include="internal\Lua\LuaManager.h" />
     <ClInclude Include="internal\Menu\Aimbot_Menu.h" />
+    <ClInclude Include="internal\Menu\FeatureCatalog.h" />
+    <ClInclude Include="internal\Menu\FeatureShortcuts.h" />
+    <ClInclude Include="internal\Menu\ShortcutRuntime.h" />
+    <ClInclude Include="internal\Menu\VibrancyBackdrop.h" />
+    <ClInclude Include="internal\Config\InterfaceRules.h" />
     <ClInclude Include="internal\Menu\ConfigImGui.h" />
     <ClInclude Include="internal\Menu\Configs_Menu.h" />
     <ClInclude Include="internal\Menu\DrawImGui.h" />
@@ -171,8 +207,12 @@
     <ClCompile Include="external\CppSDK\SDK\Engine_functions.cpp" />
     <ClCompile Include="external\CppSDK\SDK\NavigationSystem_functions.cpp" />
     <ClCompile Include="external\CppSDK\SDK\ShooterGame_functions.cpp" />
-    <ClCompile Include="external\LuaJIT-2.1\src\ljamalg.c" />
-    <ClCompile Include="external\LuaJIT-2.1\src\luajit.c" />
+    <ClCompile Include="external\LuaJIT-2.1\src\ljamalg.c">
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="external\LuaJIT-2.1\src\luajit.c">
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="external\Minimal-D3D12-Hook-ImGui\ImGui\imgui.cpp" />
     <ClCompile Include="external\Minimal-D3D12-Hook-ImGui\ImGui\imgui_demo.cpp" />
     <ClCompile Include="external\Minimal-D3D12-Hook-ImGui\ImGui\imgui_draw.cpp" />
@@ -207,6 +247,7 @@
     <ClCompile Include="internal\ESP\DrawESP.cpp" />
     <ClCompile Include="internal\ESP\ESP.cpp" />
     <ClCompile Include="internal\Hack\Hack.cpp" />
+    <ClCompile Include="internal\Hack\TekSpear.cpp" />
     <ClCompile Include="internal\Language\LanguageManager.cpp" />
     <ClCompile Include="internal\Legit\Aimbot\Aimbot.cpp" />
     <ClCompile Include="internal\Log\LogManager.cpp" />
@@ -236,7 +277,8 @@
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{82a73f7a-baa2-495c-9b05-e1616e9634e4}</ProjectGuid>
-    <RootNamespace>begeertearksurvivalascended</RootNamespace>
+    <RootNamespace>phoenix</RootNamespace>
+    <ProjectName>phoenix</ProjectName>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -284,6 +326,12 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <TargetName>phoenix</TargetName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ResourceCompile Include="phoenix.rc" />
+  </ItemGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
   </PropertyGroup>
@@ -301,7 +349,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;BEGEERTEARKSURVIVALASCENDED_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;PHOENIX_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -318,7 +366,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;BEGEERTEARKSURVIVALASCENDED_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;PHOENIX_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -338,7 +386,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;BEGEERTEARKSURVIVALASCENDED_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;PHOENIX_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -355,14 +403,14 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NOMINMAX;NDEBUG;BEGEERTEARKSURVIVALASCENDED_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NOMINMAX;NDEBUG;PHOENIX_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <ExceptionHandling>false</ExceptionHandling>
+      <ExceptionHandling>Sync</ExceptionHandling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
       <Optimization>MaxSpeed</Optimization>
       <WholeProgramOptimization>true</WholeProgramOptimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
@@ -385,7 +433,24 @@
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
   </ItemDefinitionGroup>
+  <Import Project="..\licensing\LicenseBuild.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <ItemGroup>
+    <ClInclude Include="internal\Hack\BackpackRules.h" />
+    <ClInclude Include="internal\Hack\BackpackTools.inl" />
+    <ClInclude Include="internal\Hack\WeaponWaterAccess.inl" />
+    <ClInclude Include="internal\Hack\DinoHarvestRange.inl" />
+    <ClInclude Include="internal\Hack\UnderwaterWeapons.inl" />
+    <ClInclude Include="internal\Hack\InventoryDeposit.inl" />
+    <ClInclude Include="internal\Hack\InventoryTransferRules.h" />
+    <ClInclude Include="internal\Hack\SessionSnapshot.inl" />
+    <ClInclude Include="internal\Lua\SessionSnapshot.h" />
+    <ClInclude Include="internal\Menu\InterfaceMotion.h" />
+    <ClInclude Include="internal\Menu\StartupPresentation.h" />
+    <ClInclude Include="internal\Menu\HoverHelp.h" />
+    <ClInclude Include="internal\Menu\ColorPalette.h" />
+    <ClInclude Include="internal\Language\InterfaceText.inc" />
+  </ItemGroup>
 </Project>

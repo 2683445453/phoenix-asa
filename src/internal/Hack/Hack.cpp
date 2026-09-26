@@ -1,9 +1,35 @@
 #pragma once
 #include "../Config/Configs.h"
+#include "../Config/InterfaceRules.h"
 #include "../Util/Util.h"
 #include "../Log/LogManager.h"
 #include "../ESP/DrawESP.h"
 #include "Hack.h"
+#include "FeatureExpansionRules.h"
+#include "NativeMountRules.h"
+#include "DeinoAirLatchRules.h"
+#include "DeinoGlideProbeRules.h"
+#include "DeinoActionRules.h"
+#include "DeinoFlightRules.h"
+#include "AutoCraftScheduler.h"
+#include "GachaOpenScheduler.h"
+#include "FireRateRules.h"
+#include "InstantReloadRules.h"
+#include "InstantReloadPatch.h"
+#include "BuffSoupRules.h"
+#include "FireExtinguishRules.h"
+#include "TekHeatRules.h"
+#include "AutoLootRules.h"
+#include "CameraControls.h"
+#include "WorldUtilityRules.h"
+#include "InventoryTransferRules.h"
+#include "BackpackRules.h"
+#include "TekSpear.h"
+#include "../Lua/SessionSnapshot.h"
+#include "../Menu/ShortcutRuntime.h"
+#include "../Language/LanguageManager.h"
+#include "HarvestRules.h"
+#include "../Legit/Aimbot/Aimbot.h"
 #include "../../external/CppSDK/SDK/ShooterGame_parameters.hpp"
 #include "../../external/Minimal-D3D12-Hook-ImGui/Main/hooks.h"
 #include "../../external/ezVMT/include/ezVMT.hpp"
@@ -13,8 +39,12 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <filesystem>
+#include <fstream>
+#include <locale>
 #include <initializer_list>
 #include <limits>
 #include <mutex>
@@ -24,8 +54,17 @@
 #include <vector>
 
 namespace g_Hack {
-    static int32_t g_CurrentNoteIndex = 0;
-    static const int32_t g_MaxNoteIndex = 1000;
+    template<class... Args> std::string FormatLocalized(const char* Source, Args&&... Values) {
+        return std::vformat(LanguageManager::Get().TranslateCopy(Source), std::make_format_args(Values...));
+    }
+
+    // 秒换弹／弓秒蓄力的 tick 在末尾包含的 Hack/InstantReload.inl 中定义。
+    // 这里只能前向声明匿名命名空间内的定义；若声明在 g_Hack 命名空间会得到
+    // 内部链接定义 + 外部链接声明，进而链接失败。
+    namespace {
+        void InstantReloadTick(SDK::UWorld* World);
+        void InstantChargeTick(SDK::UWorld* World);
+    }
 
     void DumpServerInfo() {
         SDK::UWorld* World = SDK::UWorld::GetWorld();
@@ -72,26 +111,6 @@ namespace g_Hack {
         }
     }
 
-    void UnlockExplorerNotes(SDK::UWorld* World) {
-        if (!World || !World->OwningGameInstance || World->OwningGameInstance->LocalPlayers.Num() == 0) return;
-
-        SDK::ULocalPlayer* LP = World->OwningGameInstance->LocalPlayers[0];
-        if (!LP || !LP->PlayerController || !LP->PlayerController->Pawn) return;
-
-        if (!LP->PlayerController->IsA(SDK::AShooterPlayerController::StaticClass())) return;
-        SDK::AShooterPlayerController* PC = static_cast<SDK::AShooterPlayerController*>(LP->PlayerController);
-
-        if (!PC)  return;
-
-        if (g_CurrentNoteIndex <= g_MaxNoteIndex) {
-            PC->UnlockExplorerNote(g_CurrentNoteIndex, true, true);
-            g_CurrentNoteIndex++;
-        }
-        else {
-            g_CurrentNoteIndex = 0;
-        }
-    }
-
     namespace {
         std::string NormalizeGachaItemName(std::string value) {
             value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char ch) {
@@ -105,7 +124,7 @@ namespace g_Hack {
         }
 
         bool IsGachaCrystal(const SDK::UPrimalItem* Item) {
-            if (!Item || Item->ItemQuantity <= 0) return false;
+            if (!Item || Item->ItemQuantity <= 0 || Item->bIsBlueprint) return false;
 
             // The UObject name is language-independent and normally contains
             // "PrimalItemResource_GachaCrystal". Normalize separators so minor
@@ -129,14 +148,14 @@ namespace g_Hack {
                 return static_cast<SDK::APrimalCharacter*>(PC->Character);
             }
 
-            if (PC->Pawn && PC->Pawn->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
-                SDK::APrimalDinoCharacter* Dino = static_cast<SDK::APrimalDinoCharacter*>(PC->Pawn);
-                if (SDK::AShooterCharacter* Rider = Dino->Rider.Get()) {
-                    return static_cast<SDK::APrimalCharacter*>(Rider);
-                }
-            }
-
-            if (PC->Pawn && PC->Pawn->IsA(SDK::APrimalCharacter::StaticClass())) {
+            // The generated TWeakObjectPtr::Get() helper ignores the weak
+            // serial number. Do not follow Dino->Rider here: Ferox form
+            // replacement can reuse that object slot and turn it into an
+            // unrelated UObject. PC->Character is the authoritative human
+            // reference while mounted; the pawn fallback is only valid when
+            // the pawn itself is a human shooter character.
+            if (PC->Pawn && PC->Pawn->IsA(SDK::AShooterCharacter::StaticClass()) &&
+                !PC->Pawn->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
                 return static_cast<SDK::APrimalCharacter*>(PC->Pawn);
             }
 
@@ -160,6 +179,37 @@ namespace g_Hack {
             if (Object->Flags & SDK::EObjectFlags::BeginDestroyed) return false;
             if (Object->Flags & SDK::EObjectFlags::FinishDestroyed) return false;
             if (Object->Flags & SDK::EObjectFlags::MirroredGarbage) return false;
+            return true;
+        }
+
+        bool TryGetLiveObjectSerial(const SDK::UObject* ExpectedObject,
+            int32_t ObjectIndex, int32_t* OutSerialNumber) {
+            if (!ExpectedObject || !OutSerialNumber) return false;
+
+            SDK::TUObjectArray* ObjectArray = SDK::UObject::GObjects.GetTypedPtr();
+            if (!ObjectArray || ObjectIndex < 0 ||
+                ObjectIndex >= ObjectArray->NumElements) {
+                return false;
+            }
+
+            const int32_t ChunkIndex =
+                ObjectIndex / SDK::TUObjectArray::ElementsPerChunk;
+            const int32_t IndexWithinChunk =
+                ObjectIndex % SDK::TUObjectArray::ElementsPerChunk;
+            if (ChunkIndex < 0 || ChunkIndex >= ObjectArray->NumChunks) return false;
+
+            SDK::FUObjectItem** ObjectChunks = ObjectArray->GetDecrytedObjPtr();
+            if (!ObjectChunks || !ObjectChunks[ChunkIndex]) return false;
+            const SDK::FUObjectItem* Item =
+                &ObjectChunks[ChunkIndex][IndexWithinChunk];
+            if (Item->Object != ExpectedObject) return false;
+
+            // ASA's verified 0x18-byte FUObjectItem keeps its serial at 0x10.
+            // Compare the registry entry before touching a cached UObject so a
+            // destroyed mount can never be dereferenced through a stale pointer.
+            std::memcpy(OutSerialNumber,
+                reinterpret_cast<const uint8_t*>(Item) + 0x10,
+                sizeof(*OutSerialNumber));
             return true;
         }
 
@@ -255,9 +305,21 @@ namespace g_Hack {
         std::string g_FishingQTEStatus = "等待钓鱼 QTE";
         std::string g_AutoEatDrinkStatus = "自动吃喝未启用";
         std::string g_AutoBrewStatus = "自动药酒未启用";
+        std::mutex g_AutoPickupStatusMutex;
+        std::string g_AutoPickupStatus = "自动拾取未启用";
+        std::mutex g_AutoRepairStatusMutex;
+        std::string g_AutoRepairStatus = "智能自动修理未启用";
         std::string g_FishingRodMaintenanceStatus = "鱼竿维护未启用";
-        std::string g_TekChestJetStatus = "泰克胸甲喷射无冷却未启用";
-        std::string g_TekGloveDashStatus = "泰克手套冲刺无冷却未启用";
+
+        void SetAutoPickupStatus(std::string Status) {
+            std::scoped_lock Lock(g_AutoPickupStatusMutex);
+            g_AutoPickupStatus = std::move(Status);
+        }
+
+        void SetAutoRepairStatus(std::string Status) {
+            std::scoped_lock Lock(g_AutoRepairStatusMutex);
+            g_AutoRepairStatus = std::move(Status);
+        }
 
         bool SameItemNetID(const SDK::FItemNetID& Left, const SDK::FItemNetID& Right) {
             return Left.ItemID1 == Right.ItemID1 && Left.ItemID2 == Right.ItemID2;
@@ -455,16 +517,17 @@ namespace g_Hack {
                         Identity.find("hud") != std::string::npos));
         }
 
-        SDK::UObject* FindActiveFishingPrompt(const std::chrono::steady_clock::time_point Now,
+        SDK::UObject* FindActiveFishingPrompt(bool ScanObjects,
             SDK::FKey* OutKey, int32_t* OutKeyIndex) {
-            using Clock = std::chrono::steady_clock;
             static int32_t CachedObjectIndex = -1;
-            static Clock::time_point NextFullScan = Clock::time_point::min();
-            if (!OutKey || !OutKeyIndex) return nullptr;
+            static int32_t ScanCursor = 0;
+            static std::vector<int32_t> FishingWidgetIndices;
+            if (!OutKey || !OutKeyIndex || !SDK::UObject::GObjects) return nullptr;
             *OutKey = SDK::FKey{};
             *OutKeyIndex = -1;
 
-            auto GetActivePromptAtIndex = [&](int32_t ObjectIndex) -> SDK::UObject* {
+            auto GetActivePromptAtIndex = [&](int32_t ObjectIndex,
+                bool RememberWidget) -> SDK::UObject* {
                 if (ObjectIndex < 0 || ObjectIndex >= SDK::UObject::GObjects->Num()) return nullptr;
 
                 SDK::UObject* Object = SDK::UObject::GObjects->GetByIndex(ObjectIndex);
@@ -473,6 +536,11 @@ namespace g_Hack {
                 SDK::UClass* WidgetClass = SDK::UWidget::StaticClass();
                 if (!WidgetClass || !Object->IsA(WidgetClass)) return nullptr;
                 if (!IsFishingRelatedObject(Object)) return nullptr;
+                if (RememberWidget && FishingWidgetIndices.size() < 128 &&
+                    std::find(FishingWidgetIndices.begin(), FishingWidgetIndices.end(),
+                        ObjectIndex) == FishingWidgetIndices.end()) {
+                    FishingWidgetIndices.push_back(ObjectIndex);
+                }
 
                 SDK::UWidget* Widget = static_cast<SDK::UWidget*>(Object);
                 const bool IsActive = IsWidgetInViewport(Widget) ||
@@ -503,16 +571,50 @@ namespace g_Hack {
                 return nullptr;
             };
 
-            if (SDK::UObject* CachedPrompt = GetActivePromptAtIndex(CachedObjectIndex)) {
+            if (SDK::UObject* CachedPrompt = GetActivePromptAtIndex(CachedObjectIndex, false)) {
                 return CachedPrompt;
             }
 
             CachedObjectIndex = -1;
-            if (Now < NextFullScan) return nullptr;
-            NextFullScan = Now + std::chrono::milliseconds(100);
+            for (size_t i = 0; i < FishingWidgetIndices.size();) {
+                const int32_t Index = FishingWidgetIndices[i];
+                SDK::UObject* Candidate = ResolveObjectAtIndex(Index);
+                if (!Candidate || !Candidate->IsA(SDK::UWidget::StaticClass()) ||
+                    !IsFishingRelatedObject(Candidate)) {
+                    FishingWidgetIndices[i] = FishingWidgetIndices.back();
+                    FishingWidgetIndices.pop_back();
+                    continue;
+                }
+                if (SDK::UObject* Prompt = GetActivePromptAtIndex(Index, false)) {
+                    CachedObjectIndex = Index;
+                    return Prompt;
+                }
+                ++i;
+            }
+            if (!ScanObjects) return nullptr;
 
-            for (int32_t i = 0; i < SDK::UObject::GObjects->Num(); ++i) {
-                if (SDK::UObject* Prompt = GetActivePromptAtIndex(i)) {
+            // A full UObject walk on the game thread caused a frame spike every
+            // 100 ms while this option was enabled. Spread discovery across
+            // ticks; once found, the active widget is checked directly above.
+            constexpr int32_t ObjectsPerTick = 8192;
+            constexpr int32_t RecentObjectsPerTick = 2048;
+            const int32_t ObjectCount = SDK::UObject::GObjects->Num();
+            if (ObjectCount <= 0) return nullptr;
+            // Newly constructed widgets usually land near the end of GObjects.
+            // Probe that small region first without waiting for a full sweep.
+            for (int32_t i = std::max(0, ObjectCount - RecentObjectsPerTick);
+                i < ObjectCount; ++i) {
+                if (SDK::UObject* Prompt = GetActivePromptAtIndex(i, true)) {
+                    CachedObjectIndex = i;
+                    return Prompt;
+                }
+            }
+            if (ScanCursor >= ObjectCount) ScanCursor = 0;
+            for (int32_t Checked = 0; Checked < ObjectsPerTick && Checked < ObjectCount;
+                ++Checked) {
+                const int32_t i = ScanCursor++;
+                if (ScanCursor >= ObjectCount) ScanCursor = 0;
+                if (SDK::UObject* Prompt = GetActivePromptAtIndex(i, true)) {
                     CachedObjectIndex = i;
                     return Prompt;
                 }
@@ -685,16 +787,7 @@ namespace g_Hack {
             Input.ki.dwFlags = KEYEVENTF_SCANCODE |
                 (Pressed ? 0 : KEYEVENTF_KEYUP);
 
-            // Z is the default OutBody hotkey. Mark only the synthetic fishing
-            // press so our WndProc hook forwards it to ASA instead of consuming it.
-            const bool BypassOutBody = KeyName[0] == 'z';
-            if (BypassOutBody && Pressed) {
-                g_MDX12::g_InputState::g_bypassOutBodyHotkeyForFishing.store(true);
-            }
             const bool Sent = SendInput(1, &Input, sizeof(Input)) == 1;
-            if (BypassOutBody && (!Pressed || !Sent)) {
-                g_MDX12::g_InputState::g_bypassOutBodyHotkeyForFishing.store(false);
-            }
             return Sent;
         }
 
@@ -1098,6 +1191,9 @@ namespace g_Hack {
             if (!IsUsableObject(Object) || !Object->Class) return nullptr;
             SDK::FProperty* OuterProperty = FindReflectedProperty(Object->Class, StructPropertyName);
             if (!OuterProperty || !OuterProperty->ClassPrivate || OuterProperty->Offset < 0 ||
+                OuterProperty->ArrayDim != 1 || OuterProperty->ElementSize < int(sizeof(float)) ||
+                OuterProperty->ElementSize > Object->Class->Size ||
+                OuterProperty->Offset > Object->Class->Size - OuterProperty->ElementSize ||
                 !EqualsNameIgnoreCase(OuterProperty->ClassPrivate->Name.ToString(), "StructProperty")) {
                 return nullptr;
             }
@@ -1106,8 +1202,8 @@ namespace g_Hack {
             if (!StructProperty->Struct) return nullptr;
             SDK::FProperty* InnerProperty = FindReflectedProperty(StructProperty->Struct, FloatPropertyName);
             if (!InnerProperty || !InnerProperty->ClassPrivate || InnerProperty->Offset < 0 ||
-                InnerProperty->ElementSize < sizeof(float) ||
-                InnerProperty->Offset + static_cast<int32_t>(sizeof(float)) > OuterProperty->ElementSize ||
+                InnerProperty->ArrayDim != 1 || InnerProperty->ElementSize != sizeof(float) ||
+                InnerProperty->Offset > OuterProperty->ElementSize - int(sizeof(float)) ||
                 !EqualsNameIgnoreCase(InnerProperty->ClassPrivate->Name.ToString(), "FloatProperty")) {
                 return nullptr;
             }
@@ -1294,8 +1390,9 @@ namespace g_Hack {
                 return static_cast<SDK::AShooterCharacter*>(PC->Character);
             }
 
-            if (PC->Pawn && PC->Pawn->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
-                return static_cast<SDK::APrimalDinoCharacter*>(PC->Pawn)->Rider.Get();
+            if (PC->Pawn && PC->Pawn->IsA(SDK::AShooterCharacter::StaticClass()) &&
+                !PC->Pawn->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
+                return static_cast<SDK::AShooterCharacter*>(PC->Pawn);
             }
 
             return nullptr;
@@ -1313,11 +1410,40 @@ namespace g_Hack {
             return static_cast<SDK::AShooterPlayerController*>(LocalPlayer->PlayerController);
         }
 
+        SDK::AShooterCharacter* GetLocalConsumableCharacter(SDK::UWorld* World) {
+            SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
+            if (!IsUsableObject(PC)) return nullptr;
+
+            // Possession moves to the mount while riding. The controller's
+            // player character remains the survivor whose inventory and stats
+            // must be used for food, water and brews.
+            SDK::AShooterCharacter* Human = PC->GetPlayerCharacter();
+            if (IsUsableObject(Human) &&
+                Human->IsA(SDK::AShooterCharacter::StaticClass()) &&
+                !Human->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
+                return Human;
+            }
+            return GetLocalHumanCharacter(World);
+        }
+
         struct AutoCraftRuntimeState {
             SDK::UWorld* World = nullptr;
             std::vector<g_Hack::AutoCraftStationView> Catalog;
             int SelectedInventoryObjectIndex = -1;
             int SelectedItemObjectIndex = -1;
+            SDK::UPrimalInventoryComponent* SelectedInventory = nullptr;
+            int32_t SelectedInventorySerial = -1;
+            SDK::FItemNetID SelectedRecipeID{};
+            std::string SelectedRecipeClass;
+            bool SelectedRecipeIsEngram = false;
+            bool OwnsCraftRemoteView = false;
+            SDK::UUI_Inventory* BatchInventoryUI = nullptr;
+            int32_t BatchUIIndex = -1;
+            int32_t BatchUISerial = -1;
+            uint64_t SubmittedRequests = 0;
+            std::chrono::steady_clock::time_point NextInventorySync =
+                std::chrono::steady_clock::time_point::min();
+            g_Hack::AutoCraftScheduler Scheduler{};
             SDK::UPrimalInventoryComponent* DiscoveryInventory = nullptr;
             int DiscoveryInventoryObjectIndex = -1;
             std::chrono::steady_clock::time_point DiscoveryRequestedAt =
@@ -1327,14 +1453,46 @@ namespace g_Hack {
             std::string Status = "请选择工作台和印痕/图纸";
             std::chrono::steady_clock::time_point NextCatalogRefresh =
                 std::chrono::steady_clock::time_point::min();
-            std::chrono::steady_clock::time_point NextCraftRequest =
-                std::chrono::steady_clock::time_point::min();
         };
 
         AutoCraftRuntimeState g_AutoCraftRuntime;
+
+        // ImGui runs on the render thread while all inventory RPCs and UObject
+        // traversal must stay on the game thread. This bridge contains only
+        // value snapshots and queued integer selections.
+        struct AutoCraftUiBridgeState {
+            std::mutex RequestMutex;
+            bool StationSelectionPending = false;
+            int PendingStationObjectIndex = -1;
+            bool RecipeSelectionPending = false;
+            int PendingRecipeObjectIndex = -1;
+
+            std::mutex SnapshotMutex;
+            std::vector<g_Hack::AutoCraftStationView> Catalog;
+            int SelectedStationObjectIndex = -1;
+            int SelectedRecipeObjectIndex = -1;
+            std::string Status = "请选择工作台和印痕/图纸";
+        };
+
+        AutoCraftUiBridgeState g_AutoCraftUiBridge;
+
+        void PublishAutoCraftUiSnapshot() {
+            std::scoped_lock Lock(g_AutoCraftUiBridge.SnapshotMutex);
+            g_AutoCraftUiBridge.Catalog = g_AutoCraftRuntime.Catalog;
+            g_AutoCraftUiBridge.SelectedStationObjectIndex =
+                g_AutoCraftRuntime.SelectedInventoryObjectIndex;
+            g_AutoCraftUiBridge.SelectedRecipeObjectIndex =
+                g_AutoCraftRuntime.SelectedItemObjectIndex;
+            g_AutoCraftUiBridge.Status = g_AutoCraftRuntime.Status;
+        }
+
+        struct AutoCraftUiSnapshotScope {
+            ~AutoCraftUiSnapshotScope() {
+                PublishAutoCraftUiSnapshot();
+            }
+        };
+
         std::string g_AutoFeedStatus = "等待范围内恐龙";
-        std::string g_AutoImprintStatus = "等待附近幼龙提出留痕需求";
-        std::string g_AutoGrindHelicoprionStatus = "未启用";
 
         struct DaeodonHealingRequestState {
             std::mutex Mutex;
@@ -1410,6 +1568,7 @@ namespace g_Hack {
 
         void ProcessAutoGachaVaultPull(SDK::UWorld* World, SDK::AShooterPlayerController* PC,
             SDK::AShooterCharacter* Human) {
+            if (IsUploadTerminalActive() || IsAutomaticDepositActive()) return;
             using Clock = std::chrono::steady_clock;
             const Clock::time_point Now = Clock::now();
 
@@ -1779,26 +1938,9 @@ namespace g_Hack {
                 }
             }
 
-            bool StationStillValid = false;
-            bool RecipeStillValid = false;
-            for (const g_Hack::AutoCraftStationView& Station : g_AutoCraftRuntime.Catalog) {
-                if (Station.InventoryObjectIndex != g_AutoCraftRuntime.SelectedInventoryObjectIndex) continue;
-                StationStillValid = true;
-                for (const g_Hack::AutoCraftRecipeView& Recipe : Station.Recipes) {
-                    if (Recipe.ItemObjectIndex == g_AutoCraftRuntime.SelectedItemObjectIndex) {
-                        RecipeStillValid = true;
-                        break;
-                    }
-                }
-                break;
-            }
-            if (!StationStillValid) {
-                g_AutoCraftRuntime.SelectedInventoryObjectIndex = -1;
-                g_AutoCraftRuntime.SelectedItemObjectIndex = -1;
-            }
-            else if (!RecipeStillValid) {
-                g_AutoCraftRuntime.SelectedItemObjectIndex = -1;
-            }
+            // Replication, range changes and catalog truncation are temporary.
+            // Keep the selection; AutoCraft resolves its inventory identity and
+            // recipe net ID again when the server sends replacement objects.
         }
 
         bool IsPumpShotgun(const SDK::AShooterWeapon* Weapon) {
@@ -1824,7 +1966,6 @@ namespace g_Hack {
 
         struct DlcSkillRuntimeState {
             g_Hack::DlcSkillDataView View;
-            std::unordered_set<std::string> LostColonySkillNames;
             std::vector<DlcTraitModifierPatch> ProjectileDamagePatches;
             std::chrono::steady_clock::time_point NextScan = std::chrono::steady_clock::time_point::min();
         };
@@ -1985,12 +2126,13 @@ namespace g_Hack {
             g_TastyBaitOverrideRuntime.Controller = nullptr;
             g_TastyBaitOverrideRuntime.ControllerObjectIndex = -1;
             g_TastyBaitOverrideRuntime.GetSkillModifierFunction = nullptr;
-            g_TastyBaitOverrideRuntime.ControllerOriginalProcessEvent = nullptr;
+            // Keep the native target available to a callback that entered just
+            // before detachment; the DLL worker drains those calls before release.
             g_TastyBaitOverrideRuntime.Provider = nullptr;
             g_TastyBaitOverrideRuntime.ProviderObjectIndex = -1;
             g_TastyBaitOverrideRuntime.GetProviderSkillModifierFunction = nullptr;
             g_TastyBaitOverrideRuntime.BPGetProviderSkillModifierFunction = nullptr;
-            g_TastyBaitOverrideRuntime.ProviderOriginalProcessEvent = nullptr;
+            // The original target remains valid after this hook is detached.
             g_TastyBaitOverrideRuntime.CurrentRank.store(0, std::memory_order_relaxed);
             g_TastyBaitOverrideRuntime.NextRefresh =
                 std::chrono::steady_clock::time_point::min();
@@ -2129,138 +2271,6 @@ namespace g_Hack {
             RestoreDlcTraitModifierPatches();
             g_DlcSkillRuntime.View = g_Hack::DlcSkillDataView{};
             g_DlcSkillRuntime.View.HasLocalAuthority = HasLocalSkillDataAuthority(World);
-            g_DlcSkillRuntime.LostColonySkillNames.clear();
-        }
-
-        struct TekCooldownClearResult {
-            int32_t ClearedCount = 0;
-            std::string ClearedNames;
-            std::string ActiveNames;
-        };
-
-        bool HasAnyNormalizedToken(const std::string& Value,
-            std::initializer_list<const char*> Tokens) {
-            return std::any_of(Tokens.begin(), Tokens.end(), [&](const char* Token) {
-                return Token && Value.find(Token) != std::string::npos;
-                });
-        }
-
-        TekCooldownClearResult ClearTekSkillCooldowns(
-            SDK::AShooterCharacter* Human,
-            std::initializer_list<const char*> SubjectTokens,
-            std::initializer_list<const char*> StrongIdentityTokens) {
-            TekCooldownClearResult Result;
-            if (!Human || !IsUsableObject(Human)) return Result;
-
-            ReflectedStructArrayView Cooldowns;
-            if (!GetReflectedStructArray(Human, "SkillCooldowns", 512, &Cooldowns) ||
-                !Cooldowns.ElementStruct) {
-                return Result;
-            }
-
-            SDK::FProperty* SkillNameProperty =
-                FindReflectedProperty(Cooldowns.ElementStruct, "SkillName");
-            SDK::FProperty* LastUsedTimeProperty =
-                FindReflectedProperty(Cooldowns.ElementStruct, "LastUsedTime");
-            SDK::FProperty* CooldownDurationProperty =
-                FindReflectedProperty(Cooldowns.ElementStruct, "CooldownDuration");
-            if (!SkillNameProperty || !SkillNameProperty->ClassPrivate ||
-                SkillNameProperty->Offset < 0 ||
-                SkillNameProperty->Offset + static_cast<int32_t>(sizeof(SDK::FName)) >
-                    Cooldowns.ElementSize ||
-                !EqualsNameIgnoreCase(SkillNameProperty->ClassPrivate->Name.ToString(),
-                    "NameProperty") ||
-                !LastUsedTimeProperty || !LastUsedTimeProperty->ClassPrivate ||
-                LastUsedTimeProperty->Offset < 0 ||
-                LastUsedTimeProperty->Offset + static_cast<int32_t>(sizeof(double)) >
-                    Cooldowns.ElementSize ||
-                !EqualsNameIgnoreCase(LastUsedTimeProperty->ClassPrivate->Name.ToString(),
-                    "DoubleProperty") ||
-                !CooldownDurationProperty || !CooldownDurationProperty->ClassPrivate ||
-                CooldownDurationProperty->Offset < 0 ||
-                CooldownDurationProperty->Offset + static_cast<int32_t>(sizeof(float)) >
-                    Cooldowns.ElementSize ||
-                !EqualsNameIgnoreCase(CooldownDurationProperty->ClassPrivate->Name.ToString(),
-                    "FloatProperty")) {
-                return Result;
-            }
-
-            const double GameTime = SDK::UGameplayStatics::GetTimeSeconds(Human);
-            int32_t ActiveNameCount = 0;
-            for (int32_t Index = 0; Index < Cooldowns.Num; ++Index) {
-                uint8_t* Element = Cooldowns.Data +
-                    static_cast<size_t>(Index) * Cooldowns.ElementSize;
-                const SDK::FName SkillNameValue =
-                    *reinterpret_cast<const SDK::FName*>(Element + SkillNameProperty->Offset);
-                const std::string SkillName = SkillNameValue.ToString();
-                const std::string NormalizedName = NormalizeGachaItemName(SkillName);
-
-                const double LastUsedTime = *reinterpret_cast<const double*>(
-                    Element + LastUsedTimeProperty->Offset);
-                const float Duration = *reinterpret_cast<const float*>(
-                    Element + CooldownDurationProperty->Offset);
-                const double Remaining = LastUsedTime + static_cast<double>(Duration) - GameTime;
-                if (std::isfinite(Remaining) && Remaining > 0.01 && ActiveNameCount < 6) {
-                    if (!Result.ActiveNames.empty()) Result.ActiveNames += ", ";
-                    Result.ActiveNames += SkillName;
-                    ++ActiveNameCount;
-                }
-
-                const bool HasSubject = HasAnyNormalizedToken(NormalizedName, SubjectTokens);
-                const bool HasStrongIdentity =
-                    HasAnyNormalizedToken(NormalizedName, StrongIdentityTokens);
-                const bool HasTekIdentity = NormalizedName.find("tek") != std::string::npos;
-                if (!HasSubject || (!HasTekIdentity && !HasStrongIdentity)) continue;
-
-                *reinterpret_cast<double*>(Element + LastUsedTimeProperty->Offset) = -1000000000.0;
-                if (!Result.ClearedNames.empty()) Result.ClearedNames += ", ";
-                Result.ClearedNames += SkillName;
-                ++Result.ClearedCount;
-            }
-            return Result;
-        }
-
-        struct TekStriderRigRequestState {
-            std::mutex Mutex;
-            bool Pending = false;
-            int HeadRigIndex = 0;
-            int BodyRigIndex = 1;
-            std::string Status = "瞄准一只跨步者或骑乘跨步者后应用；仅限单机/主机";
-        };
-
-        TekStriderRigRequestState g_TekStriderRigRequest;
-
-        constexpr std::array<const char*, 4> TekStriderHeadRigClasses = {
-            "PrimalItemArmor_TekStriderHarvester_C",
-            "PrimalItemArmor_TekStriderMachinegun_C",
-            "PrimalItemArmor_TekStriderRadar_C",
-            "PrimalItemArmor_TekStriderSilenceCannon_C"
-        };
-
-        constexpr std::array<const char*, 4> TekStriderBodyRigClasses = {
-            "PrimalItemArmor_TekStriderLargeCannon_C",
-            "PrimalItemArmor_TekStriderSaddlebags_C",
-            "PrimalItemArmor_TekStriderShield_C",
-            "PrimalItemArmor_TekStriderOnesidedShield_C"
-        };
-
-        constexpr std::array<const wchar_t*, 4> TekStriderHeadRigPaths = {
-            L"/Game/Genesis2/CoreBlueprints/Items/Saddle/PrimalItemArmor_TekStriderHarvester.PrimalItemArmor_TekStriderHarvester_C",
-            L"/Game/Genesis2/CoreBlueprints/Items/Saddle/PrimalItemArmor_TekStriderMachinegun.PrimalItemArmor_TekStriderMachinegun_C",
-            L"/Game/Genesis2/CoreBlueprints/Items/Saddle/PrimalItemArmor_TekStriderRadar.PrimalItemArmor_TekStriderRadar_C",
-            L"/Game/Genesis2/CoreBlueprints/Items/Saddle/PrimalItemArmor_TekStriderSilenceCannon.PrimalItemArmor_TekStriderSilenceCannon_C"
-        };
-
-        constexpr std::array<const wchar_t*, 4> TekStriderBodyRigPaths = {
-            L"/Game/Genesis2/CoreBlueprints/Items/Saddle/PrimalItemArmor_TekStriderLargeCannon.PrimalItemArmor_TekStriderLargeCannon_C",
-            L"/Game/Genesis2/CoreBlueprints/Items/Saddle/PrimalItemArmor_TekStriderSaddlebags.PrimalItemArmor_TekStriderSaddlebags_C",
-            L"/Game/Genesis2/CoreBlueprints/Items/Saddle/PrimalItemArmor_TekStriderShield.PrimalItemArmor_TekStriderShield_C",
-            L"/Game/Genesis2/CoreBlueprints/Items/Saddle/PrimalItemArmor_TekStriderOnesidedShield.PrimalItemArmor_TekStriderOnesidedShield_C"
-        };
-
-        void SetTekStriderRigStatus(std::string Status) {
-            std::scoped_lock Lock(g_TekStriderRigRequest.Mutex);
-            g_TekStriderRigRequest.Status = std::move(Status);
         }
 
         bool IsTekStrider(const SDK::UObject* Object) {
@@ -2299,124 +2309,6 @@ namespace g_Hack {
             g_DaeodonHealingRequest.Status = std::move(Status);
         }
 
-        SDK::APrimalDinoCharacter* ResolveTekStriderTarget(SDK::UWorld* World) {
-            SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
-            if (!PC) return nullptr;
-
-            auto AsTekStrider = [](SDK::UObject* Object) -> SDK::APrimalDinoCharacter* {
-                return IsTekStrider(Object)
-                    ? static_cast<SDK::APrimalDinoCharacter*>(Object)
-                    : nullptr;
-            };
-
-            if (SDK::APrimalDinoCharacter* PawnDino = AsTekStrider(PC->Pawn)) {
-                return PawnDino;
-            }
-
-            SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
-            if (!Human) return nullptr;
-            if (SDK::APrimalDinoCharacter* Mounted = AsTekStrider(Human->MountedDino.Get())) {
-                return Mounted;
-            }
-
-            SDK::FHitResult Hit{};
-            Human->GetAimedActor(&Hit, SDK::ECollisionChannel::ECC_Visibility,
-                30000.0f, 8.0f, true, true);
-
-            SDK::AActor* HitActor = nullptr;
-            if (SDK::UPrimitiveComponent* Component = Hit.Component.Get()) {
-                HitActor = Component->GetOwner();
-            }
-            if (!HitActor) {
-                const auto* Reference = reinterpret_cast<
-                    const SDK::TWeakObjectPtr<SDK::UObject>*>(&Hit.HitObjectHandle);
-                SDK::UObject* HitObject = Reference->Get();
-                if (IsUsableObject(HitObject) && HitObject->IsA(SDK::AActor::StaticClass())) {
-                    HitActor = static_cast<SDK::AActor*>(HitObject);
-                }
-            }
-
-            for (int Depth = 0; HitActor && Depth < 4; ++Depth) {
-                if (SDK::APrimalDinoCharacter* Target = AsTekStrider(HitActor)) return Target;
-                HitActor = HitActor->GetOwner();
-            }
-            return nullptr;
-        }
-
-        SDK::UClass* FindClassInReflectedArray(SDK::UObject* Object,
-            const char* PropertyName, const char* DesiredClassName, int32_t* OutIndex) {
-            if (OutIndex) *OutIndex = -1;
-            if (!IsUsableObject(Object) || !Object->Class) return nullptr;
-
-            SDK::FProperty* Property = FindReflectedProperty(Object->Class, PropertyName);
-            if (!Property || !Property->ClassPrivate || Property->Offset < 0 ||
-                !EqualsNameIgnoreCase(Property->ClassPrivate->Name.ToString(), "ArrayProperty")) {
-                return nullptr;
-            }
-
-            SDK::FArrayProperty* ArrayProperty = static_cast<SDK::FArrayProperty*>(Property);
-            if (!ArrayProperty->InnerProperty || !ArrayProperty->InnerProperty->ClassPrivate ||
-                ArrayProperty->InnerProperty->ElementSize != sizeof(SDK::UClass*)) {
-                return nullptr;
-            }
-            const std::string InnerType = ArrayProperty->InnerProperty->ClassPrivate->Name.ToString();
-            if (!EqualsNameIgnoreCase(InnerType, "ClassProperty") &&
-                !EqualsNameIgnoreCase(InnerType, "ObjectProperty")) {
-                return nullptr;
-            }
-
-            struct RawClassArray {
-                SDK::UClass** Data;
-                int32_t Num;
-                int32_t Max;
-            };
-            const RawClassArray* Classes = reinterpret_cast<const RawClassArray*>(
-                reinterpret_cast<const uint8_t*>(Object) + Property->Offset);
-            if (Classes->Num < 0 || Classes->Num > 64 || Classes->Max < Classes->Num ||
-                Classes->Max > 256 || (Classes->Num > 0 && !Classes->Data)) {
-                return nullptr;
-            }
-
-            for (int32_t Index = 0; Index < Classes->Num; ++Index) {
-                SDK::UClass* ItemClass = Classes->Data[Index];
-                if (!IsUsableObject(ItemClass) ||
-                    !EqualsNameIgnoreCase(ItemClass->GetName(), DesiredClassName)) {
-                    continue;
-                }
-                if (OutIndex) *OutIndex = Index;
-                return ItemClass;
-            }
-            return nullptr;
-        }
-
-        SDK::UClass* ResolveTekStriderRigClass(SDK::APrimalDinoCharacter* Target,
-            const char* ArrayPropertyName, const char* ClassName, const wchar_t* AssetPath,
-            int32_t* OutAttachmentIndex) {
-            SDK::UClass* Result = FindClassInReflectedArray(
-                Target, ArrayPropertyName, ClassName, OutAttachmentIndex);
-            if (!Result && Target && Target->Class && Target->Class->ClassDefaultObject) {
-                Result = FindClassInReflectedArray(Target->Class->ClassDefaultObject,
-                    ArrayPropertyName, ClassName, OutAttachmentIndex);
-            }
-            if (!Result) Result = SDK::BasicFilesImplUtils::FindClassByName(ClassName);
-            if (!Result && AssetPath) {
-                Result = SDK::UVictoryCore::BPLoadClass(SDK::FString(AssetPath));
-            }
-            if (!Result || !Result->IsSubclassOf(SDK::UPrimalItem::StaticClass())) return nullptr;
-            return Result;
-        }
-
-        bool IsTekStriderRigItem(const SDK::UPrimalItem* Item) {
-            if (!IsUsableObject(Item) || !Item->Class) return false;
-            const std::string Name = Item->Class->GetName();
-            const auto Matches = [&](const auto& Names) {
-                return std::any_of(Names.begin(), Names.end(), [&](const char* Candidate) {
-                    return EqualsNameIgnoreCase(Name, Candidate);
-                });
-            };
-            return Matches(TekStriderHeadRigClasses) || Matches(TekStriderBodyRigClasses);
-        }
-
         bool HasTekStriderExcavationRig(const SDK::APrimalDinoCharacter* Dino) {
             if (!IsTekStrider(Dino) || !IsUsableObject(Dino->MyInventoryComponent)) {
                 return false;
@@ -2433,36 +2325,6 @@ namespace g_Hack {
                 if (IsExcavationRig(Item) && Item->bEquippedItem) return true;
             }
             return false;
-        }
-
-        bool InventoryHasEquippedClass(SDK::UPrimalInventoryComponent* Inventory,
-            SDK::UClass* ItemClass) {
-            if (!Inventory || !ItemClass) return false;
-            for (SDK::UPrimalItem* Item : Inventory->EquippedItems) {
-                if (IsUsableObject(Item) && Item->IsA(ItemClass)) return true;
-            }
-            for (SDK::UPrimalItem* Item : Inventory->InventoryItems) {
-                if (IsUsableObject(Item) && Item->bEquippedItem && Item->IsA(ItemClass)) return true;
-            }
-            return false;
-        }
-
-        SDK::UPrimalItem* AddTekStriderRigItem(SDK::UWorld* World,
-            SDK::UPrimalInventoryComponent* Inventory, SDK::UClass* ItemClass) {
-            return SDK::UPrimalItem::AddNewItem(
-                SDK::TSubclassOf<SDK::UPrimalItem>(ItemClass), Inventory,
-                true, true, 1.0f, true, 1, false, 0.0f, false,
-                SDK::TSubclassOf<SDK::UPrimalItem>(nullptr), 0.0f, true,
-                true, true, false, true, false, World);
-        }
-
-        void WriteTekStriderAttachmentState(SDK::APrimalDinoCharacter* Target,
-            int32_t HeadAttachmentIndex, int32_t BodyAttachmentIndex) {
-            WriteReflectedInt32Value(Target, "head attachment index", HeadAttachmentIndex);
-            WriteReflectedInt32Value(Target, "manual head index", HeadAttachmentIndex);
-            WriteReflectedInt32Value(Target, "chest attachment index", BodyAttachmentIndex);
-            WriteReflectedInt32Value(Target, "manual chest index", BodyAttachmentIndex);
-            WriteReflectedBoolValue(Target, "has set initial attachments", true);
         }
 
         bool ForcePastNumericProperty(SDK::UObject* Object, const char* PropertyName) {
@@ -2484,6 +2346,7 @@ namespace g_Hack {
             }
             return false;
         }
+
     }
 
     std::string GetAutoFeedStatus() {
@@ -2565,6 +2428,8 @@ namespace g_Hack {
             SearchIdentity += " ";
             SearchIdentity += Dino->Class ? Dino->Class->GetName() : "";
             if (!g_Util::IsEntityMatchMulti(SearchIdentity, g_Config::AutoFeedDinoFilter)) continue;
+            // Only queue meat for dinosaurs whose native food type is carnivorous.
+            if (!Dino->bIsCarnivore) continue;
             ++MatchingDinos;
 
             if (IsDaeodon(Dino) && IsUsableObject(Dino->MyCharacterStatusComponent)) {
@@ -2804,194 +2669,6 @@ namespace g_Hack {
             RequestsSent, AlreadyEnabled, OutsideServerUseRange, EnableEntryNotFound));
     }
 
-    void RequestTekStriderRigChange(int HeadRigIndex, int BodyRigIndex) {
-        std::scoped_lock Lock(g_TekStriderRigRequest.Mutex);
-        if (HeadRigIndex < 0 || HeadRigIndex >= static_cast<int>(TekStriderHeadRigClasses.size()) ||
-            BodyRigIndex < 0 || BodyRigIndex >= static_cast<int>(TekStriderBodyRigClasses.size())) {
-            g_TekStriderRigRequest.Status = "无效的跨步者配件选择";
-            return;
-        }
-        g_TekStriderRigRequest.HeadRigIndex = HeadRigIndex;
-        g_TekStriderRigRequest.BodyRigIndex = BodyRigIndex;
-        g_TekStriderRigRequest.Pending = true;
-        g_TekStriderRigRequest.Status = "已提交，等待游戏线程应用配件";
-    }
-
-    std::string GetTekStriderRigStatus() {
-        std::scoped_lock Lock(g_TekStriderRigRequest.Mutex);
-        return g_TekStriderRigRequest.Status;
-    }
-
-    void ProcessTekStriderRigRequest(SDK::UWorld* World) {
-        int HeadSelection = -1;
-        int BodySelection = -1;
-        {
-            std::scoped_lock Lock(g_TekStriderRigRequest.Mutex);
-            if (!g_TekStriderRigRequest.Pending) return;
-            HeadSelection = g_TekStriderRigRequest.HeadRigIndex;
-            BodySelection = g_TekStriderRigRequest.BodyRigIndex;
-            g_TekStriderRigRequest.Pending = false;
-        }
-
-        if (!World) {
-            SetTekStriderRigStatus("世界尚未加载，请进入单机地图后重试");
-            return;
-        }
-
-        SDK::APrimalDinoCharacter* Target = ResolveTekStriderTarget(World);
-        if (!Target) {
-            SetTekStriderRigStatus("未找到跨步者：请贴近并瞄准它，或先骑上它");
-            return;
-        }
-        if (!Target->HasAuthority()) {
-            SetTekStriderRigStatus("目标没有本地服务器权限；此功能仅支持单机或主机");
-            return;
-        }
-
-        SDK::UPrimalInventoryComponent* Inventory = Target->MyInventoryComponent;
-        if (!IsUsableObject(Inventory)) {
-            SetTekStriderRigStatus("目标跨步者的隐藏物品栏尚未初始化，请稍等后重试");
-            return;
-        }
-
-        int32_t HeadAttachmentIndex = HeadSelection;
-        int32_t BodyAttachmentIndex = BodySelection;
-        SDK::UClass* HeadClass = ResolveTekStriderRigClass(Target,
-            "Head Attachment Classes", TekStriderHeadRigClasses[HeadSelection],
-            TekStriderHeadRigPaths[HeadSelection], &HeadAttachmentIndex);
-        SDK::UClass* BodyClass = ResolveTekStriderRigClass(Target,
-            "Chest Attachment Classes", TekStriderBodyRigClasses[BodySelection],
-            TekStriderBodyRigPaths[BodySelection], &BodyAttachmentIndex);
-        if (!HeadClass || !BodyClass) {
-            SetTekStriderRigStatus("配件资源类未加载；请让一只自然刷新的跨步者进入视野后重试");
-            return;
-        }
-
-        if (HeadAttachmentIndex < 0) HeadAttachmentIndex = HeadSelection;
-        if (BodyAttachmentIndex < 0) BodyAttachmentIndex = BodySelection;
-        WriteTekStriderAttachmentState(Target, HeadAttachmentIndex, BodyAttachmentIndex);
-
-        const bool AlreadyHasHead = InventoryHasEquippedClass(Inventory, HeadClass);
-        const bool AlreadyHasBody = InventoryHasEquippedClass(Inventory, BodyClass);
-        if (AlreadyHasHead && AlreadyHasBody) {
-            Inventory->InventoryRefresh();
-            SetTekStriderRigStatus("目标已经装备了所选头部和躯干配件");
-            return;
-        }
-
-        struct ExistingRigItem {
-            SDK::FItemNetID ItemID{};
-            SDK::UClass* ItemClass = nullptr;
-        };
-        std::vector<ExistingRigItem> ExistingItems;
-        auto CollectRigItems = [&](const SDK::TArray<SDK::UPrimalItem*>& Items) {
-            for (SDK::UPrimalItem* Item : Items) {
-                if (!IsTekStriderRigItem(Item)) continue;
-                const auto Duplicate = std::find_if(ExistingItems.begin(), ExistingItems.end(),
-                    [&](const ExistingRigItem& Existing) {
-                        return Existing.ItemID.ItemID1 == Item->ItemID.ItemID1 &&
-                            Existing.ItemID.ItemID2 == Item->ItemID.ItemID2;
-                    });
-                if (Duplicate == ExistingItems.end()) {
-                    ExistingItems.push_back({ Item->ItemID, Item->Class });
-                }
-            }
-        };
-        CollectRigItems(Inventory->EquippedItems);
-        CollectRigItems(Inventory->InventoryItems);
-
-        std::vector<SDK::UClass*> RemovedClasses;
-        for (const ExistingRigItem& Existing : ExistingItems) {
-            if (!Inventory->RemoveItem(Existing.ItemID, false, false, true, false)) {
-                for (SDK::UClass* RemovedClass : RemovedClasses) {
-                    AddTekStriderRigItem(World, Inventory, RemovedClass);
-                }
-                Inventory->InventoryRefresh();
-                SetTekStriderRigStatus("旧配件无法从隐藏装备栏移除，已恢复原配件");
-                return;
-            }
-            RemovedClasses.push_back(Existing.ItemClass);
-        }
-
-        SDK::UPrimalItem* NewHead = AddTekStriderRigItem(World, Inventory, HeadClass);
-        SDK::UPrimalItem* NewBody = AddTekStriderRigItem(World, Inventory, BodyClass);
-        Inventory->InventoryRefresh();
-
-        const bool HeadEquipped = NewHead && InventoryHasEquippedClass(Inventory, HeadClass);
-        const bool BodyEquipped = NewBody && InventoryHasEquippedClass(Inventory, BodyClass);
-        if (!HeadEquipped || !BodyEquipped) {
-            if (NewHead && IsUsableObject(NewHead)) {
-                Inventory->RemoveItem(NewHead->ItemID, false, false, true, false);
-            }
-            if (NewBody && IsUsableObject(NewBody)) {
-                Inventory->RemoveItem(NewBody->ItemID, false, false, true, false);
-            }
-            for (SDK::UClass* RemovedClass : RemovedClasses) {
-                AddTekStriderRigItem(World, Inventory, RemovedClass);
-            }
-            Inventory->InventoryRefresh();
-            SetTekStriderRigStatus("新配件未能进入隐藏装备槽，已回滚原配件");
-            return;
-        }
-
-        Target->BPNotifyInventoryItemChange(true, NewHead, true);
-        Target->BPNotifyInventoryItemChange(true, NewBody, true);
-        // Inventory removal/add notifications may update these Blueprint
-        // variables, so make the selected saved indices the final write.
-        WriteTekStriderAttachmentState(Target, HeadAttachmentIndex, BodyAttachmentIndex);
-        Inventory->InventoryRefresh();
-        SetTekStriderRigStatus("已完成：跨步者配件已写入隐藏装备栏并保存到当前存档");
-    }
-
-    void AutoOpenGachaCrystals(SDK::UWorld* World) {
-        using Clock = std::chrono::steady_clock;
-        static Clock::time_point lastUseTime = Clock::now() - std::chrono::seconds(1);
-
-        const Clock::time_point now = Clock::now();
-        const int32_t IntervalMilliseconds = static_cast<int32_t>(std::lround(
-            std::clamp(g_Config::AutoOpenGachaIntervalMs, 10.0f, 1000.0f)));
-        const auto UseInterval = std::chrono::milliseconds(IntervalMilliseconds);
-        if (!World || !World->OwningGameInstance || World->OwningGameInstance->LocalPlayers.Num() == 0) {
-            g_AutoGachaPullRuntime.Status = "等待人物和世界数据";
-            return;
-        }
-
-        SDK::ULocalPlayer* LP = World->OwningGameInstance->LocalPlayers[0];
-        if (!LP || !LP->PlayerController || !LP->PlayerController->IsA(SDK::AShooterPlayerController::StaticClass())) return;
-
-        SDK::AShooterPlayerController* PC = static_cast<SDK::AShooterPlayerController*>(LP->PlayerController);
-        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
-        if (!g_Config::bAutoOpenGachaCrystals) {
-            ClearAutoGachaTarget(PC, true);
-            g_AutoGachaPullRuntime.RetryAfter.clear();
-            g_AutoGachaPullRuntime.Status = "自动打开嘎查水晶未启用";
-            return;
-        }
-
-        SDK::APrimalCharacter* InventoryOwner = GetPlayerInventoryOwner(PC);
-        SDK::UPrimalInventoryComponent* Inventory = InventoryOwner ? InventoryOwner->MyInventoryComponent : nullptr;
-        if (!Inventory) {
-            g_AutoGachaPullRuntime.Status = "等待人物背包数据";
-            return;
-        }
-
-        if (SDK::UPrimalItem* Item = FindGachaCrystalInInventory(Inventory)) {
-            if (now - lastUseTime >= UseInterval) {
-                PC->ServerRequestInventoryUseItem(Inventory, Item->ItemID, Item->SlotIndex);
-                g_AutoGachaPullRuntime.Status = std::format(
-                    "正在以 {}ms 间隔打开人物背包内的嘎查水晶", IntervalMilliseconds);
-                lastUseTime = now;
-            }
-            return; // Empty the player inventory before pulling another stack.
-        }
-
-        ProcessAutoGachaVaultPull(World, PC, Human);
-    }
-
-    std::string GetAutoPullGachaStatus() {
-        return g_AutoGachaPullRuntime.Status;
-    }
-
     void AutoEatDrink(SDK::UWorld* World) {
         using Clock = std::chrono::steady_clock;
         static Clock::time_point NextCheck = Clock::time_point::min();
@@ -3008,7 +2685,7 @@ namespace g_Hack {
         NextCheck = Now + std::chrono::milliseconds(250);
 
         SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
-        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
+        SDK::AShooterCharacter* Human = GetLocalConsumableCharacter(World);
         if (!PC || !Human || Human->IsDead() || !Human->MyInventoryComponent ||
             !Human->MyCharacterStatusComponent) {
             g_AutoEatDrinkStatus = "等待人物、背包和状态数据";
@@ -3093,7 +2770,7 @@ namespace g_Hack {
         NextCheck = Now + std::chrono::milliseconds(250);
 
         SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
-        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
+        SDK::AShooterCharacter* Human = GetLocalConsumableCharacter(World);
         if (!PC || !Human || Human->IsDead() || !Human->MyInventoryComponent ||
             !Human->MyCharacterStatusComponent) {
             g_AutoBrewStatus = "等待人物、背包和状态数据";
@@ -3169,6 +2846,756 @@ namespace g_Hack {
 
     std::string GetAutoBrewStatus() {
         return g_AutoBrewStatus;
+    }
+
+    // ================= 自动汤类增益（buff 到期自动续） =================
+    namespace {
+        std::string g_AutoBuffSoupStatus = "自动汤类增益未启用";
+        std::string g_FireExtinguishStatus = "自动灭火未启用";
+
+        // 归一化类名链：沿继承链拼接类名，小写并去掉非字母数字。
+        std::string NormalizedClassChain(const SDK::UObject* Object) {
+            std::string Out;
+            if (!Object || !Object->Class) return Out;
+            for (auto* C = Object->Class; C; C = static_cast<SDK::UClass*>(C->SuperStruct)) {
+                Out += NormalizeChain(C->GetName());
+                Out += ' ';
+            }
+            Out += NormalizeChain(Object->GetName());
+            return Out;
+        }
+
+        bool SoupKindEnabled(SoupKind Kind) {
+            switch (Kind) {
+                case SoupKind::BattleTartare: return g_Config::bSoupBattleTartare;
+                case SoupKind::CactusBroth: return g_Config::bSoupCactusBroth;
+                case SoupKind::FocalChili: return g_Config::bSoupFocalChili;
+                case SoupKind::FriaCurry: return g_Config::bSoupFriaCurry;
+                case SoupKind::CalienSoup: return g_Config::bSoupCalienSoup;
+                case SoupKind::LazarusChowder: return g_Config::bSoupLazarusChowder;
+                case SoupKind::EnduroStew: return g_Config::bSoupEnduroStew;
+                case SoupKind::ShadowSteak: return g_Config::bSoupShadowSteak;
+                case SoupKind::MushroomBrew: return g_Config::bSoupMushroomBrew;
+                default: return false;
+            }
+        }
+
+        SDK::UPrimalItem* FindBuffingSoupItem(SDK::UPrimalInventoryComponent* Inventory, SoupKind Kind) {
+            if (!IsUsableObject(Inventory)) return nullptr;
+            const auto Tokens = SoupItemTokens(Kind);
+            for (int32_t Index = 0; Index < Inventory->InventoryItems.Num(); ++Index) {
+                SDK::UPrimalItem* Item = Inventory->InventoryItems[Index];
+                if (!IsUsableObject(Item) || Item->ItemQuantity <= 0 ||
+                    Item->bIsBlueprint || Item->bIsEngram || Item->bIsItemSkin) continue;
+                const std::string Chain = NormalizedClassChain(Item);
+                if (!IsBuffingSoupChain(Chain) || !ChainContainsAnyToken(Chain, Tokens)) continue;
+                return Item;
+            }
+            return nullptr;
+        }
+
+        bool HumanHasSoupBuff(SDK::AShooterCharacter* Human, SoupKind Kind) {
+            SDK::TArray<SDK::APrimalBuff*> Buffs{};
+            Human->GetAllBuffs(&Buffs);
+            if (Buffs.Num() < 0 || Buffs.Num() > 4096) return false;
+            const auto Tokens = SoupBuffTokens(Kind);
+            for (int32_t Index = 0; Index < Buffs.Num(); ++Index) {
+                SDK::APrimalBuff* Buff = Buffs[Index];
+                if (!IsUsableObject(Buff)) continue;
+                if (ChainContainsAnyToken(NormalizedClassChain(Buff), Tokens)) return true;
+            }
+            return false;
+        }
+
+        bool HumanIsBurning(SDK::AShooterCharacter* Human) {
+            SDK::TArray<SDK::APrimalBuff*> Buffs{};
+            Human->GetAllBuffs(&Buffs);
+            if (Buffs.Num() < 0 || Buffs.Num() > 4096) return false;
+            for (int32_t Index = 0; Index < Buffs.Num(); ++Index) {
+                SDK::APrimalBuff* Buff = Buffs[Index];
+                if (!IsUsableObject(Buff)) continue;
+                if (IsBurningBuffChain(NormalizedClassChain(Buff))) return true;
+            }
+            return false;
+        }
+
+        SDK::UPrimalItem* FindAntifireGrenade(SDK::UPrimalInventoryComponent* Inventory) {
+            if (!IsUsableObject(Inventory)) return nullptr;
+            for (int32_t Index = 0; Index < Inventory->InventoryItems.Num(); ++Index) {
+                SDK::UPrimalItem* Item = Inventory->InventoryItems[Index];
+                if (!IsUsableObject(Item) || Item->ItemQuantity <= 0 ||
+                    Item->bIsBlueprint || Item->bIsEngram || Item->bIsItemSkin) continue;
+                if (IsAntifireGrenadeChain(NormalizedClassChain(Item))) return Item;
+            }
+            return nullptr;
+        }
+
+        std::string JoinNames(const std::vector<std::string>& Names) {
+            std::string Out;
+            for (size_t I = 0; I < Names.size(); ++I) {
+                if (I) Out += "、";
+                Out += Names[I];
+            }
+            return Out;
+        }
+    }
+
+    void AutoBuffSoup(SDK::UWorld* World) {
+        using Clock = std::chrono::steady_clock;
+        static Clock::time_point NextCheck = Clock::time_point::min();
+        static Clock::time_point NextUse[static_cast<int>(SoupKind::Count)]{};
+
+        if (!g_Config::bAutoBuffSoup) {
+            g_AutoBuffSoupStatus = "自动汤类增益未启用";
+            NextCheck = Clock::time_point::min();
+            return;
+        }
+        const Clock::time_point Now = Clock::now();
+        if (NextCheck != Clock::time_point::min() && Now < NextCheck) return;
+        NextCheck = Now + std::chrono::milliseconds(500);
+
+        SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
+        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
+        if (!PC || !Human || Human->IsDead() || !IsUsableObject(Human->MyInventoryComponent)) {
+            g_AutoBuffSoupStatus = "等待人物与背包数据";
+            return;
+        }
+        auto* Inventory = Human->MyInventoryComponent;
+
+        std::vector<std::string> Missing;
+        for (int K = 0; K < static_cast<int>(SoupKind::Count); ++K) {
+            const auto Kind = static_cast<SoupKind>(K);
+            if (!SoupKindEnabled(Kind)) continue;
+            if (HumanHasSoupBuff(Human, Kind)) continue;
+            if (NextUse[K] != Clock::time_point::min() && Now < NextUse[K]) continue;
+
+            SDK::UPrimalItem* Soup = FindBuffingSoupItem(Inventory, Kind);
+            if (!Soup) {
+                Missing.emplace_back(SoupDisplayName(Kind));
+                continue;
+            }
+            const std::string Name = Soup->DescriptiveNameBase ?
+                Soup->DescriptiveNameBase.ToString() : Soup->Class->GetName();
+            PC->ServerRequestInventoryUseItem(Inventory, Soup->ItemID, Soup->SlotIndex);
+            NextUse[K] = Now + std::chrono::milliseconds(1500);
+            g_AutoBuffSoupStatus = std::format("已使用 {} 续增益", Name);
+            return;
+        }
+        g_AutoBuffSoupStatus = Missing.empty() ? "所选汤类增益均生效中" :
+            std::format("缺少汤类：{}", JoinNames(Missing));
+    }
+
+    std::string GetAutoBuffSoupStatus() {
+        return g_AutoBuffSoupStatus;
+    }
+
+    // ================= 身体着火自动投掷灭火手雷 =================
+    namespace {
+        enum class ExtinguishStage { Idle, WaitEquip, WaitAim, WaitThrow, WaitRestore };
+    }
+
+    void AutoFireExtinguish(SDK::UWorld* World) {
+        using Clock = std::chrono::steady_clock;
+        struct FireExtinguishState {
+            ExtinguishStage Stage = ExtinguishStage::Idle;
+            Clock::time_point NextCheck = Clock::time_point::min();
+            Clock::time_point NextAction = Clock::time_point::min();
+            Clock::time_point NextGrenade = Clock::time_point::min();
+            SDK::FItemNetID GrenadeID{};
+            SDK::FItemNetID PrevWeaponID{};
+            SDK::UPrimalItem* GrenadeItem = nullptr; // 免举起动画的临时补丁对象
+            bool HasPrevWeapon = false;
+            bool AimDown = false;
+            SDK::FRotator SavedRotation{};
+            SDK::UWorld* World = nullptr;
+        };
+        static FireExtinguishState S;
+
+        // 恢复物品上的“跳过装备动画”临时补丁（bSkipEquipAnimation）。
+        auto RestoreGrenadeAnimPatch = [&]() {
+            if (S.GrenadeItem && IsUsableObject(S.GrenadeItem)) S.GrenadeItem->bSkipEquipAnimation = false;
+            S.GrenadeItem = nullptr;
+        };
+        auto RestoreAim = [&](SDK::AShooterPlayerController* PC) {
+            if (S.AimDown && PC) PC->SetControlRotation(S.SavedRotation);
+            S.AimDown = false;
+        };
+        auto CancelToIdle = [&](SDK::AShooterPlayerController* PC, const char* Status, Clock::time_point NextGrenadeAt) {
+            RestoreAim(PC);
+            RestoreGrenadeAnimPatch();
+            S = FireExtinguishState{};
+            S.World = World;
+            S.NextGrenade = NextGrenadeAt;
+            g_FireExtinguishStatus = Status;
+        };
+
+        if (!g_Config::bAutoFireExtinguish) {
+            auto* PC0 = GetLocalShooterController(World);
+            CancelToIdle(PC0, "自动灭火未启用", Clock::time_point::min());
+            return;
+        }
+        if (S.World != World) {
+            auto* PC0 = GetLocalShooterController(World);
+            CancelToIdle(PC0, "世界已切换，自动灭火就绪", Clock::time_point::min());
+            return;
+        }
+
+        const Clock::time_point Now = Clock::now();
+        SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
+        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
+        const HWND GameWindow = g_MDX12::g_ProcessWindow::g_mainWindow;
+        const bool Ready = PC && Human && !Human->IsDead() &&
+            IsUsableObject(Human->MyInventoryComponent) && !g_MDX12::g_MenuState::g_isOpen &&
+            !PC->bShowMouseCursor && !PC->IsViewingInventoryUI() && !IsFreeCameraActive() &&
+            (!GameWindow || GetForegroundWindow() == GameWindow);
+        if (!Ready) {
+            if (S.Stage != ExtinguishStage::Idle)
+                CancelToIdle(PC, "界面或状态变化，本次灭火已取消", S.NextGrenade);
+            else if (S.NextCheck != Clock::time_point::min() && Now < S.NextCheck) return;
+            else {
+                S.NextCheck = Now + std::chrono::milliseconds(500);
+                g_FireExtinguishStatus = !PC || !Human ? "等待人物与游戏前台" :
+                    Human->IsDead() ? "人物死亡，自动灭火暂停" : "菜单、背包或游戏未在前台，自动灭火暂停";
+            }
+            return;
+        }
+
+        const float IntervalSeconds = std::clamp(g_Config::FireExtinguishIntervalSeconds, 2.0f, 60.0f);
+
+        switch (S.Stage) {
+            case ExtinguishStage::Idle: {
+                if (S.NextCheck != Clock::time_point::min() && Now < S.NextCheck) return;
+                S.NextCheck = Now + std::chrono::milliseconds(250);
+                if (!HumanIsBurning(Human)) {
+                    g_FireExtinguishStatus = "未检测到身体燃烧";
+                    return;
+                }
+                if (S.NextGrenade != Clock::time_point::min() && Now < S.NextGrenade) {
+                    g_FireExtinguishStatus = "检测到燃烧，等待灭火手雷冷却";
+                    return;
+                }
+                auto* Inventory = Human->MyInventoryComponent;
+                SDK::UPrimalItem* Grenade = FindAntifireGrenade(Inventory);
+                if (!Grenade) {
+                    g_FireExtinguishStatus = "检测到燃烧，但背包没有灭火手雷";
+                    S.NextGrenade = Now + std::chrono::seconds(3);
+                    return;
+                }
+                if (IsUsableObject(Human->CurrentWeapon) &&
+                    IsUsableObject(Human->CurrentWeapon->AssociatedPrimalItem)) {
+                    S.PrevWeaponID = Human->CurrentWeapon->AssociatedPrimalItem->ItemID;
+                    S.HasPrevWeapon = true;
+                }
+                S.GrenadeID = Grenade->ItemID;
+                // 跳过装备时的举起动画，让灭火手雷“秒装备→立即投掷”。
+                Grenade->bSkipEquipAnimation = true;
+                S.GrenadeItem = Grenade;
+                PC->ServerEquipPawnItem(Grenade->ItemID);
+                S.Stage = ExtinguishStage::WaitEquip;
+                S.NextAction = Now + std::chrono::milliseconds(1500);
+                g_FireExtinguishStatus = "已装备灭火手雷，准备在脚下投掷";
+                return;
+            }
+            case ExtinguishStage::WaitEquip: {
+                // 武器实例就绪即投掷：按物品 ID 或类名链（含模组变体）双保险。
+                const bool Equipped = [&]() {
+                    auto* W = Human->CurrentWeapon;
+                    if (!IsUsableObject(W)) return false;
+                    if (IsUsableObject(W->AssociatedPrimalItem) &&
+                        W->AssociatedPrimalItem->ItemID.ItemID1 == S.GrenadeID.ItemID1 &&
+                        W->AssociatedPrimalItem->ItemID.ItemID2 == S.GrenadeID.ItemID2) return true;
+                    return IsAntifireGrenadeChain(NormalizedClassChain(W));
+                }();
+                if (Equipped) {
+                    S.SavedRotation = PC->GetControlRotation();
+                    SDK::FRotator Down = S.SavedRotation;
+                    Down.Pitch = -78.0f;
+                    Down.Roll = 0.0f;
+                    PC->SetControlRotation(Down);
+                    S.AimDown = true;
+                    S.Stage = ExtinguishStage::WaitAim;
+                    S.NextAction = Now + std::chrono::milliseconds(200);
+                    g_FireExtinguishStatus = "已压低视角，准备向脚下投掷";
+                }
+                else if (Now >= S.NextAction) {
+                    CancelToIdle(PC, "装备灭火手雷超时，本次灭火已取消",
+                        Now + std::chrono::seconds(3));
+                }
+                return;
+            }
+            case ExtinguishStage::WaitAim: {
+                if (Now < S.NextAction) return;
+                auto* Weapon = Human->CurrentWeapon;
+                if (!IsUsableObject(Weapon) ||
+                    !Weapon->IsA(SDK::AShooterWeapon_Projectile::StaticClass())) {
+                    CancelToIdle(PC, "未取得投射物武器，本次灭火已取消",
+                        Now + std::chrono::seconds(3));
+                    return;
+                }
+                auto* ProjectileWeapon = static_cast<SDK::AShooterWeapon_Projectile*>(Weapon);
+                SDK::FVector Origin{}, ShootDir{};
+                ProjectileWeapon->BPGetProjectileSpawnTransform(&Origin, &ShootDir);
+                SDK::FVector_NetQuantizeNormal Dir{};
+                Dir.X = ShootDir.X; Dir.Y = ShootDir.Y; Dir.Z = ShootDir.Z;
+                const int32_t ProjectileID = static_cast<int32_t>(GetTickCount64() & 0x7FFFFFFF);
+                ProjectileWeapon->ServerFireProjectile(Origin, Dir, ProjectileID);
+                RestoreGrenadeAnimPatch(); // 装备动画已过，恢复物品原值
+                S.Stage = ExtinguishStage::WaitThrow;
+                S.NextAction = Now + std::chrono::milliseconds(400);
+                g_FireExtinguishStatus = "已向脚下投掷灭火手雷";
+                return;
+            }
+            case ExtinguishStage::WaitThrow: {
+                if (Now < S.NextAction) return;
+                RestoreAim(PC);
+                if (S.HasPrevWeapon) {
+                    PC->ServerEquipPawnItem(S.PrevWeaponID);
+                    S.Stage = ExtinguishStage::WaitRestore;
+                    S.NextAction = Now + std::chrono::milliseconds(1500);
+                    g_FireExtinguishStatus = "灭火完成，正在恢复原武器";
+                }
+                else {
+                    S = FireExtinguishState{};
+                    S.World = World;
+                    S.NextGrenade = Now + std::chrono::milliseconds(
+                        static_cast<int64_t>(IntervalSeconds * 1000.0f));
+                    g_FireExtinguishStatus = "灭火完成";
+                }
+                return;
+            }
+            case ExtinguishStage::WaitRestore: {
+                const bool Restored = !S.HasPrevWeapon ||
+                    (IsUsableObject(Human->CurrentWeapon) &&
+                        IsUsableObject(Human->CurrentWeapon->AssociatedPrimalItem) &&
+                        Human->CurrentWeapon->AssociatedPrimalItem->ItemID.ItemID1 == S.PrevWeaponID.ItemID1 &&
+                        Human->CurrentWeapon->AssociatedPrimalItem->ItemID.ItemID2 == S.PrevWeaponID.ItemID2);
+                if (Restored || Now >= S.NextAction) {
+                    S = FireExtinguishState{};
+                    S.World = World;
+                    S.NextGrenade = Now + std::chrono::milliseconds(
+                        static_cast<int64_t>(IntervalSeconds * 1000.0f));
+                    g_FireExtinguishStatus = Restored ? "灭火完成，已恢复原武器" :
+                        "恢复原武器超时，进入灭火冷却";
+                }
+                return;
+            }
+        }
+    }
+
+    std::string GetFireExtinguishStatus() {
+        return g_FireExtinguishStatus;
+    }
+
+    void AutoPickupDroppedItems(SDK::UWorld* World) {
+        using Clock = std::chrono::steady_clock;
+        struct AutoPickupRuntimeState {
+            SDK::UWorld* World = nullptr;
+            Clock::time_point NextScan = Clock::time_point::min();
+            std::unordered_map<uint64_t, Clock::time_point> RetryAfter;
+        };
+        static AutoPickupRuntimeState State;
+
+        if (!g_Config::bAutoPickupDroppedItems) {
+            State = AutoPickupRuntimeState{};
+            SetAutoPickupStatus("自动拾取未启用");
+            return;
+        }
+        if (State.World != World) {
+            State = AutoPickupRuntimeState{};
+            State.World = World;
+        }
+
+        const Clock::time_point Now = Clock::now();
+        if (State.NextScan != Clock::time_point::min() && Now < State.NextScan) return;
+        const int64_t IntervalMilliseconds = std::clamp<int64_t>(
+            static_cast<int64_t>(g_Config::AutoPickupIntervalMs), 150, 2000);
+        State.NextScan = Now + std::chrono::milliseconds(IntervalMilliseconds);
+
+        SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
+        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
+        if (!World || !IsUsableObject(PC) || !IsUsableObject(Human) || Human->IsDead() ||
+            !IsUsableObject(Human->MyInventoryComponent) ||
+            !IsUsableObject(Human->MyCharacterStatusComponent) || !IsUsableObject(PC->Pawn)) {
+            SetAutoPickupStatus("等待人物、状态与世界数据");
+            return;
+        }
+
+        // Picking up while mounted is ambiguous because the server may route
+        // weight and ownership to a different inventory. Restrict this helper
+        // to a locally controlled human on foot.
+        if (!PC->Pawn->IsA(SDK::AShooterCharacter::StaticClass()) ||
+            PC->Pawn->IsA(SDK::APrimalDinoCharacter::StaticClass()) || PC->Pawn != Human) {
+            SetAutoPickupStatus("骑乘时暂停；请步行使用自动拾取");
+            return;
+        }
+
+        if (g_MDX12::g_MenuState::g_isOpen || PC->bShowMouseCursor) {
+            SetAutoPickupStatus("菜单、背包或游戏界面打开，已暂停");
+            return;
+        }
+        const HWND GameWindow = g_MDX12::g_ProcessWindow::g_mainWindow;
+        if (!GameWindow || GetForegroundWindow() != GameWindow) {
+            SetAutoPickupStatus("游戏未处于前台，已暂停");
+            return;
+        }
+
+        float WeightRatio = Human->MyCharacterStatusComponent->BPGetPercentStatusValue(
+            SDK::EPrimalCharacterStatusValue::Weight);
+        if (!std::isfinite(WeightRatio)) {
+            SetAutoPickupStatus("人物负重数据无效");
+            return;
+        }
+        if (WeightRatio > 1.5f) WeightRatio /= 100.0f;
+        WeightRatio = std::clamp(WeightRatio, 0.0f, 1.0f);
+        const float MaximumWeightRatio = std::clamp(
+            g_Config::AutoPickupMaxWeightPercent, 10.0f, 100.0f) / 100.0f;
+        if (WeightRatio >= MaximumWeightRatio) {
+            SetAutoPickupStatus(std::format(
+                "负重 {:.0f}% 已达到停止阈值 {:.0f}%",
+                WeightRatio * 100.0f, MaximumWeightRatio * 100.0f));
+            return;
+        }
+        const float CurrentWeight = Human->MyCharacterStatusComponent->BPGetCurrentStatusValue(
+            SDK::EPrimalCharacterStatusValue::Weight);
+        const float MaximumWeight = Human->MyCharacterStatusComponent->BPGetMaxStatusValue(
+            SDK::EPrimalCharacterStatusValue::Weight);
+        const bool HasAbsoluteWeightData = std::isfinite(CurrentWeight) &&
+            std::isfinite(MaximumWeight) && CurrentWeight >= 0.0f && MaximumWeight > 0.0f;
+
+        SDK::UClass* DroppedItemClass = SDK::ADroppedItem::StaticClass();
+        if (!DroppedItemClass) {
+            SetAutoPickupStatus("掉落物类型尚未加载");
+            return;
+        }
+
+        SDK::TArray<SDK::AActor*> Actors;
+        SDK::UGameplayStatics::GetAllActorsOfClass(World, DroppedItemClass, &Actors);
+        if (Actors.Num() < 0 || Actors.Num() > 100000) {
+            SetAutoPickupStatus("掉落物列表同步异常，已跳过本轮");
+            return;
+        }
+
+        const float MaximumRangeMeters = std::clamp(
+            g_Config::AutoPickupRangeMeters, 1.0f, 5.0f);
+        SDK::ADroppedItem* BestDroppedItem = nullptr;
+        SDK::UObject* BestUseObject = nullptr;
+        int32_t BestUseIndex = -1;
+        uint64_t BestDroppedItemIdentity = 0;
+        float BestDistanceMeters = std::numeric_limits<float>::infinity();
+        std::string BestItemName;
+        int32_t InRangeCount = 0;
+        int32_t FilteredCount = 0;
+        int32_t BlockedCount = 0;
+        int32_t WeightBlockedCount = 0;
+
+        for (int32_t ActorIndex = 0; ActorIndex < Actors.Num(); ++ActorIndex) {
+            SDK::AActor* Actor = Actors[ActorIndex];
+            if (!IsUsableObject(Actor) || !Actor->IsA(DroppedItemClass)) continue;
+            auto* DroppedItem = static_cast<SDK::ADroppedItem*>(Actor);
+            if (DroppedItem->bPreventPickup || !IsUsableObject(DroppedItem->MyItem) ||
+                !DroppedItem->MyItem->Class || DroppedItem->MyItem->ItemQuantity <= 0) {
+                continue;
+            }
+
+            const float DistanceMeters = Human->GetDistanceTo(DroppedItem) * 0.01f;
+            if (!std::isfinite(DistanceMeters) || DistanceMeters > MaximumRangeMeters) continue;
+            ++InRangeCount;
+
+            int32_t DroppedItemSerialNumber = -1;
+            if (!TryGetLiveObjectSerial(DroppedItem, DroppedItem->Index,
+                &DroppedItemSerialNumber)) {
+                ++BlockedCount;
+                continue;
+            }
+            const uint64_t DroppedItemIdentity =
+                (static_cast<uint64_t>(static_cast<uint32_t>(DroppedItem->Index)) << 32) |
+                static_cast<uint32_t>(DroppedItemSerialNumber);
+            const auto RetryIt = State.RetryAfter.find(DroppedItemIdentity);
+            if (RetryIt != State.RetryAfter.end() && Now < RetryIt->second) continue;
+
+            const std::string ItemClassName = DroppedItem->MyItem->Class->GetName();
+            if ((DroppedItem->bIsWildEgg && !g_Config::bDroppedItemEgg) ||
+                (g_Config::bAutoPickupUseDroppedItemFilter &&
+                    !g_Util::IsDroppedItemAllowed(
+                        ItemClassName, DroppedItem->MyItem->ItemQuantity))) {
+                ++FilteredCount;
+                continue;
+            }
+
+            if (HasAbsoluteWeightData) {
+                const float StackWeight = DroppedItem->MyItem->GetItemWeightForInventory(
+                    false, false, Human->MyInventoryComponent);
+                if (std::isfinite(StackWeight) && StackWeight > 0.0f &&
+                    (CurrentWeight + StackWeight) / MaximumWeight > MaximumWeightRatio) {
+                    ++WeightBlockedCount;
+                    continue;
+                }
+            }
+
+            const float ObjectPickupRangeUnits = DroppedItem->GetMaxPickupDistance(PC);
+            if (std::isfinite(ObjectPickupRangeUnits) && ObjectPickupRangeUnits > 0.0f &&
+                DistanceMeters * 100.0f > ObjectPickupRangeUnits) {
+                ++BlockedCount;
+                continue;
+            }
+            if (!DroppedItem->IsAllowedToPickupItem(PC) ||
+                !DroppedItem->CanCharPickUpItem(Human, false) ||
+                !PC->LineOfSightTo(DroppedItem, SDK::FVector{}, false)) {
+                ++BlockedCount;
+                continue;
+            }
+
+            SDK::TArray<SDK::FMultiUseEntry> Entries;
+            DroppedItem->GetMultiUseEntries(PC, &Entries, -1);
+            if (Entries.Num() < 0 || Entries.Num() > 128) {
+                ++BlockedCount;
+                continue;
+            }
+
+            SDK::UObject* UseObject = nullptr;
+            int32_t UseIndex = -1;
+            int32_t BestEntryScore = std::numeric_limits<int32_t>::min();
+            for (int32_t EntryIndex = 0; EntryIndex < Entries.Num(); ++EntryIndex) {
+                const SDK::FMultiUseEntry& Entry = Entries[EntryIndex];
+                if (Entry.bHideFromUI || Entry.bDisableUse || Entry.bClientSideOnly ||
+                    Entry.UseIndex < 0) {
+                    continue;
+                }
+
+                const std::string RawText = Entry.UseString.ToString();
+                const std::string NormalizedText = NormalizeGachaItemName(RawText);
+                const bool IsPickupEntry =
+                    NormalizedText.find("pickup") != std::string::npos ||
+                    RawText.find("拾取") != std::string::npos ||
+                    RawText.find("捡起") != std::string::npos ||
+                    RawText.find("捡取") != std::string::npos ||
+                    RawText.find("拿取") != std::string::npos;
+                // Current local-server disassembly confirms 100 is the
+                // single-stack pickup entry. Still enumerate the live entries
+                // so disabled, hidden or client-only options are never guessed.
+                const bool IsKnownSinglePickupIndex = Entry.UseIndex == 100;
+                if (!IsPickupEntry && !IsKnownSinglePickupIndex) continue;
+
+                const bool IsPickupAllEntry =
+                    NormalizedText.find("pickupall") != std::string::npos ||
+                    NormalizedText.find("nearby") != std::string::npos ||
+                    RawText.find("全部") != std::string::npos ||
+                    RawText.find("附近") != std::string::npos ||
+                    RawText.find("周围") != std::string::npos;
+                if (IsPickupAllEntry) continue;
+
+                const int32_t EntryScore = Entry.Priority +
+                    (IsKnownSinglePickupIndex ? 10000 : 0);
+                if (EntryScore <= BestEntryScore) continue;
+                SDK::UObject* CandidateUseObject = IsUsableObject(Entry.ForComponent)
+                    ? static_cast<SDK::UObject*>(Entry.ForComponent)
+                    : static_cast<SDK::UObject*>(DroppedItem);
+                if (!IsUsableObject(CandidateUseObject)) continue;
+                BestEntryScore = EntryScore;
+                UseObject = CandidateUseObject;
+                UseIndex = Entry.UseIndex;
+            }
+
+            if (!UseObject || UseIndex < 0) {
+                ++BlockedCount;
+                continue;
+            }
+            if (DistanceMeters >= BestDistanceMeters) continue;
+
+            BestDroppedItem = DroppedItem;
+            BestUseObject = UseObject;
+            BestUseIndex = UseIndex;
+            BestDroppedItemIdentity = DroppedItemIdentity;
+            BestDistanceMeters = DistanceMeters;
+            BestItemName = DroppedItem->MyItem->DescriptiveNameBase
+                ? DroppedItem->MyItem->DescriptiveNameBase.ToString()
+                : ItemClassName;
+        }
+
+        if (!BestDroppedItem || !BestUseObject || BestUseIndex < 0) {
+            if (InRangeCount == 0) {
+                SetAutoPickupStatus(std::format(
+                    "{:.1f}m 内没有可拾取掉落物（负重 {:.0f}%）",
+                    MaximumRangeMeters, WeightRatio * 100.0f));
+            }
+            else if (WeightBlockedCount > 0 &&
+                FilteredCount + BlockedCount + WeightBlockedCount >= InRangeCount) {
+                SetAutoPickupStatus(std::format(
+                    "范围内 {} 个；预计拾取后超过负重阈值 {} 个",
+                    InRangeCount, WeightBlockedCount));
+            }
+            else if (FilteredCount > 0 &&
+                FilteredCount + BlockedCount + WeightBlockedCount >= InRangeCount) {
+                SetAutoPickupStatus(std::format(
+                    "范围内 {} 个；筛选排除 {} 个，权限/视线/交互限制 {} 个",
+                    InRangeCount, FilteredCount, BlockedCount));
+            }
+            else if (BlockedCount > 0 &&
+                BlockedCount + WeightBlockedCount >= InRangeCount) {
+                SetAutoPickupStatus(std::format(
+                    "范围内 {} 个，但都不满足权限、视线、距离或普通拾取交互条件",
+                    InRangeCount));
+            }
+            else {
+                SetAutoPickupStatus("等待上一拾取请求确认");
+            }
+            return;
+        }
+
+        // The entry is generated by this exact dropped-item instance. The
+        // public RPC then repeats the normal server-side distance, permission,
+        // ownership and weight checks.
+        // A listen server may complete the pickup synchronously and destroy the
+        // actor before ProcessEvent returns, so snapshot identity before RPC.
+        PC->ServerMultiUse(BestUseObject, BestUseIndex);
+        State.RetryAfter[BestDroppedItemIdentity] = Now + std::chrono::milliseconds(1250);
+        if (State.RetryAfter.size() > 2048) State.RetryAfter.clear();
+        SetAutoPickupStatus(std::format(
+            "已请求拾取 {}（{:.1f}m，负重 {:.0f}%）",
+            BestItemName, BestDistanceMeters, WeightRatio * 100.0f));
+    }
+
+    std::string GetAutoPickupStatus() {
+        std::scoped_lock Lock(g_AutoPickupStatusMutex);
+        return g_AutoPickupStatus;
+    }
+
+    void AutoRepairItems(SDK::UWorld* World) {
+        using Clock = std::chrono::steady_clock;
+        struct AutoRepairRuntimeState {
+            SDK::UWorld* World = nullptr;
+            Clock::time_point NextScan = Clock::time_point::min();
+            Clock::time_point NextRequest = Clock::time_point::min();
+        };
+        static AutoRepairRuntimeState State;
+
+        if (!g_Config::bAutoRepairItems) {
+            State = AutoRepairRuntimeState{};
+            SetAutoRepairStatus("智能自动修理未启用");
+            return;
+        }
+        if (State.World != World) {
+            State = AutoRepairRuntimeState{};
+            State.World = World;
+        }
+
+        const Clock::time_point Now = Clock::now();
+        if (State.NextScan != Clock::time_point::min() && Now < State.NextScan) return;
+        State.NextScan = Now + std::chrono::milliseconds(250);
+
+        SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
+        SDK::APrimalCharacter* InventoryOwner = GetPlayerInventoryOwner(PC);
+        if (!World || !IsUsableObject(PC) || !IsUsableObject(InventoryOwner) ||
+            !InventoryOwner->IsA(SDK::AShooterCharacter::StaticClass()) ||
+            InventoryOwner->IsA(SDK::APrimalDinoCharacter::StaticClass()) ||
+            !IsUsableObject(InventoryOwner->MyInventoryComponent)) {
+            SetAutoRepairStatus("等待人物与背包数据");
+            return;
+        }
+
+        if (g_MDX12::g_MenuState::g_isOpen || PC->bShowMouseCursor) {
+            SetAutoRepairStatus("菜单、背包或游戏界面打开，已暂停");
+            return;
+        }
+        const HWND GameWindow = g_MDX12::g_ProcessWindow::g_mainWindow;
+        if (!GameWindow || GetForegroundWindow() != GameWindow) {
+            SetAutoRepairStatus("游戏未处于前台，已暂停");
+            return;
+        }
+
+        SDK::UPrimalInventoryComponent* Inventory = InventoryOwner->MyInventoryComponent;
+        if (!Inventory->IsAllowedInventoryAccess(PC)) {
+            SetAutoRepairStatus("当前人物背包不可访问");
+            return;
+        }
+        if (!Inventory->IsRepairingAllowed()) {
+            SetAutoRepairStatus("当前背包或服务器规则不允许修理");
+            return;
+        }
+        if (Inventory->IsOnCraftRequestCooldown()) {
+            SetAutoRepairStatus("等待服务器制造/修理冷却");
+            return;
+        }
+
+        const float RepairThresholdPercent = std::clamp(
+            g_Config::AutoRepairThresholdPercent, 1.0f, 95.0f);
+        SDK::UPrimalItem* BestItem = nullptr;
+        float BestDurabilityPercent = std::numeric_limits<float>::infinity();
+        int32_t DamagedBelowThreshold = 0;
+        std::unordered_set<SDK::UPrimalItem*> SeenItems;
+
+        auto ConsiderItems = [&](const SDK::TArray<SDK::UPrimalItem*>& Items) {
+            const int32_t ItemCount = Items.Num();
+            if (ItemCount < 0 || ItemCount > 100000) return;
+            for (int32_t ItemIndex = 0; ItemIndex < ItemCount; ++ItemIndex) {
+                SDK::UPrimalItem* Item = Items[ItemIndex];
+                if (!IsUsableObject(Item) || !Item->Class || !SeenItems.insert(Item).second ||
+                    !Item->bUseItemDurability || Item->bIsItemSkin || Item->bIsBlueprint ||
+                    Item->bIsEngram || Item->bIsRepairing) {
+                    continue;
+                }
+
+                float DurabilityPercent = Item->GetDurabilityPercentage();
+                if (!std::isfinite(DurabilityPercent)) continue;
+                if (DurabilityPercent <= 1.5f) DurabilityPercent *= 100.0f;
+                DurabilityPercent = std::clamp(DurabilityPercent, 0.0f, 100.0f);
+                if (DurabilityPercent > RepairThresholdPercent || DurabilityPercent >= 99.99f) {
+                    continue;
+                }
+                ++DamagedBelowThreshold;
+
+                if (!Item->CanRepair(false, false, false)) continue;
+                if (DurabilityPercent >= BestDurabilityPercent) continue;
+                BestDurabilityPercent = DurabilityPercent;
+                BestItem = Item;
+            }
+        };
+
+        ConsiderItems(Inventory->EquippedItems);
+        if (g_Config::bAutoRepairIncludeBackpack) {
+            ConsiderItems(Inventory->InventoryItems);
+        }
+
+        if (!BestItem) {
+            if (DamagedBelowThreshold > 0) {
+                SetAutoRepairStatus(std::format(
+                    "{} 件低于阈值，但缺少材料、工作台或修理条件",
+                    DamagedBelowThreshold));
+            }
+            else {
+                SetAutoRepairStatus(std::format(
+                    "没有耐久低于 {:.0f}% 的{}",
+                    RepairThresholdPercent,
+                    g_Config::bAutoRepairIncludeBackpack ? "装备或背包物品" : "已装备物品"));
+            }
+            return;
+        }
+
+        if (State.NextRequest != Clock::time_point::min() && Now < State.NextRequest) {
+            SetAutoRepairStatus(std::format(
+                "等待修理请求冷却；下一件 {}（耐久 {:.0f}%）",
+                BestItem->DescriptiveNameBase ? BestItem->DescriptiveNameBase.ToString() :
+                    BestItem->Class->GetName(),
+                BestDurabilityPercent));
+            return;
+        }
+
+        const std::string ItemName = BestItem->DescriptiveNameBase
+            ? BestItem->DescriptiveNameBase.ToString() : BestItem->Class->GetName();
+        const SDK::FItemNetID ItemID = BestItem->ItemID;
+        PC->ServerRepairItem(Inventory, ItemID);
+        const float IntervalSeconds = std::clamp(
+            g_Config::AutoRepairIntervalSeconds, 0.5f, 10.0f);
+        State.NextRequest = Now + std::chrono::duration_cast<Clock::duration>(
+            std::chrono::duration<float>(IntervalSeconds));
+        SetAutoRepairStatus(std::format(
+            "已请求修理 {}（耐久 {:.0f}%）；等待服务器确认",
+            ItemName, BestDurabilityPercent));
+    }
+
+    std::string GetAutoRepairStatus() {
+        std::scoped_lock Lock(g_AutoRepairStatusMutex);
+        return g_AutoRepairStatus;
     }
 
     void MaintainFishingRod(SDK::UWorld* World) {
@@ -3375,163 +3802,6 @@ namespace g_Hack {
         return g_FishingRodMaintenanceStatus;
     }
 
-    void TekChestJetNoCooldown(SDK::UWorld* World) {
-        if (!g_Config::bTekChestJetNoCooldown) {
-            g_TekChestJetStatus = "泰克胸甲喷射无冷却未启用";
-            return;
-        }
-
-        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
-        if (!Human || Human->IsDead()) {
-            g_TekChestJetStatus = "等待人物数据";
-            return;
-        }
-
-        SDK::ABuff_TekArmor_C* ChestBuff = nullptr;
-        SDK::TArray<SDK::APrimalBuff*> Buffs;
-        Human->GetAllBuffs(&Buffs);
-        SDK::UClass* TekArmorBuffClass = SDK::ABuff_TekArmor_C::StaticClass();
-        for (int32_t Index = 0; Index < Buffs.Num(); ++Index) {
-            SDK::APrimalBuff* Buff = Buffs[Index];
-            if (!IsUsableObject(Buff) || !TekArmorBuffClass || !Buff->IsA(TekArmorBuffClass)) continue;
-
-            SDK::ABuff_TekArmor_C* TekBuff = static_cast<SDK::ABuff_TekArmor_C*>(Buff);
-            std::string Identity = TekBuff->Class->GetName();
-            Identity += TekBuff->GetName();
-            Identity += TekBuff->GetFullName();
-            Identity = NormalizeGachaItemName(std::move(Identity));
-            uint8_t TekBuffEquipmentType = 0xFF;
-            uint8_t CurrentEquipmentSlot = 0xFF;
-            ReadReflectedByteValue(TekBuff, "TekBuffEquipmentType", &TekBuffEquipmentType);
-            ReadReflectedByteValue(TekBuff, "currentEquipmentSlot", &CurrentEquipmentSlot);
-            const uint8_t ShirtSlot = static_cast<uint8_t>(SDK::EPrimalEquipmentType::Shirt);
-            const bool IsShirtSlot = TekBuffEquipmentType == ShirtSlot ||
-                CurrentEquipmentSlot == ShirtSlot;
-            const bool IsChestIdentity = Identity.find("tekarmorshirt") != std::string::npos ||
-                Identity.find("tekshirt") != std::string::npos ||
-                Identity.find("tekchest") != std::string::npos ||
-                Identity.find("jetpack") != std::string::npos;
-            if (IsShirtSlot || IsChestIdentity) {
-                ChestBuff = TekBuff;
-                break;
-            }
-        }
-
-        if (!ChestBuff) {
-            g_TekChestJetStatus = "未检测到已装备的泰克胸甲 Buff";
-            return;
-        }
-
-        if (!Human->HasAuthority()) {
-            g_TekChestJetStatus =
-                "远程服务器：喷射冷却由服务端维护，客户端没有可安全重置的状态";
-            return;
-        }
-
-        const TekCooldownClearResult Cooldowns = ClearTekSkillCooldowns(Human,
-            { "chest", "shirt", "jet", "jetpack", "thruster", "thrust", "boost", "jump" },
-            { "chest", "shirt", "jet", "jetpack", "thruster" });
-        if (Cooldowns.ClearedCount > 0) {
-            g_TekChestJetStatus = std::format("已重置胸甲技能冷却: {}{}",
-                Cooldowns.ClearedNames,
-                Human->HasAuthority() ? "" : "（服务器可能继续校验）");
-            return;
-        }
-
-        g_TekChestJetStatus = Cooldowns.ActiveNames.empty() ?
-            "胸甲可正常触发；尚未捕获到喷射技能冷却，请先双击空格使用一次" :
-            std::format("未匹配胸甲冷却；当前活动冷却: {}", Cooldowns.ActiveNames);
-    }
-
-    std::string GetTekChestJetStatus() {
-        return g_TekChestJetStatus;
-    }
-
-    void TekGloveDashNoCooldown(SDK::UWorld* World) {
-        if (!g_Config::bTekGloveDashNoCooldown) {
-            g_TekGloveDashStatus = "泰克手套冲刺无冷却未启用";
-            return;
-        }
-
-        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
-        if (!Human || Human->IsDead()) {
-            g_TekGloveDashStatus = "等待人物数据";
-            return;
-        }
-
-        SDK::ABuff_TekArmor_C* GloveBuff = nullptr;
-        SDK::TArray<SDK::APrimalBuff*> Buffs;
-        Human->GetAllBuffs(&Buffs);
-        SDK::UClass* TekArmorBuffClass = SDK::ABuff_TekArmor_C::StaticClass();
-        for (int32_t Index = 0; Index < Buffs.Num(); ++Index) {
-            SDK::APrimalBuff* Buff = Buffs[Index];
-            if (!IsUsableObject(Buff) || !TekArmorBuffClass || !Buff->IsA(TekArmorBuffClass)) continue;
-
-            SDK::ABuff_TekArmor_C* TekBuff = static_cast<SDK::ABuff_TekArmor_C*>(Buff);
-            std::string Identity = TekBuff->Class->GetName();
-            Identity += TekBuff->GetName();
-            Identity += TekBuff->GetFullName();
-            Identity = NormalizeGachaItemName(std::move(Identity));
-            uint8_t TekBuffEquipmentType = 0xFF;
-            uint8_t CurrentEquipmentSlot = 0xFF;
-            ReadReflectedByteValue(TekBuff, "TekBuffEquipmentType", &TekBuffEquipmentType);
-            ReadReflectedByteValue(TekBuff, "currentEquipmentSlot", &CurrentEquipmentSlot);
-            const uint8_t GloveSlot = static_cast<uint8_t>(SDK::EPrimalEquipmentType::Gloves);
-            const bool IsGloveSlot = TekBuffEquipmentType == GloveSlot ||
-                CurrentEquipmentSlot == GloveSlot;
-            const bool IsGloveIdentity = Identity.find("tekarmorglove") != std::string::npos ||
-                Identity.find("tekglove") != std::string::npos ||
-                Identity.find("tekgauntlet") != std::string::npos ||
-                Identity.find("tekfist") != std::string::npos;
-            if (IsGloveSlot || IsGloveIdentity) {
-                GloveBuff = TekBuff;
-                break;
-            }
-        }
-
-        if (!GloveBuff) {
-            g_TekGloveDashStatus = "未检测到已装备的泰克手套 Buff";
-            return;
-        }
-
-        if (!Human->HasAuthority()) {
-            g_TekGloveDashStatus =
-                "远程服务器：拳套冷却由服务端维护，客户端没有可安全重置的状态";
-            return;
-        }
-
-        bool ResetMeleeTimer = false;
-        SDK::UObject* FistWeapon = ReadReflectedObjectValue(GloveBuff, "FistWeapon");
-        if (IsUsableObject(FistWeapon) && FistWeapon->IsA(SDK::AShooterWeapon::StaticClass())) {
-            // This is the native absolute timestamp used by melee weapons. It is
-            // safe to move into the past; do not touch animation/window lengths.
-            ResetMeleeTimer = ForcePastNumericProperty(FistWeapon, "NextAllowedMeleeTime");
-        }
-
-        const TekCooldownClearResult Cooldowns = ClearTekSkillCooldowns(Human,
-            { "glove", "gauntlet", "fist", "punch", "dash", "charge", "melee" },
-            { "glove", "gauntlet", "tekfist" });
-        if (ResetMeleeTimer || Cooldowns.ClearedCount > 0) {
-            std::string Details;
-            if (ResetMeleeTimer) Details = "NextAllowedMeleeTime";
-            if (Cooldowns.ClearedCount > 0) {
-                if (!Details.empty()) Details += ", ";
-                Details += Cooldowns.ClearedNames;
-            }
-            g_TekGloveDashStatus = std::format("已重置手套冲刺计时: {}{}", Details,
-                Human->HasAuthority() ? "" : "（服务器可能继续校验）");
-            return;
-        }
-
-        g_TekGloveDashStatus = Cooldowns.ActiveNames.empty() ?
-            "已识别泰克手套，但拳套对象尚未生成；请先蓄力冲刺一次" :
-            std::format("未匹配手套冷却；当前活动冷却: {}", Cooldowns.ActiveNames);
-    }
-
-    std::string GetTekGloveDashStatus() {
-        return g_TekGloveDashStatus;
-    }
-
     void AutoFishingQTE(SDK::UWorld* World) {
         using Clock = std::chrono::steady_clock;
         struct ExternalKeyState {
@@ -3540,6 +3810,7 @@ namespace g_Hack {
             Clock::time_point PressedAt = Clock::time_point::min();
         };
         static Clock::time_point LastHandledTime = Clock::time_point::min();
+        static Clock::time_point NextProbe = Clock::time_point::min();
         static int32_t LastWidgetIndex = -1;
         static int32_t LastKeyIndex = -1;
         static SDK::FName LastKeyName{};
@@ -3547,7 +3818,7 @@ namespace g_Hack {
         static bool SawQTESequence = false;
         static Clock::time_point LastPromptSeen = Clock::time_point::min();
         static Clock::time_point LastRecast = Clock::time_point::min();
-        constexpr auto HandleInterval = std::chrono::milliseconds(50);
+        constexpr auto HandleInterval = std::chrono::milliseconds(16);
         constexpr auto KeyHoldDuration = std::chrono::milliseconds(60);
         constexpr auto RecastDelay = std::chrono::milliseconds(1800);
         constexpr auto RecastCooldown = std::chrono::milliseconds(2500);
@@ -3573,7 +3844,6 @@ namespace g_Hack {
         if (!g_Config::bAutoFishingQTE) {
             SawQTESequence = false;
             LastPromptSeen = Clock::time_point::min();
-            g_MDX12::g_InputState::g_bypassOutBodyHotkeyForFishing.store(false);
             g_FishingQTEStatus = "自动钓鱼未启用";
             return;
         }
@@ -3586,6 +3856,8 @@ namespace g_Hack {
         // duration on the first call and can make this handler return forever.
         if (LastHandledTime != Clock::time_point::min() &&
             Now - LastHandledTime < HandleInterval) return;
+        if (Now < NextProbe) return;
+        NextProbe = Now + HandleInterval;
 
         if (!World) {
             g_FishingQTEStatus = "自动钓鱼未取得游戏世界";
@@ -3612,8 +3884,11 @@ namespace g_Hack {
 
         SDK::FKey CurrentKey{};
         int32_t CurrentKeyIndex = -1;
+        // Check the previously found widget first, then the equipped rod.
+        // Most fishing sessions expose the key on the rod, so no object-table
+        // discovery is needed on those ticks.
         SDK::UObject* PromptSource = FindActiveFishingPrompt(
-            Now, &CurrentKey, &CurrentKeyIndex);
+            false, &CurrentKey, &CurrentKeyIndex);
 
         SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
         SDK::UObject* FishingWeapon = Human ?
@@ -3631,6 +3906,11 @@ namespace g_Hack {
         if (!PromptSource && HasFishingRod &&
             TryReadFishingQTEKey(FishingWeapon, &CurrentKey, &CurrentKeyIndex)) {
             PromptSource = FishingWeapon;
+        }
+
+        if (!PromptSource) {
+            PromptSource = FindActiveFishingPrompt(
+                true, &CurrentKey, &CurrentKeyIndex);
         }
 
         if (!PromptSource || !PromptSource->Class) {
@@ -3782,14 +4062,19 @@ namespace g_Hack {
     }
 
     std::vector<AutoCraftStationView> GetAutoCraftCatalog(SDK::UWorld* World) {
-        RefreshAutoCraftCatalog(World);
-        return g_AutoCraftRuntime.Catalog;
+        (void)World;
+        std::scoped_lock Lock(g_AutoCraftUiBridge.SnapshotMutex);
+        return g_AutoCraftUiBridge.Catalog;
     }
 
-    void SelectAutoCraftStation(int InventoryObjectIndex) {
+    static void ApplyAutoCraftStationSelection(int InventoryObjectIndex) {
         if (g_AutoCraftRuntime.SelectedInventoryObjectIndex != InventoryObjectIndex) {
             g_AutoCraftRuntime.SelectedInventoryObjectIndex = InventoryObjectIndex;
             g_AutoCraftRuntime.SelectedItemObjectIndex = -1;
+            g_AutoCraftRuntime.SelectedInventory = nullptr;
+            g_AutoCraftRuntime.SelectedRecipeID = {};
+            g_AutoCraftRuntime.SelectedRecipeClass.clear();
+            g_AutoCraftRuntime.SubmittedRequests = 0;
         }
         if (InventoryObjectIndex < 0) {
             g_AutoCraftRuntime.Status = "请选择附近工作台";
@@ -3806,6 +4091,10 @@ namespace g_Hack {
 
         SDK::UPrimalInventoryComponent* Inventory =
             static_cast<SDK::UPrimalInventoryComponent*>(InventoryObject);
+        g_AutoCraftRuntime.SelectedInventory = Inventory;
+        TryGetLiveObjectSerial(Inventory, Inventory->Index,
+            &g_AutoCraftRuntime.SelectedInventorySerial);
+        g_AutoCraftRuntime.NextInventorySync = std::chrono::steady_clock::time_point::min();
         SDK::UPrimalInventoryComponent* PreviousDiscovery = ResolveCachedObject(
             g_AutoCraftRuntime.DiscoveryInventory,
             g_AutoCraftRuntime.DiscoveryInventoryObjectIndex);
@@ -3827,956 +4116,258 @@ namespace g_Hack {
         g_AutoCraftRuntime.Status = "已选择工作站，正在读取服务器印痕/图纸";
     }
 
-    void SelectAutoCraftRecipe(int ItemObjectIndex) {
+    static void ApplyAutoCraftRecipeSelection(int ItemObjectIndex) {
         g_AutoCraftRuntime.SelectedItemObjectIndex = ItemObjectIndex;
+        g_AutoCraftRuntime.SelectedRecipeID = {};
+        g_AutoCraftRuntime.SelectedRecipeClass.clear();
+        g_AutoCraftRuntime.SubmittedRequests = 0;
+        g_AutoCraftRuntime.Scheduler = {};
+        auto* Object = ResolveObjectAtIndex(ItemObjectIndex);
+        if (Object && Object->IsA(SDK::UPrimalItem::StaticClass())) {
+            auto* Item = static_cast<SDK::UPrimalItem*>(Object);
+            int32_t ID1 = 0, ID2 = 0;
+            Item->BPGetItemID(&ID1, &ID2);
+            g_AutoCraftRuntime.SelectedRecipeID = {
+                static_cast<uint32_t>(ID1), static_cast<uint32_t>(ID2) };
+            g_AutoCraftRuntime.SelectedRecipeClass = Item->Class->GetFullName();
+            g_AutoCraftRuntime.SelectedRecipeIsEngram = Item->bIsEngram;
+        }
         g_AutoCraftRuntime.Status = ItemObjectIndex >= 0 ?
             "已就绪；开启自动制作后将按服务器规则循环请求" : "请选择印痕/图纸";
     }
 
+    void SelectAutoCraftStation(int InventoryObjectIndex) {
+        std::scoped_lock Lock(g_AutoCraftUiBridge.RequestMutex);
+        g_AutoCraftUiBridge.StationSelectionPending = true;
+        g_AutoCraftUiBridge.PendingStationObjectIndex = InventoryObjectIndex;
+    }
+
+    void SelectAutoCraftRecipe(int ItemObjectIndex) {
+        std::scoped_lock Lock(g_AutoCraftUiBridge.RequestMutex);
+        g_AutoCraftUiBridge.RecipeSelectionPending = true;
+        g_AutoCraftUiBridge.PendingRecipeObjectIndex = ItemObjectIndex;
+    }
+
+    static void ApplyPendingAutoCraftSelections() {
+        bool HasStationSelection = false;
+        int StationObjectIndex = -1;
+        bool HasRecipeSelection = false;
+        int RecipeObjectIndex = -1;
+        {
+            std::scoped_lock Lock(g_AutoCraftUiBridge.RequestMutex);
+            HasStationSelection = g_AutoCraftUiBridge.StationSelectionPending;
+            StationObjectIndex = g_AutoCraftUiBridge.PendingStationObjectIndex;
+            HasRecipeSelection = g_AutoCraftUiBridge.RecipeSelectionPending;
+            RecipeObjectIndex = g_AutoCraftUiBridge.PendingRecipeObjectIndex;
+            g_AutoCraftUiBridge.StationSelectionPending = false;
+            g_AutoCraftUiBridge.RecipeSelectionPending = false;
+        }
+
+        if (HasStationSelection) ApplyAutoCraftStationSelection(StationObjectIndex);
+        if (HasRecipeSelection) ApplyAutoCraftRecipeSelection(RecipeObjectIndex);
+    }
+
     int GetSelectedAutoCraftStation() {
-        return g_AutoCraftRuntime.SelectedInventoryObjectIndex;
+        std::scoped_lock Lock(g_AutoCraftUiBridge.SnapshotMutex);
+        return g_AutoCraftUiBridge.SelectedStationObjectIndex;
     }
 
     int GetSelectedAutoCraftRecipe() {
-        return g_AutoCraftRuntime.SelectedItemObjectIndex;
+        std::scoped_lock Lock(g_AutoCraftUiBridge.SnapshotMutex);
+        return g_AutoCraftUiBridge.SelectedRecipeObjectIndex;
     }
 
     std::string GetAutoCraftStatus() {
-        return g_AutoCraftRuntime.Status;
+        std::scoped_lock Lock(g_AutoCraftUiBridge.SnapshotMutex);
+        return g_AutoCraftUiBridge.Status;
+    }
+
+    // ContextMenu_PrimalItem::HandleActionCraftAmount reaches this native
+    // UUI_Inventory helper. Its quantity argument is capped at 100 by the game;
+    // the helper emits the game's normal per-item RPCs and returns their count.
+    using NativeCraftBatch = int32_t(__fastcall*)(SDK::UUI_Inventory*,
+        SDK::UPrimalInventoryComponent*, bool, SDK::UPrimalItem*, int32_t);
+
+    static NativeCraftBatch ResolveNativeCraftBatch() {
+        static NativeCraftBatch Function = []() -> NativeCraftBatch {
+            const auto Base = SDK::InSDKUtils::GetImageBase();
+            auto* Class = SDK::UContextMenu_PrimalItem::StaticClass();
+            auto* Entry = Class ? Class->GetFunction("ContextMenu_PrimalItem", "HandleActionCraftAmount") : nullptr;
+            if (!Entry || reinterpret_cast<uintptr_t>(Entry->ExecFunction) != Base + 0x5c46050) return nullptr;
+            const auto* Code = reinterpret_cast<const uint8_t*>(Base + 0x6f411d0);
+            MEMORY_BASIC_INFORMATION Region{};
+            if (!VirtualQuery(Code, &Region, sizeof(Region)) || Region.State != MEM_COMMIT ||
+                (Region.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
+                reinterpret_cast<uintptr_t>(Region.BaseAddress) + Region.RegionSize < Base + 0x6f41379)
+                return nullptr;
+            constexpr uint8_t Prologue[] = {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,
+                0x48,0x89,0x74,0x24,0x18,0x48,0x89,0x7c,0x24,0x20,0x41,0x54,0x41,0x56,0x41,0x57};
+            constexpr uint8_t QuantityLimit[] = {0xbd,0x64,0x00,0x00,0x00,0x48,0x8b,0xcb,0x3b,0xc5,0x0f,0x4c,0xe8};
+            if (std::memcmp(Code, Prologue, sizeof(Prologue)) ||
+                std::memcmp(Code + 0x41, QuantityLimit, sizeof(QuantityLimit))) return nullptr;
+            return reinterpret_cast<NativeCraftBatch>(Base + 0x6f411d0);
+        }();
+        return Function;
+    }
+
+    static SDK::UUI_Inventory* GetCraftBatchUI(SDK::AShooterPlayerController* PC) {
+        auto& State = g_AutoCraftRuntime;
+        auto* UI = PC->GetViewingInventoryUI();
+        if (!UI) {
+            auto* Hud = PC->GetShooterHud();
+            if (IsUsableObject(Hud)) UI = Hud->CurrentOpenedInventory;
+        }
+        int32_t Serial = -1;
+        if (IsUsableObject(UI) && TryGetLiveObjectSerial(UI, UI->Index, &Serial)) {
+            State.BatchInventoryUI = UI;
+            State.BatchUIIndex = UI->Index;
+            State.BatchUISerial = Serial;
+        }
+        UI = State.BatchInventoryUI;
+        if (!TryGetLiveObjectSerial(UI, State.BatchUIIndex, &Serial) || Serial != State.BatchUISerial ||
+            !IsUsableObject(UI) || !UI->IsA(SDK::UUI_Inventory::StaticClass())) return nullptr;
+        // Validate the exact owner accessor used inside the verified helper,
+        // including widgets retained after the visible inventory is closed.
+        using GetBatchOwner = SDK::AShooterPlayerController*(__fastcall*)(SDK::UUI_Inventory*);
+        auto GetOwner = reinterpret_cast<GetBatchOwner>((*reinterpret_cast<void***>(UI))[0x5d8 / 8]);
+        return GetOwner && GetOwner(UI) == PC ? UI : nullptr;
     }
 
     void AutoCraft(SDK::UWorld* World) {
+        if (IsHusbandryInventoryActive()) return;
+        if (IsUploadTerminalActive() || IsAutomaticDepositActive()) return;
         using Clock = std::chrono::steady_clock;
+        AutoCraftUiSnapshotScope PublishSnapshotOnReturn;
+        // Reset before applying queued UI choices, so a world change cannot
+        // erase a newly selected station in the same tick.
+        if (g_AutoCraftRuntime.World != World) {
+            g_AutoCraftRuntime = {};
+            g_AutoCraftRuntime.World = World;
+        }
+        ApplyPendingAutoCraftSelections();
         RefreshAutoCraftCatalog(World);
-        if (!g_Config::bAutoCraft) return;
-
-        SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
-        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
-        SDK::UObject* InventoryObject = ResolveObjectAtIndex(
-            g_AutoCraftRuntime.SelectedInventoryObjectIndex);
-        SDK::UObject* ItemObject = ResolveObjectAtIndex(g_AutoCraftRuntime.SelectedItemObjectIndex);
-        SDK::UClass* InventoryClass = SDK::UPrimalInventoryComponent::StaticClass();
-        SDK::UClass* ItemClass = SDK::UPrimalItem::StaticClass();
-        if (!PC || !Human || !InventoryObject || !ItemObject || !InventoryClass || !ItemClass ||
-            !InventoryObject->IsA(InventoryClass) || !ItemObject->IsA(ItemClass)) {
-            g_AutoCraftRuntime.Status = "选择已失效，请重新选择工作台和印痕/图纸";
+        auto& State = g_AutoCraftRuntime;
+        if (ResolveNativeCraftBatch()) {
+            auto* ViewingPC = GetLocalShooterController(World);
+            if (ViewingPC && ViewingPC->IsViewingInventoryUI()) GetCraftBatchUI(ViewingPC);
+        }
+        if (!g_Config::bAutoCraft) {
+            if (State.OwnsCraftRemoteView) {
+                auto* PC = GetLocalShooterController(World);
+                int32_t Serial = -1;
+                if (PC && TryGetLiveObjectSerial(State.SelectedInventory,
+                    State.SelectedInventoryObjectIndex, &Serial) &&
+                    Serial == State.SelectedInventorySerial &&
+                    PC->GetViewingInventory() != State.SelectedInventory) {
+                    PC->ServerActorCloseRemoteInventory(State.SelectedInventory);
+                }
+                State.OwnsCraftRemoteView = false;
+            }
+            State.NextInventorySync = Clock::time_point::min();
+            State.Scheduler = {};
             return;
         }
 
-        SDK::UPrimalInventoryComponent* Inventory =
-            static_cast<SDK::UPrimalInventoryComponent*>(InventoryObject);
-        SDK::UPrimalItem* Item = static_cast<SDK::UPrimalItem*>(ItemObject);
-
-        SDK::AActor* InventoryOwner = Inventory->GetOwner();
-        const float DistanceMeters = InventoryOwner ? Human->GetDistanceTo(InventoryOwner) * 0.01f : INFINITY;
-        if (!std::isfinite(DistanceMeters) ||
-            DistanceMeters > std::clamp(g_Config::AutoCraftRangeMeters, 2.0f, 100.0f)) {
-            g_AutoCraftRuntime.Status = "工作台超出设置范围";
+        auto* PC = GetLocalShooterController(World);
+        auto* Human = GetLocalHumanCharacter(World);
+        int32_t Serial = -1;
+        if (!PC || !Human || Human->IsDead()) {
+            State.Status = "等待人物恢复";
             return;
         }
-
-        SDK::UObject** ItemObjects = nullptr;
-        int32_t ItemCount = 0;
-        bool ItemBelongsToInventory = false;
-        if (ReadReflectedObjectArray(Inventory, "InventoryItems", &ItemObjects, &ItemCount)) {
-            for (int32_t Index = 0; Index < ItemCount && Index < 2048; ++Index) {
-                if (ItemObjects[Index] == Item) {
-                    ItemBelongsToInventory = true;
+        if (!TryGetLiveObjectSerial(State.SelectedInventory,
+            State.SelectedInventoryObjectIndex, &Serial) ||
+            Serial != State.SelectedInventorySerial) {
+            State.Status = "等待所选工作台；工作台被销毁或重新加载后请重选";
+            return;
+        }
+        auto* Inventory = State.SelectedInventory;
+        auto* Owner = Inventory->GetOwner();
+        const float Distance = Owner ? Human->GetDistanceTo(Owner) * 0.01f : INFINITY;
+        if (!std::isfinite(Distance) ||
+            Distance > std::clamp(g_Config::AutoCraftRangeMeters, 2.0f, 100.0f)) {
+            State.Status = "工作台超出范围，返回范围后自动继续";
+            return;
+        }
+        auto* Viewing = PC->GetViewingInventory();
+        if (Viewing && Viewing != Inventory && Viewing != Human->MyInventoryComponent) {
+            State.Status = "正在查看其他背包，关闭后自动继续制作";
+            return;
+        }
+        const auto Now = Clock::now();
+        if (Now >= State.NextInventorySync) {
+            // Closing the ordinary UI unsubscribes queue updates. Renew the
+            // selected remote view as well as requesting fresh item instances.
+            PC->ServerActorViewRemoteInventory(Inventory);
+            PC->ServerRequestActorItems(Inventory, true, true);
+            State.OwnsCraftRemoteView = Viewing != Inventory;
+            State.NextInventorySync = Now + std::chrono::seconds(3);
+        }
+        SDK::UPrimalItem* Item = nullptr;
+        SDK::UPrimalItem* EngramFallback = nullptr;
+        const auto& Items = Inventory->InventoryItems;
+        if (Items.Num() >= 0 && Items.Num() <= 100000) {
+            for (int32_t Index = 0; Index < Items.Num(); ++Index) {
+                auto* Candidate = Items[Index];
+                if (!IsUsableObject(Candidate)) continue;
+                int32_t ID1 = 0, ID2 = 0;
+                Candidate->BPGetItemID(&ID1, &ID2);
+                if ((ID1 != 0 || ID2 != 0) &&
+                    static_cast<uint32_t>(ID1) == State.SelectedRecipeID.ItemID1 &&
+                    static_cast<uint32_t>(ID2) == State.SelectedRecipeID.ItemID2) {
+                    Item = Candidate;
                     break;
                 }
-            }
-        }
-        if (!ItemBelongsToInventory) {
-            g_AutoCraftRuntime.Status = "所选印痕已不在该工作台，请重新选择";
-            return;
-        }
-
-        const Clock::time_point Now = Clock::now();
-        if (Now < g_AutoCraftRuntime.NextCraftRequest) return;
-        const float Interval = std::clamp(g_Config::AutoCraftIntervalSeconds, 0.25f, 10.0f);
-        g_AutoCraftRuntime.NextCraftRequest = Now + std::chrono::milliseconds(
-            static_cast<int64_t>(Interval * 1000.0f));
-
-        constexpr int32_t TargetQueueQuantity = 100;
-        const int32_t CurrentQueueQuantity = std::clamp(
-            Item->GetCraftQueueCount(), 0, TargetQueueQuantity);
-        if (CurrentQueueQuantity >= TargetQueueQuantity) {
-            g_AutoCraftRuntime.Status = "当前印痕制作队列已达到 100";
-            return;
-        }
-        if (!Inventory->IsCraftingAllowed(Item) || !Item->CanCraft(PC) ||
-            !Item->MeetBlueprintCraftingRequirements(Inventory, 1, PC, true, true, true)) {
-            g_AutoCraftRuntime.Status = "服务器条件未满足（材料、权限或队列）";
-            return;
-        }
-
-        int32_t ItemID1 = 0;
-        int32_t ItemID2 = 0;
-        Item->BPGetItemID(&ItemID1, &ItemID2);
-        if (ItemID1 == 0 && ItemID2 == 0) {
-            g_AutoCraftRuntime.Status = "无法读取所选印痕的服务器物品 ID";
-            return;
-        }
-
-        SDK::FItemNetID ItemID{};
-        ItemID.ItemID1 = static_cast<uint32_t>(ItemID1);
-        ItemID.ItemID2 = static_cast<uint32_t>(ItemID2);
-        const int32_t RequestsToSend = TargetQueueQuantity - CurrentQueueQuantity;
-        for (int32_t RequestIndex = 0; RequestIndex < RequestsToSend; ++RequestIndex) {
-            // The game exposes a one-item reliable RPC rather than a quantity
-            // parameter. Repeat the normal request and let the server validate
-            // materials, permissions and queue capacity for every entry.
-            PC->ServerCraftItem(Inventory, ItemID);
-        }
-        g_AutoCraftRuntime.Status = "已提交 " + std::to_string(RequestsToSend) +
-            " 个制作请求；目标队列数量为 100";
-    }
-
-    std::string GetAutoImprintStatus() {
-        return g_AutoImprintStatus;
-    }
-
-    void AutoImprint(SDK::UWorld* World) {
-        using Clock = std::chrono::steady_clock;
-        static Clock::time_point NextScan = Clock::time_point::min();
-        static std::unordered_map<int32_t, Clock::time_point> NextWalkFollowRequest;
-        static std::unordered_map<int32_t, Clock::time_point> NextCareRequest;
-        static std::unordered_map<int32_t, Clock::time_point> NextFoodSlotRequest;
-        static std::unordered_map<int32_t, Clock::time_point> CareTargetSkipUntil;
-        static int32_t LockedCareDinoIndex = -1;
-        static Clock::time_point LockedCareUntil = Clock::time_point::min();
-        if (!g_Config::bAutoImprint) {
-            g_AutoImprintStatus = "等待附近幼龙提出留痕需求";
-            NextWalkFollowRequest.clear();
-            NextCareRequest.clear();
-            NextFoodSlotRequest.clear();
-            CareTargetSkipUntil.clear();
-            LockedCareDinoIndex = -1;
-            LockedCareUntil = Clock::time_point::min();
-            return;
-        }
-
-        const Clock::time_point Now = Clock::now();
-        if (Now < NextScan) return;
-        NextScan = Now + std::chrono::milliseconds(1000);
-
-        SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
-        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
-        SDK::UClass* DinoClass = SDK::APrimalDinoCharacter::StaticClass();
-        if (!PC || !Human || !World || !DinoClass) {
-            g_AutoImprintStatus = "等待人物和世界数据";
-            return;
-        }
-
-        int32_t PlayerTeam = 0;
-        if (!ReadReflectedInt32Value(Human, "TargetingTeam", &PlayerTeam)) {
-            g_AutoImprintStatus = "无法读取玩家部落信息";
-            return;
-        }
-
-        SDK::TArray<SDK::AActor*> Actors;
-        SDK::UGameplayStatics::GetAllActorsOfClass(World, DinoClass, &Actors);
-        if (Actors.Num() < 0 || Actors.Num() > 100000) return;
-
-        const double NetworkTime = SDK::UVictoryCore::GetNetworkTimeInSeconds(World);
-        if (!std::isfinite(NetworkTime) || NetworkTime <= 0.0) {
-            g_AutoImprintStatus = "等待服务器时间同步";
-            return;
-        }
-        const float MaximumRange = std::clamp(g_Config::AutoImprintRangeMeters, 2.0f, 30.0f);
-        SDK::APrimalDinoCharacter* BestDino = nullptr;
-        uint8_t BestCuddleType = 0;
-        float BestDistance = INFINITY;
-        SDK::APrimalDinoCharacter* LockedDino = nullptr;
-        uint8_t LockedCuddleType = 0;
-        float LockedDistance = INFINITY;
-        std::vector<SDK::APrimalDinoCharacter*> WalkDinos;
-
-        if (LockedCareDinoIndex >= 0 && Now >= LockedCareUntil) {
-            CareTargetSkipUntil[LockedCareDinoIndex] = Now + std::chrono::seconds(8);
-            LockedCareDinoIndex = -1;
-            LockedCareUntil = Clock::time_point::min();
-        }
-        std::erase_if(CareTargetSkipUntil,
-            [Now](const auto& Pair) { return Pair.second <= Now; });
-
-        for (int32_t Index = 0; Index < Actors.Num(); ++Index) {
-            SDK::AActor* Actor = Actors[Index];
-            if (!IsUsableObject(Actor) || !Actor->IsA(DinoClass)) continue;
-            SDK::APrimalDinoCharacter* Dino = static_cast<SDK::APrimalDinoCharacter*>(Actor);
-
-            double BabyAge = 0.0;
-            double NextCuddleTime = 0.0;
-            uint8_t CuddleType = 0;
-            if (!ReadReflectedNumberValue(Dino, "BabyAge", &BabyAge) || BabyAge <= 0.0 || BabyAge >= 1.0 ||
-                !ReadReflectedNumberValue(Dino, "BabyNextCuddleTime", &NextCuddleTime) ||
-                NextCuddleTime <= 0.0 || NextCuddleTime > NetworkTime + 0.25 ||
-                !ReadReflectedByteValue(Dino, "BabyCuddleType", &CuddleType) || CuddleType > 2 ||
-                !Dino->IsAlliedWithOtherTeam(PlayerTeam)) {
-                continue;
-            }
-
-            const float Distance = Human->GetDistanceTo(Dino) * 0.01f;
-            if (!std::isfinite(Distance) || Distance > MaximumRange) continue;
-            if (CuddleType == static_cast<uint8_t>(SDK::EBabyCuddleType::WALK)) {
-                WalkDinos.push_back(Dino);
-                continue;
-            }
-
-            // Keep one food/pet target stable while its requested hotbar item
-            // replicates. Re-selecting the nearest baby every second makes
-            // several babies continuously replace one another's food and none
-            // of their interactions can ever become enabled.
-            if (Dino->Index == LockedCareDinoIndex) {
-                LockedDino = Dino;
-                LockedCuddleType = CuddleType;
-                LockedDistance = Distance;
-                continue;
-            }
-            const auto SkipIt = CareTargetSkipUntil.find(Dino->Index);
-            if (SkipIt != CareTargetSkipUntil.end() && Now < SkipIt->second) continue;
-            if (Distance >= BestDistance) continue;
-            BestDino = Dino;
-            BestCuddleType = CuddleType;
-            BestDistance = Distance;
-        }
-
-        if (LockedDino) {
-            BestDino = LockedDino;
-            BestCuddleType = LockedCuddleType;
-            BestDistance = LockedDistance;
-        }
-        else {
-            LockedCareDinoIndex = -1;
-            LockedCareUntil = Clock::time_point::min();
-            if (BestDino && BestCuddleType != static_cast<uint8_t>(SDK::EBabyCuddleType::WALK)) {
-                LockedCareDinoIndex = BestDino->Index;
-                LockedCareUntil = Now + std::chrono::seconds(20);
-            }
-        }
-
-        int32_t WalkAlreadyFollowing = 0;
-        int32_t WalkFollowRequests = 0;
-        for (SDK::APrimalDinoCharacter* WalkDino : WalkDinos) {
-            if (!IsUsableObject(WalkDino)) continue;
-            if (WalkDino->GetTamedFollowTarget() == Human) {
-                ++WalkAlreadyFollowing;
-                continue;
-            }
-
-            Clock::time_point& NextRequest = NextWalkFollowRequest[WalkDino->Index];
-            if (Now < NextRequest) continue;
-            NextRequest = Now + std::chrono::seconds(3);
-            Human->ServerCallFollowOne(WalkDino);
-            ++WalkFollowRequests;
-        }
-
-        std::string WalkStatusSuffix;
-        if (!WalkDinos.empty()) {
-            WalkStatusSuffix = std::format("；散步幼龙 {} 只，已跟随 {} 只，本次发送跟随 {} 只",
-                WalkDinos.size(), WalkAlreadyFollowing, WalkFollowRequests);
-        }
-
-        if (!BestDino) {
-            g_AutoImprintStatus = WalkDinos.empty()
-                ? "范围内没有已到时间且允许照料的幼龙"
-                : "已让散步幼龙跟随；请让人物实际移动以完成留痕" + WalkStatusSuffix;
-            return;
-        }
-
-        // ServerMultiUse performs the same distance validation as pressing E.
-        // Keep the wider configured range for discovery, but never claim that
-        // a remote request was accepted when the baby is outside use range.
-        constexpr float MaximumCareUseRangeMeters = 5.0f;
-        if (BestDistance > MaximumCareUseRangeMeters) {
-            g_AutoImprintStatus = std::format(
-                "已发现{}留痕，但距离 {:.1f}m；请靠近到 5m 内",
-                BestCuddleType == static_cast<uint8_t>(SDK::EBabyCuddleType::FOOD)
-                    ? "喂食" : "抱抱/抚摸",
-                BestDistance) + WalkStatusSuffix;
-            return;
-        }
-
-        SDK::TArray<SDK::FMultiUseEntry> Entries;
-        BestDino->GetMultiUseEntries(PC, &Entries, -1);
-        if (Entries.Num() < 0 || Entries.Num() > 2048) {
-            g_AutoImprintStatus = "服务器返回的幼龙交互列表无效";
-            return;
-        }
-
-        int32_t SelectedUseIndex = -1;
-        SDK::UObject* SelectedUseObject = BestDino;
-        bool SelectedClientSideOnly = false;
-        bool SelectedEntryDisabled = false;
-        bool SelectedEntryHidden = false;
-        std::string MatchingEntryText;
-        int32_t DisabledUseIndex = -1;
-        SDK::UObject* DisabledUseObject = BestDino;
-        bool DisabledClientSideOnly = false;
-        bool DisabledEntryHidden = false;
-        std::string DisabledEntryText;
-        std::vector<std::string> EntryDiagnostics;
-        EntryDiagnostics.reserve(std::min(Entries.Num(), 6));
-        for (int32_t EntryIndex = 0; EntryIndex < Entries.Num(); ++EntryIndex) {
-            const SDK::FMultiUseEntry& Entry = Entries[EntryIndex];
-            const std::string RawText = Entry.UseString.ToString();
-            const std::string Text = NormalizeGachaItemName(RawText);
-            if (EntryDiagnostics.size() < 6 && !RawText.empty()) {
-                EntryDiagnostics.push_back(std::format("{}:{}{}{}{}", Entry.UseIndex,
-                    RawText.substr(0, 48), Entry.bDisableUse ? "[禁用]" : "",
-                    Entry.bHideFromUI ? "[隐藏]" : "",
-                    Entry.bClientSideOnly ? "[本地]" : ""));
-            }
-
-            bool Matches = false;
-            if (BestCuddleType == static_cast<uint8_t>(SDK::EBabyCuddleType::PET)) {
-                Matches = Text.find("cuddle") != std::string::npos || Text.find("pet") != std::string::npos ||
-                    Text.find("care") != std::string::npos || Text.find("hug") != std::string::npos ||
-                    Text.find("imprint") != std::string::npos || RawText.find("抱") != std::string::npos ||
-                    RawText.find("抚摸") != std::string::npos || RawText.find("亲近") != std::string::npos ||
-                    RawText.find("照料") != std::string::npos;
-            }
-            else if (BestCuddleType == static_cast<uint8_t>(SDK::EBabyCuddleType::FOOD)) {
-                Matches = Text.find("feed") != std::string::npos || Text.find("food") != std::string::npos ||
-                    Text.find("wants") != std::string::npos || Text.find("request") != std::string::npos ||
-                    RawText.find("喂") != std::string::npos || RawText.find("想要") != std::string::npos ||
-                    RawText.find("食物") != std::string::npos;
-            }
-            if (!Matches) continue;
-
-            if (Entry.bDisableUse) {
-                // bDisableUse controls the HUD entry, not the authoritative
-                // ServerMultiUse RPC. Keep it as a fallback and let the server
-                // perform the final distance/item/ownership validation. This is
-                // required for baby food entries such as UseIndex 139, which ASA
-                // can report as both hidden and disabled on the owning client.
-                if (DisabledUseIndex < 0) {
-                    DisabledUseIndex = Entry.UseIndex;
-                    if (Entry.ForComponent && IsUsableObject(Entry.ForComponent)) {
-                        DisabledUseObject = Entry.ForComponent;
-                    }
-                    DisabledClientSideOnly = Entry.bClientSideOnly;
-                    DisabledEntryHidden = Entry.bHideFromUI;
-                    DisabledEntryText = RawText;
-                }
-                continue;
-            }
-
-            SelectedUseIndex = Entry.UseIndex;
-            if (Entry.ForComponent && IsUsableObject(Entry.ForComponent)) {
-                SelectedUseObject = Entry.ForComponent;
-            }
-            SelectedClientSideOnly = Entry.bClientSideOnly;
-            SelectedEntryHidden = Entry.bHideFromUI;
-            MatchingEntryText = RawText;
-            break;
-        }
-
-        if (SelectedUseIndex < 0 && DisabledUseIndex >= 0) {
-            SelectedUseIndex = DisabledUseIndex;
-            SelectedUseObject = DisabledUseObject;
-            SelectedClientSideOnly = DisabledClientSideOnly;
-            SelectedEntryDisabled = true;
-            SelectedEntryHidden = DisabledEntryHidden;
-            MatchingEntryText = std::move(DisabledEntryText);
-        }
-
-        if (SelectedUseIndex < 0) {
-            std::string DiagnosticText;
-            for (const std::string& EntryText : EntryDiagnostics) {
-                if (!DiagnosticText.empty()) DiagnosticText += " | ";
-                DiagnosticText += EntryText;
-            }
-            g_AutoImprintStatus = "未找到对应的" + std::string(
-                BestCuddleType == static_cast<uint8_t>(SDK::EBabyCuddleType::FOOD)
-                    ? "喂食" : "抱抱/抚摸") + "交互项";
-            if (!DiagnosticText.empty()) g_AutoImprintStatus += "；交互列表 " + DiagnosticText;
-            g_AutoImprintStatus += WalkStatusSuffix;
-            return;
-        }
-
-        bool IsImprintOwner = BestDino->IsImprintPlayer(Human);
-        bool HasServerCuddlePolicy = false;
-        bool ServerAllowsAnyone = false;
-        SDK::AGameStateBase* BaseGameState = SDK::UGameplayStatics::GetGameState(World);
-        SDK::UClass* ShooterGameStateClass = SDK::AShooterGameState::StaticClass();
-        if (IsUsableObject(BaseGameState) && ShooterGameStateClass &&
-            BaseGameState->IsA(ShooterGameStateClass)) {
-            auto* ShooterGameState = static_cast<SDK::AShooterGameState*>(BaseGameState);
-            HasServerCuddlePolicy = true;
-            ServerAllowsAnyone = ShooterGameState->bAllowAnyoneBabyImprintCuddle;
-        }
-        if (SelectedEntryDisabled && HasServerCuddlePolicy &&
-            !ServerAllowsAnyone && !IsImprintOwner) {
-            g_AutoImprintStatus = "当前人物不是该幼龙的留痕绑定者，且服务器未开启任何人均可留痕" +
-                WalkStatusSuffix;
-            return;
-        }
-
-        std::string RequiredFood;
-        std::string FoodTendingFailReason;
-        if (BestCuddleType == static_cast<uint8_t>(SDK::EBabyCuddleType::FOOD)) {
-            SDK::TSubclassOf<SDK::UPrimalItem> Food = BestDino->GetBabyCuddleFood();
-            SDK::UClass* FoodClass = Food.Get();
-            if (!IsUsableObject(FoodClass)) {
-                g_AutoImprintStatus = "已识别喂食任务，但服务器尚未同步所需食物" +
-                    WalkStatusSuffix;
-                return;
-            }
-
-            RequiredFood = FoodClass->GetName();
-            std::string FriendlyFoodName = RequiredFood;
-            const std::string FoodIdentity = NormalizeGachaItemName(RequiredFood);
-            if (FoodIdentity.find("cookedmeatjerky") != std::string::npos) {
-                FriendlyFoodName = "熟肉干";
-            }
-            else if (FoodIdentity.find("cookedfish") != std::string::npos ||
-                FoodIdentity.find("cookedmeatfish") != std::string::npos ||
-                FoodIdentity.find("fishmeatcooked") != std::string::npos) {
-                FriendlyFoodName = "熟鱼肉";
-            }
-            else if (FoodIdentity.find("mejoberry") != std::string::npos) {
-                FriendlyFoodName = "紫红色浆果";
-            }
-            else if (FoodIdentity.find("cookedmeat") != std::string::npos) {
-                FriendlyFoodName = "熟肉";
-            }
-
-            SDK::UPrimalInventoryComponent* Inventory = Human->MyInventoryComponent;
-            if (!IsUsableObject(Inventory)) {
-                g_AutoImprintStatus = "等待人物背包同步；所需食物 " + FriendlyFoodName;
-                return;
-            }
-
-            SDK::UPrimalItem* FoodItem = nullptr;
-            const int32_t InventoryCount = Inventory->InventoryItems.Num();
-            if (InventoryCount >= 0 && InventoryCount <= 100000) {
-                for (int32_t ItemIndex = 0; ItemIndex < InventoryCount; ++ItemIndex) {
-                    SDK::UPrimalItem* Item = Inventory->InventoryItems[ItemIndex];
-                    if (!IsUsableObject(Item) || !Item->Class || Item->ItemQuantity <= 0 ||
-                        Item->bIsBlueprint || Item->bIsEngram) {
-                        continue;
-                    }
-                    if (Item->IsA(FoodClass)) {
-                        FoodItem = Item;
-                        break;
-                    }
+                // Only built-in engrams may recover by class. A physical
+                // blueprint must retain its net ID to preserve its quality.
+                if (State.SelectedRecipeIsEngram && Candidate->bIsEngram &&
+                    Candidate->Class->GetFullName() == State.SelectedRecipeClass) {
+                    EngramFallback = Candidate;
                 }
             }
-            if (!FoodItem) {
-                g_AutoImprintStatus = "人物背包缺少留痕食物：" + FriendlyFoodName +
-                    "（" + RequiredFood + "）" + WalkStatusSuffix;
-                return;
-            }
-
-            const int32_t SlotCount = Inventory->ItemSlots.Num();
-            const int32_t LastHotbarSlot = SlotCount > 0 && SlotCount <= 128
-                ? SlotCount - 1 : std::max(0, Inventory->NumSlots - 1);
-            SDK::UPrimalItem* LastSlotItem = SlotCount > LastHotbarSlot && LastHotbarSlot >= 0
-                ? Inventory->ItemSlots[LastHotbarSlot] : nullptr;
-            const bool FoodIsInLastSlot = LastSlotItem == FoodItem ||
-                FoodItem->SlotIndex == LastHotbarSlot;
-            if (!FoodIsInLastSlot) {
-                Clock::time_point& NextSlotRequest = NextFoodSlotRequest[BestDino->Index];
-                if (Now >= NextSlotRequest) {
-                    Inventory->ServerAddItemToSlot(FoodItem->ItemID, LastHotbarSlot, true);
-                    NextSlotRequest = Now + std::chrono::milliseconds(1250);
-                }
-                if (BestDino->Index == LockedCareDinoIndex) {
-                    LockedCareUntil = Now + std::chrono::seconds(20);
-                }
-                g_AutoImprintStatus = std::format(
-                    "正在把留痕食物 {} 放入快捷栏末格（第{}格）",
-                    FriendlyFoodName, LastHotbarSlot + 1) + WalkStatusSuffix;
-                return;
-            }
-
-            FoodTendingFailReason = FoodItem->GetTendingFailReason(PC).ToString();
         }
-
-        Clock::time_point& NextRequest = NextCareRequest[BestDino->Index];
-        if (Now < NextRequest) {
-            g_AutoImprintStatus = "等待服务器确认留痕请求" + WalkStatusSuffix;
+        if (!Item) Item = EngramFallback;
+        if (!Item) {
+            State.Status = State.SelectedRecipeClass.empty() ?
+                "请选择印痕/图纸" : "等待服务器重新同步所选配方，收到后自动继续";
             return;
         }
-        NextRequest = Now + std::chrono::milliseconds(2500);
-        if (BestDino->Index == LockedCareDinoIndex) {
-            LockedCareUntil = Now + std::chrono::seconds(12);
+        State.SelectedItemObjectIndex = Item->Index;
+        int32_t ID1 = 0, ID2 = 0;
+        Item->BPGetItemID(&ID1, &ID2);
+        if (ID1 == 0 && ID2 == 0) {
+            State.Status = "等待配方物品 ID";
+            return;
         }
-
-        if (SelectedClientSideOnly) {
-            // Client-side entries must be executed through the matching local
-            // branch. Sending them as a server RPC is intentionally ignored.
-            PC->ClientDoMultiUse(SelectedUseObject, SelectedUseIndex);
+        State.SelectedRecipeID = { static_cast<uint32_t>(ID1), static_cast<uint32_t>(ID2) };
+        const int32_t Queue = std::max(0, Item->GetCraftQueueCount());
+        const int32_t Batch = State.Scheduler.Plan(Queue, Now, g_Config::AutoCraftIntervalSeconds);
+        if (Batch == 0) {
+            if (Queue >= 100)
+                State.Status = std::format("队列 {}；持续同步，空位后继续补单 | 累计请求 {}",
+                    Queue, State.SubmittedRequests);
+            return;
         }
-        else {
-            PC->ServerMultiUse(SelectedUseObject, SelectedUseIndex);
-        }
-
-        if (BestCuddleType == static_cast<uint8_t>(SDK::EBabyCuddleType::FOOD)) {
-            g_AutoImprintStatus = std::format(
-                "已发送喂食留痕：UseIndex {}{}{}{}{}{}{}",
-                SelectedUseIndex,
-                RequiredFood.empty() ? "" : "；所需物品 ", RequiredFood,
-                SelectedEntryDisabled ? "；客户端标记禁用，等待服务器验证" : "",
-                SelectedEntryHidden ? "；隐藏交互" : "",
-                FoodTendingFailReason.empty() ? "" : "；物品条件：",
-                FoodTendingFailReason) + WalkStatusSuffix;
-        }
-        else {
-            g_AutoImprintStatus = std::format(
-                "已发送抱抱/抚摸留痕：UseIndex {}{}",
-                SelectedUseIndex,
-                SelectedClientSideOnly ? "（本地交互）" : "（服务器交互）") +
-                WalkStatusSuffix;
-        }
-    }
-
-    void AutoGrindHelicoprionInventory(SDK::UWorld* World) {
-        using Clock = std::chrono::steady_clock;
-
-        struct QueueEntry {
-            SDK::FItemNetID ItemID{};
-            std::string Name;
-            int32_t EstimatedProcessSeconds = 15;
-            int32_t RequestAttempts = 0;
-        };
-        struct AutoGrindState {
-            SDK::UPrimalInventoryComponent* TargetInventory = nullptr;
-            int32_t TargetObjectIndex = -1;
-            std::vector<QueueEntry> Queue;
-            size_t CurrentIndex = 0;
-            int32_t ExcludedItems = 0;
-            int32_t ClientFilterFallbackItems = 0;
-            int32_t ScanAttempts = 0;
-            int32_t SnapshotInventoryFrame = -1;
-            bool SnapshotReady = false;
-            bool AwaitingAcceptance = false;
-            bool AcceptanceFailed = false;
-            Clock::time_point ScanAt = Clock::time_point::min();
-            Clock::time_point AcceptanceDeadline = Clock::time_point::min();
-            Clock::time_point RetryAt = Clock::time_point::min();
-        };
-        static AutoGrindState State;
-
-        auto IsHelicoprionInventory = [](SDK::UPrimalInventoryComponent* Inventory) {
-            if (!IsUsableObject(Inventory) || !Inventory->Class) return false;
-            const std::string InventoryClassName = NormalizeGachaItemName(Inventory->Class->GetName());
-            if (InventoryClassName.find("dinotamedinventorycomponenthelicoprion") == std::string::npos) {
-                return false;
+        int32_t Submitted = 0;
+        bool UsedNativeBatch = false;
+        if (auto NativeBatch = ResolveNativeCraftBatch()) {
+            if (auto* UI = GetCraftBatchUI(PC)) {
+                Submitted = NativeBatch(UI, Inventory, Inventory != Human->MyInventoryComponent, Item, Batch);
+                UsedNativeBatch = true;
             }
-
-            SDK::AActor* Owner = Inventory->GetOwner();
-            if (!IsUsableObject(Owner) || !Owner->Class) return false;
-            const std::string OwnerClassName = NormalizeGachaItemName(Owner->Class->GetName());
-            return OwnerClassName.find("helicoprion") != std::string::npos;
-        };
-
-        auto ClearTarget = [&]() {
-            State = AutoGrindState{};
-        };
-
-        if (!g_Config::bAutoGrindHelicoprionInventory) {
-            ClearTarget();
-            g_AutoGrindHelicoprionStatus = "未启用";
-            return;
         }
-
-        SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
-        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
-        if (!PC || !Human) {
-            ClearTarget();
-            g_AutoGrindHelicoprionStatus = "等待本地人物数据";
-            return;
+        if (!UsedNativeBatch) {
+            // A UI can be garbage-collected after closing. Keep continuous
+            // crafting alive using the same server RPC until it is recreated.
+            for (int32_t Index = 0; Index < Batch; ++Index)
+                PC->ServerCraftItem(Inventory, State.SelectedRecipeID);
+            Submitted = Batch;
         }
-
-        const Clock::time_point Now = Clock::now();
-
-        // Opening the inventory once selects the exact shark. Keep the component
-        // cached after Helicoprion closes its inventory UI on the first grind.
-        SDK::UPrimalInventoryComponent* ViewingInventory = PC->GetViewingInventory();
-        if (IsHelicoprionInventory(ViewingInventory) &&
-            (State.TargetInventory != ViewingInventory ||
-                State.TargetObjectIndex != ViewingInventory->Index)) {
-            ClearTarget();
-            State.TargetInventory = ViewingInventory;
-            State.TargetObjectIndex = ViewingInventory->Index;
-            State.ScanAt = Now + std::chrono::milliseconds(600);
-            g_AutoGrindHelicoprionStatus = "已锁定旋齿鲨，等待背包物品同步";
-        }
-
-        SDK::UPrimalInventoryComponent* Target = ResolveCachedObject(
-            State.TargetInventory, State.TargetObjectIndex);
-        if (!Target || !IsHelicoprionInventory(Target)) {
-            ClearTarget();
-            g_AutoGrindHelicoprionStatus = "请先打开目标旋齿鲨背包一次以锁定目标";
-            return;
-        }
-
-        SDK::AActor* TargetOwner = Target->GetOwner();
-        const float DistanceMeters = TargetOwner ? Human->GetDistanceTo(TargetOwner) * 0.01f : INFINITY;
-        if (!std::isfinite(DistanceMeters) || DistanceMeters > 30.0f) {
-            g_AutoGrindHelicoprionStatus = "已记住旋齿鲨，但距离超过 30 米；靠近后会继续";
-            return;
-        }
-
-        // GetViewingInventory can become valid before the remote item list and
-        // the Blueprint grind predicate have finished updating. Taking the
-        // snapshot on that first frame made valid equipment (notably shovels)
-        // look ungrindable for the lifetime of the lock.
-        if (!State.SnapshotReady) {
-            if (Now < State.ScanAt) {
-                g_AutoGrindHelicoprionStatus = "已锁定旋齿鲨，等待背包物品同步";
-                return;
-            }
-
-            State.Queue.clear();
-            State.CurrentIndex = 0;
-            State.ExcludedItems = 0;
-            State.ClientFilterFallbackItems = 0;
-            State.RetryAt = Clock::time_point::min();
-
-            const int32_t ItemCount = std::min(Target->InventoryItems.Num(), 2048);
-            std::unordered_set<uint64_t> SeenItemIDs;
-            for (int32_t ItemIndex = 0; ItemIndex < ItemCount; ++ItemIndex) {
-                SDK::UPrimalItem* Item = Target->InventoryItems[ItemIndex];
-                if (!IsUsableObject(Item) || !Item->Class || Item->ItemQuantity <= 0) continue;
-
-                // Crafting-capable inventories also replicate invisible default
-                // engrams into InventoryItems. They are not physical contents of
-                // the right-hand inventory panel and must never enter a grind
-                // snapshot (the first one is often displayed as Simple Pistol).
-                bool IsEngram = Item->bIsEngram;
-                bool IsHiddenFromInventory = Item->bHideFromInventoryDisplay;
-                bool IsHiddenFromRemoteInventory = Item->bHideFromRemoteInventoryDisplay;
-                bool ReflectedFlag = false;
-                if (ReadReflectedBoolValue(Item, "bIsEngram", &ReflectedFlag)) {
-                    IsEngram = ReflectedFlag;
-                }
-                if (ReadReflectedBoolValue(Item, "bHideFromInventoryDisplay", &ReflectedFlag)) {
-                    IsHiddenFromInventory = ReflectedFlag;
-                }
-                if (ReadReflectedBoolValue(Item, "bHideFromRemoteInventoryDisplay", &ReflectedFlag)) {
-                    IsHiddenFromRemoteInventory = ReflectedFlag;
-                }
-                if (IsEngram || IsHiddenFromInventory || IsHiddenFromRemoteInventory) {
-                    ++State.ExcludedItems;
-                    continue;
-                }
-
-                const bool ClientAllowsGrinding = Target->CanGrindItem(Item);
-                const bool IsCraftedItemType =
-                    Item->MyItemType == SDK::EPrimalItemType::Equipment ||
-                    Item->MyItemType == SDK::EPrimalItemType::Weapon ||
-                    Item->MyItemType == SDK::EPrimalItemType::Structure ||
-                    Item->MyItemType == SDK::EPrimalItemType::WeaponAttachment;
-                const bool HasCraftingProvenance =
-                    Item->bUseItemDurability || Item->bIsBlueprint ||
-                    Item->BaseCraftingResourceRequirements.Num() > 0 ||
-                    Item->CustomResourceRequirements.Num() > 0;
-                const bool CanUseServerValidatedFallback =
-                    IsCraftedItemType && HasCraftingProvenance &&
-                    !Item->bIsItemSkin &&
-                    !Item->bIsAbstractItem && !Item->bIsMisssionItem;
-
-                if (!ClientAllowsGrinding && !CanUseServerValidatedFallback) {
-                    ++State.ExcludedItems;
-                    continue;
-                }
-
-                // The replicated member is already the exact identifier needed
-                // by the RPC. BPGetItemID is retained only as a compatibility
-                // fallback for unusual mod items whose member has not replicated.
-                SDK::FItemNetID ItemID = Item->ItemID;
-                if (ItemID.ItemID1 == 0 && ItemID.ItemID2 == 0) {
-                    int32_t ItemID1 = 0;
-                    int32_t ItemID2 = 0;
-                    Item->BPGetItemID(&ItemID1, &ItemID2);
-                    ItemID.ItemID1 = static_cast<uint32_t>(ItemID1);
-                    ItemID.ItemID2 = static_cast<uint32_t>(ItemID2);
-                }
-                if (ItemID.ItemID1 == 0 && ItemID.ItemID2 == 0) {
-                    ++State.ExcludedItems;
-                    continue;
-                }
-                const uint64_t ItemIDKey =
-                    (static_cast<uint64_t>(ItemID.ItemID1) << 32) |
-                    static_cast<uint64_t>(ItemID.ItemID2);
-                if (!SeenItemIDs.insert(ItemIDKey).second) continue;
-
-                QueueEntry Entry;
-                Entry.ItemID = ItemID;
-                Entry.Name = Item->GetItemShortName().ToString();
-                if (Entry.Name.empty() || Entry.Name == "None") {
-                    Entry.Name = Item->DescriptiveNameBase.ToString();
-                }
-                if (Entry.Name.empty()) Entry.Name = Item->Class->GetName();
-
-                // Helicoprion conversion is asynchronous and scales with item
-                // quality. Preserve the values before the first request closes
-                // the remote UI and its replicated item objects disappear.
-                uint8_t QualityIndex = Item->ItemQualityIndex;
-                float ItemRating = Item->ItemRating;
-                ReadReflectedByteValue(Item, "ItemQualityIndex", &QualityIndex);
-                ReadReflectedFloatValue(Item, "ItemRating", &ItemRating);
-                const int32_t QualitySeconds =
-                    (std::clamp<int32_t>(QualityIndex, 0, 17) + 1) * 10;
-                const int32_t RatingSeconds = std::isfinite(ItemRating) && ItemRating > 0.0f ?
-                    static_cast<int32_t>(std::ceil(ItemRating / 5.0f)) : 10;
-                const std::string ItemIdentity = NormalizeGachaItemName(
-                    Item->Class->GetName() + Entry.Name);
-                if (ItemIdentity.find("shovel") != std::string::npos) {
-                    // Shovel conversion is fixed at one minute. Two extra
-                    // seconds prevent the next RPC from racing the server's
-                    // completion/replication boundary.
-                    Entry.EstimatedProcessSeconds = 62;
-                }
-                else {
-                    Entry.EstimatedProcessSeconds =
-                        std::clamp(std::max(QualitySeconds, RatingSeconds), 10, 180) + 5;
-                }
-                State.Queue.push_back(std::move(Entry));
-                if (!ClientAllowsGrinding) ++State.ClientFilterFallbackItems;
-            }
-
-            ++State.ScanAttempts;
-            State.SnapshotInventoryFrame = Target->InvUpdatedFrame;
-
-            // An empty list usually means the remote inventory response has not
-            // arrived yet. Retry briefly instead of permanently caching it.
-            if (ItemCount == 0 && State.ScanAttempts < 5) {
-                State.ScanAt = Now + std::chrono::milliseconds(500);
-                g_AutoGrindHelicoprionStatus = std::format(
-                    "已锁定旋齿鲨，正在同步背包（{}/4）", State.ScanAttempts);
-                return;
-            }
-
-            State.SnapshotReady = true;
-            g_AutoGrindHelicoprionStatus = std::format(
-                "已锁定旋齿鲨：排队 {} 件，排除 {} 件，服务器复核 {} 件",
-                State.Queue.size(), State.ExcludedItems, State.ClientFilterFallbackItems);
-        }
-
-        // If items arrive just after the last empty snapshot while the UI is
-        // still open, arm one more scan without requiring the user to close it.
-        if (State.Queue.empty() && ViewingInventory == Target &&
-            State.SnapshotInventoryFrame != Target->InvUpdatedFrame) {
-            State.SnapshotReady = false;
-            State.ScanAttempts = 0;
-            State.ScanAt = Now + std::chrono::milliseconds(250);
-            g_AutoGrindHelicoprionStatus = "检测到背包更新，正在重新扫描";
-            return;
-        }
-
-        if (State.Queue.empty()) {
-            g_AutoGrindHelicoprionStatus = std::format("该旋齿鲨背包没有可提交研磨的物品；排除 {} 件",
-                State.ExcludedItems);
-            return;
-        }
-
-        if (State.AwaitingAcceptance && State.CurrentIndex < State.Queue.size()) {
-            QueueEntry& Entry = State.Queue[State.CurrentIndex];
-
-            // A successful Helicoprion request closes the remote inventory.
-            // Unlike a local void RPC call, this is an observable server-driven
-            // acknowledgement that processing actually started.
-            if (PC->GetViewingInventory() != Target) {
-                State.AwaitingAcceptance = false;
-                State.AcceptanceFailed = false;
-                ++State.CurrentIndex;
-                State.RetryAt = Now + std::chrono::seconds(Entry.EstimatedProcessSeconds);
-                g_AutoGrindHelicoprionStatus = std::format(
-                    "服务器已确认开始研磨：{}；进度 {}/{}，预计等待 {} 秒",
-                    Entry.Name, State.CurrentIndex, State.Queue.size(), Entry.EstimatedProcessSeconds);
-                return;
-            }
-
-            if (Now < State.AcceptanceDeadline) {
-                const int64_t RemainingMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    State.AcceptanceDeadline - Now).count();
-                const int64_t RemainingSeconds = std::max<int64_t>(
-                    (RemainingMilliseconds + 999) / 1000, 0);
-                g_AutoGrindHelicoprionStatus = std::format(
-                    "研磨请求已发送：{}；等待服务器确认（{} 秒）",
-                    Entry.Name, RemainingSeconds);
-                return;
-            }
-
-            State.AwaitingAcceptance = false;
-            if (Entry.RequestAttempts < 2) {
-                State.RetryAt = Now + std::chrono::seconds(1);
-                g_AutoGrindHelicoprionStatus = std::format(
-                    "服务器未确认研磨：{}；1 秒后重试一次",
-                    Entry.Name);
-                return;
-            }
-
-            State.AcceptanceFailed = true;
-        }
-
-        if (State.AcceptanceFailed && State.CurrentIndex < State.Queue.size()) {
-            const QueueEntry& Entry = State.Queue[State.CurrentIndex];
-            g_AutoGrindHelicoprionStatus = std::format(
-                "服务器拒绝研磨：{}（已尝试 2 次）；队列已停止，不会误报成功",
-                Entry.Name);
-            return;
-        }
-
-        if (State.CurrentIndex > 0 && Now < State.RetryAt) {
-            const QueueEntry& ProcessingEntry = State.Queue[State.CurrentIndex - 1];
-            const int64_t RemainingMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
-                State.RetryAt - Now).count();
-            const int64_t RemainingSeconds = std::max<int64_t>(
-                (RemainingMilliseconds + 999) / 1000, 0);
-            g_AutoGrindHelicoprionStatus = std::format(
-                "正在研磨：{}；进度 {}/{}，预计剩余 {} 秒",
-                ProcessingEntry.Name, State.CurrentIndex, State.Queue.size(), RemainingSeconds);
-            return;
-        }
-
-        if (State.CurrentIndex < State.Queue.size()) {
-            if (Now < State.RetryAt) return;
-
-            QueueEntry& Entry = State.Queue[State.CurrentIndex];
-
-            // This RPC is reliable. Once the first grind closes the remote UI,
-            // the client clears its replicated item list; absence from that list
-            // is therefore not proof that every remaining item was processed.
-            // Submit the immutable snapshot IDs one at a time instead.
-            const bool CanConfirmByInventoryClose = PC->GetViewingInventory() == Target;
-            PC->ServerGrindItemInRemoteInventory(Target, Entry.ItemID, false);
-            ++Entry.RequestAttempts;
-
-            if (CanConfirmByInventoryClose) {
-                State.AwaitingAcceptance = true;
-                State.AcceptanceDeadline = Now + std::chrono::seconds(5);
-                g_AutoGrindHelicoprionStatus = std::format(
-                    "研磨请求已发送：{}；等待服务器确认",
-                    Entry.Name);
-                return;
-            }
-
-            // After the first accepted request closes the UI there is no close
-            // event available for later items. They retain the same validated
-            // inventory and single-item request shape, and remain paced by the
-            // full conversion duration.
-            ++State.CurrentIndex;
-            State.RetryAt = Now + std::chrono::seconds(Entry.EstimatedProcessSeconds);
-            g_AutoGrindHelicoprionStatus = std::format(
-                "后台研磨请求已发送：{}；进度 {}/{}，本件等待 {} 秒",
-                Entry.Name, State.CurrentIndex, State.Queue.size(), Entry.EstimatedProcessSeconds);
-            return;
-        }
-
-        g_AutoGrindHelicoprionStatus = std::format("本批次已按研磨周期全部提交：{} 件；扫描时排除 {} 个隐藏/不可研磨条目",
-            State.Queue.size(), State.ExcludedItems);
-    }
-
-    std::string GetAutoGrindHelicoprionStatus() {
-        return g_AutoGrindHelicoprionStatus;
-    }
-
-    void ExpandPlayerInventory(SDK::UWorld* World) {
-        const int32_t ExpandedInventoryLimit = static_cast<int32_t>(std::lround(
-            std::clamp(g_Config::PlayerInventorySlotLimit, 350.0f, 5000.0f)));
-
-        struct InventoryLimitState {
-            SDK::UPrimalInventoryComponent* Inventory = nullptr;
-            int32_t ObjectIndex = -1;
-            int32_t MaxInventoryItems = 0;
-            int32_t StartingAbsoluteMaxInventoryItems = 0;
-            int32_t AbsoluteMaxInventoryItems = 0;
-            bool IgnoreMaxInventoryItems = false;
-            bool HasMaxInventoryItems = false;
-            bool HasStartingAbsoluteMaxInventoryItems = false;
-            bool HasAbsoluteMaxInventoryItems = false;
-            bool HasIgnoreMaxInventoryItems = false;
-            bool Patched = false;
-            int32_t AppliedLimit = 0;
-        };
-        static InventoryLimitState State;
-
-        auto RestoreState = []() {
-            SDK::UPrimalInventoryComponent* Inventory = ResolveCachedObject(
-                State.Inventory, State.ObjectIndex);
-            if (Inventory && State.Patched) {
-                if (State.HasIgnoreMaxInventoryItems) {
-                    WriteReflectedBoolValue(Inventory, "bIgnoreMaxInventoryItems",
-                        State.IgnoreMaxInventoryItems);
-                }
-                if (State.HasMaxInventoryItems) {
-                    WriteReflectedInt32Value(Inventory, "MaxInventoryItems",
-                        State.MaxInventoryItems);
-                }
-                if (State.HasStartingAbsoluteMaxInventoryItems) {
-                    WriteReflectedInt32Value(Inventory, "StartingAbsoluteMaxInventoryItems",
-                        State.StartingAbsoluteMaxInventoryItems);
-                }
-                if (State.HasAbsoluteMaxInventoryItems) {
-                    WriteReflectedInt32Value(Inventory, "AbsoluteMaxInventoryItems",
-                        State.AbsoluteMaxInventoryItems);
-                }
-                Inventory->InventoryRefresh();
-            }
-            State = InventoryLimitState{};
-        };
-
-        if (!g_Config::bExpandPlayerInventory) {
-            RestoreState();
-            return;
-        }
-
-        if (!World || !World->OwningGameInstance || World->OwningGameInstance->LocalPlayers.Num() == 0) return;
-
-        SDK::ULocalPlayer* LP = World->OwningGameInstance->LocalPlayers[0];
-        if (!LP || !LP->PlayerController || !LP->PlayerController->IsA(SDK::AShooterPlayerController::StaticClass())) return;
-
-        SDK::AShooterPlayerController* PC = static_cast<SDK::AShooterPlayerController*>(LP->PlayerController);
-        SDK::APrimalCharacter* InventoryOwner = GetPlayerInventoryOwner(PC);
-        if (!InventoryOwner) return;
-
-        SDK::UPrimalInventoryComponent* Inventory = InventoryOwner->MyInventoryComponent;
-        if (!Inventory || !Inventory->Class) return;
-
-        if (State.Inventory != Inventory || State.ObjectIndex != Inventory->Index) {
-            RestoreState();
-            State.Inventory = Inventory;
-            State.ObjectIndex = Inventory->Index;
-            State.HasIgnoreMaxInventoryItems = ReadReflectedBoolValue(Inventory,
-                "bIgnoreMaxInventoryItems", &State.IgnoreMaxInventoryItems);
-            State.HasMaxInventoryItems = ReadReflectedInt32Value(Inventory,
-                "MaxInventoryItems", &State.MaxInventoryItems);
-            State.HasStartingAbsoluteMaxInventoryItems = ReadReflectedInt32Value(Inventory,
-                "StartingAbsoluteMaxInventoryItems", &State.StartingAbsoluteMaxInventoryItems);
-            State.HasAbsoluteMaxInventoryItems = ReadReflectedInt32Value(Inventory,
-                "AbsoluteMaxInventoryItems", &State.AbsoluteMaxInventoryItems);
-        }
-
-        // Ignore the ordinary slot cap and raise only the engine's absolute
-        // safety ceiling. Weight, stack sizes and every non-player inventory
-        // remain untouched.
-        const bool WroteIgnore = WriteReflectedBoolValue(Inventory, "bIgnoreMaxInventoryItems", true);
-        const bool WroteMax = WriteReflectedInt32Value(Inventory, "MaxInventoryItems", ExpandedInventoryLimit);
-        const bool WroteStartingAbsolute = WriteReflectedInt32Value(Inventory,
-            "StartingAbsoluteMaxInventoryItems", ExpandedInventoryLimit);
-        const bool WroteAbsolute = WriteReflectedInt32Value(Inventory,
-            "AbsoluteMaxInventoryItems", ExpandedInventoryLimit);
-
-        // The character mirrors the result of IsAtMaxInventoryItems for HUD
-        // and pickup checks. Clear that replicated/transient latch as well.
-        WriteReflectedBoolValue(InventoryOwner, "bIsAtMaxInventoryItems", false);
-
-        if ((!State.Patched || State.AppliedLimit != ExpandedInventoryLimit) &&
-            (WroteIgnore || WroteMax || WroteStartingAbsolute || WroteAbsolute)) {
-            State.Patched = true;
-            State.AppliedLimit = ExpandedInventoryLimit;
-            Inventory->InventoryRefresh();
-
-            const int32_t EffectiveMax = Inventory->GetMaxInventoryItems(true);
-            const int32_t EffectiveAbsolute = Inventory->GetAbsoluteMaxInventoryItems(false);
-            g_LogManager::AddLog(120, 255, 180, 255,
-                std::format("背包上限已应用: 普通 {} / 绝对 {}", EffectiveMax, EffectiveAbsolute));
-        }
+        Submitted = std::clamp(Submitted, 0, Batch);
+        State.SubmittedRequests += Submitted;
+        State.Status = std::format("{} | 队列 {} | 本批请求 {}/{} | 累计请求 {}；持续制作",
+            UsedNativeBatch ? "原生批量制作" : "批量补单（打开一次工作台可使用原生入口）",
+            Queue, Submitted, Batch, State.SubmittedRequests);
     }
 
     void DinoAttackSpeed(SDK::UWorld* World) {
@@ -5594,82 +5185,72 @@ namespace g_Hack {
         return g_TastyBaitOverrideRuntime.Status;
     }
 
-    std::vector<SkillCooldownView> GetLostColonyCooldowns(SDK::UWorld* World) {
-        std::vector<SkillCooldownView> Result;
-        SDK::AShooterCharacter* Human = GetLocalHumanCharacter(World);
-        if (!Human || !IsUsableObject(Human)) return Result;
-
-        ReflectedStructArrayView Cooldowns;
-        if (!GetReflectedStructArray(Human, "SkillCooldowns", 512, &Cooldowns) ||
-            !Cooldowns.ElementStruct) {
-            return Result;
-        }
-
-        SDK::FProperty* SkillNameProperty = FindReflectedProperty(Cooldowns.ElementStruct, "SkillName");
-        SDK::FProperty* CooldownDurationProperty =
-            FindReflectedProperty(Cooldowns.ElementStruct, "CooldownDuration");
-        if (!SkillNameProperty || !SkillNameProperty->ClassPrivate || SkillNameProperty->Offset < 0 ||
-            SkillNameProperty->Offset + static_cast<int32_t>(sizeof(SDK::FName)) > Cooldowns.ElementSize ||
-            !EqualsNameIgnoreCase(SkillNameProperty->ClassPrivate->Name.ToString(), "NameProperty") ||
-            !CooldownDurationProperty || !CooldownDurationProperty->ClassPrivate ||
-            CooldownDurationProperty->Offset < 0 ||
-            CooldownDurationProperty->Offset + static_cast<int32_t>(sizeof(float)) > Cooldowns.ElementSize ||
-            !EqualsNameIgnoreCase(CooldownDurationProperty->ClassPrivate->Name.ToString(), "FloatProperty")) {
-            return Result;
-        }
-
-        for (int32_t Index = 0; Index < Cooldowns.Num; ++Index) {
-            const uint8_t* Element = Cooldowns.Data + static_cast<size_t>(Index) * Cooldowns.ElementSize;
-            const SDK::FName SkillNameValue =
-                *reinterpret_cast<const SDK::FName*>(Element + SkillNameProperty->Offset);
-            const float Duration =
-                *reinterpret_cast<const float*>(Element + CooldownDurationProperty->Offset);
-            const std::string SkillName = SkillNameValue.ToString();
-
-            const float Remaining = Human->GetSkillCooldownTimeRemaining(SkillNameValue);
-            if (!std::isfinite(Remaining) || Remaining <= 0.01f) continue;
-
-            Result.push_back({
-                SkillName,
-                Remaining,
-                std::isfinite(Duration) ? Duration : 0.0f,
-                false
-                });
-        }
-
-        std::sort(Result.begin(), Result.end(), [](const SkillCooldownView& Left, const SkillCooldownView& Right) {
-            return Left.RemainingSeconds > Right.RemainingSeconds;
-            });
-        return Result;
-    }
-
     namespace {
         struct AutoHarvestSkippedTarget {
             SDK::FVector Location{};
             std::chrono::steady_clock::time_point Until{};
         };
 
+        struct AutoHarvestProbeFrame {
+            SDK::FVector CollisionCenter{}, FootLocation{};
+            float CapsuleRadius = 75.0f, CapsuleHalfHeight = 100.0f;
+            float MaxStepHeight = 45.0f, WalkableFloorZ = 0.55f;
+        };
+
         struct AutoHarvestRuntimeState {
             bool WasEnabled = false;
-            bool TekStriderElementShardMode = false;
-            bool TekStriderBeamActive = false;
+            bool TekStriderMode = false;
+            // The excavation rig is a persistent mode. Once automation turns
+            // it on, keep it enabled across target changes and approach phases.
+            bool TekStriderBeamStartRequested = false;
+            SDK::APrimalDinoCharacter* TekStriderBeamDino = nullptr;
+            int32_t TekStriderBeamDinoObjectIndex = -1;
+            int32_t TekStriderBeamDinoSerialNumber = -1;
             bool OwnsForceTurn = false;
             bool HasTarget = false;
             bool AttackHeld = false;
             bool OwnsSprint = false;
             SDK::APrimalDinoCharacter* SprintDino = nullptr;
             int32_t SprintDinoObjectIndex = -1;
+            int32_t SprintDinoSerialNumber = -1;
+            SDK::UWorld* World = nullptr;
+            SDK::APrimalDinoCharacter* ControlledDino = nullptr;
+            int32_t WorldIndex = -1, WorldSerial = -1, DinoIndex = -1, DinoSerial = -1;
             SDK::FVector TargetLocation{};
             SDK::FVector AvoidDirection{};
+            size_t SteeringPairCursor = 0;
             SDK::FVector MovementSampleLocation{};
+            SDK::FRotator DesiredMountFacingRotation{};
+            bool HasDesiredMountFacingRotation = false;
             std::string TargetType;
             std::vector<SDK::FVector> NavigationPoints;
+            std::vector<double> NavigationRemaining;
+            size_t NavigationCandidateCursor = 0;
+            std::vector<g_DrawESP::ResourceTargetCandidate> SelectionCandidates;
+            size_t SelectionCursor = 0;
+            SDK::FVector SelectionOrigin{};
+            float SelectionRadius = 0, SelectionRange = 0;
+            bool SelectionHasBest = false;
+            Harvest::RouteCost SelectionBestCost{false, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
+            g_DrawESP::ResourceTargetCandidate SelectionBest;
+            std::vector<SDK::FVector> SelectionBestRoute;
+            unsigned EmptySearches = 0, RangeRefinements = 0;
+            float MeleeApproachLimitMeters = std::numeric_limits<float>::infinity();
+            float BeamApproachLimitMeters = std::numeric_limits<float>::infinity();
+            float NativeMeleeReachMeters = 0, CachedRangeMultiplier = 0;
+            bool MeleeReachReady = false, CachedRangeEnabled = false;
+            AutoHarvestProbeFrame CachedProbeFrame;
+            SDK::FVector CachedProbeActorLocation{};
             std::vector<AutoHarvestSkippedTarget> SkippedTargets;
             size_t NavigationPointIndex = 0;
             bool NavigationPathAvailable = false;
             bool NavigationPathPartial = false;
             std::chrono::steady_clock::time_point NextUpdate{};
+            std::chrono::steady_clock::time_point NextTargetSearch{};
+            std::chrono::steady_clock::time_point NextTargetResolve{}, NextProbeGeometry{}, NextPathSmoothing{}, LastRangeAdjustment{};
+            std::chrono::steady_clock::time_point NextMeleeReach{};
             std::chrono::steady_clock::time_point NextAttack{};
+            std::chrono::steady_clock::time_point NextTekStriderBeamToggle{};
             std::chrono::steady_clock::time_point ReleaseAttack{};
             std::chrono::steady_clock::time_point TargetLastSeen{};
             std::chrono::steady_clock::time_point TargetAcquired{};
@@ -5686,6 +5267,8 @@ namespace g_Hack {
             std::chrono::steady_clock::time_point ObstacleClearUntil{};
             std::chrono::steady_clock::time_point NextObstacleAttack{};
             std::chrono::steady_clock::time_point ObstacleClearCooldownUntil{};
+            std::chrono::steady_clock::time_point NextHarvestProgressSample{};
+            std::chrono::steady_clock::time_point LastHarvestProgress{};
             std::chrono::steady_clock::time_point AquaticSettleUntil{};
             std::chrono::steady_clock::time_point AquaticBrakeUntil{};
             SDK::FVector AquaticLastApproachDirection{};
@@ -5696,6 +5279,7 @@ namespace g_Hack {
             int ObstacleClearAttacksRemaining = 0;
             int ObstacleClearBursts = 0;
             int AquaticOvershootCount = 0;
+            Harvest::InventoryProgress InventoryProgress;
         };
 
         AutoHarvestRuntimeState s_autoHarvestState{};
@@ -5703,8 +5287,10 @@ namespace g_Hack {
         struct AutoHarvestAquaticPitchState {
             SDK::APrimalDinoCharacter* Dino = nullptr;
             int32_t DinoObjectIndex = -1;
+            int32_t DinoSerialNumber = -1;
             SDK::UPrimalCharacterMovement* Movement = nullptr;
             int32_t MovementObjectIndex = -1;
+            int32_t MovementSerialNumber = -1;
             bool UseControllerRotationPitch = false;
             bool UseControllerRotationYaw = false;
             bool ForceAccelerationFollowsRotationInSwimming = false;
@@ -5716,9 +5302,54 @@ namespace g_Hack {
         std::mutex s_autoHarvestStatusMutex;
         std::string s_autoHarvestStatus = "未启用";
 
+        struct AutoHarvestViewLockSnapshot {
+            bool Active = false;
+            SDK::FVector TargetLocation{};
+            SDK::APrimalDinoCharacter* Dino = nullptr;
+            int32_t DinoObjectIndex = -1;
+            int32_t DinoSerialNumber = -1;
+        };
+
+        std::mutex s_autoHarvestViewLockMutex;
+        AutoHarvestViewLockSnapshot s_autoHarvestViewLock{};
+
+        double AutoHarvestDistanceSquared(const SDK::FVector& Left,
+            const SDK::FVector& Right);
+        bool IsFiniteAutoHarvestVector(const SDK::FVector& Value);
+
         void SetAutoHarvestStatus(std::string Status) {
             std::scoped_lock Lock(s_autoHarvestStatusMutex);
             s_autoHarvestStatus = std::move(Status);
+        }
+
+        void ResetAutoHarvestMeleeReach() {
+            if (s_autoHarvestState.MeleeReachReady || s_autoHarvestState.CachedRangeEnabled) ResetDinoHarvestRange();
+            s_autoHarvestState.MeleeReachReady = false;s_autoHarvestState.CachedRangeEnabled = false;
+            s_autoHarvestState.NativeMeleeReachMeters = 0;s_autoHarvestState.NextMeleeReach = {};
+        }
+
+        void ClearAutoHarvestViewLock() {
+            std::scoped_lock Lock(s_autoHarvestViewLockMutex);
+            s_autoHarvestViewLock = {};
+        }
+
+        void PublishAutoHarvestViewLock(SDK::APrimalDinoCharacter* Dino,
+            const SDK::FVector& TargetLocation) {
+            if (!Dino || !IsFiniteAutoHarvestVector(TargetLocation)) {
+                ClearAutoHarvestViewLock();
+                return;
+            }
+            int32_t SerialNumber = -1;
+            if (!TryGetLiveObjectSerial(Dino, Dino->Index, &SerialNumber)) {
+                ClearAutoHarvestViewLock();
+                return;
+            }
+            std::scoped_lock Lock(s_autoHarvestViewLockMutex);
+            s_autoHarvestViewLock.Active = true;
+            s_autoHarvestViewLock.TargetLocation = TargetLocation;
+            s_autoHarvestViewLock.Dino = Dino;
+            s_autoHarvestViewLock.DinoObjectIndex = Dino->Index;
+            s_autoHarvestViewLock.DinoSerialNumber = SerialNumber;
         }
 
         bool SendAutoHarvestMouseButton(bool Pressed) {
@@ -5749,17 +5380,53 @@ namespace g_Hack {
             return SendInput(2, Inputs, sizeof(INPUT)) == 2;
         }
 
-        bool StopAutoHarvestTekStriderBeam() {
-            if (!s_autoHarvestState.TekStriderBeamActive) return true;
+        void ForgetAutoHarvestTekStriderBeamRequest() {
+            s_autoHarvestState.TekStriderBeamStartRequested = false;
+            s_autoHarvestState.TekStriderBeamDino = nullptr;
+            s_autoHarvestState.TekStriderBeamDinoObjectIndex = -1;
+            s_autoHarvestState.TekStriderBeamDinoSerialNumber = -1;
+        }
+
+        bool StopAutoHarvestTekStriderBeamIfOwned() {
+            if (!s_autoHarvestState.TekStriderBeamStartRequested) return true;
+
+            const auto Now = std::chrono::steady_clock::now();
+            if (Now < s_autoHarvestState.NextTekStriderBeamToggle) return false;
+
+            SDK::APlayerController* LocalPC = g_Util::GetLocalPC();
+            int32_t LiveBeamDinoSerialNumber = -1;
+            const bool StillControllingOwner = IsUsableObject(LocalPC) &&
+                IsUsableObject(LocalPC->Pawn) &&
+                LocalPC->Pawn == s_autoHarvestState.TekStriderBeamDino &&
+                s_autoHarvestState.TekStriderBeamDinoObjectIndex >= 0 &&
+                LocalPC->Pawn->Index ==
+                    s_autoHarvestState.TekStriderBeamDinoObjectIndex &&
+                TryGetLiveObjectSerial(LocalPC->Pawn,
+                    s_autoHarvestState.TekStriderBeamDinoObjectIndex,
+                    &LiveBeamDinoSerialNumber) &&
+                LiveBeamDinoSerialNumber ==
+                    s_autoHarvestState.TekStriderBeamDinoSerialNumber;
+            if (!StillControllingOwner) {
+                // Never send a blind right-click after a dismount/map change.
+                // The old rig owns its own replicated state at that point.
+                ForgetAutoHarvestTekStriderBeamRequest();
+                return true;
+            }
+
             if (!SendAutoHarvestTekStriderRigToggle()) return false;
-            s_autoHarvestState.TekStriderBeamActive = false;
+            s_autoHarvestState.NextTekStriderBeamToggle =
+                Now + std::chrono::milliseconds(750);
+            ForgetAutoHarvestTekStriderBeamRequest();
             return true;
         }
 
         void ReleaseAutoHarvestSprint() {
+            int32_t Serial = -1;
             if (s_autoHarvestState.OwnsSprint &&
                 s_autoHarvestState.SprintDino &&
                 s_autoHarvestState.SprintDinoObjectIndex >= 0 &&
+                TryGetLiveObjectSerial(s_autoHarvestState.SprintDino,
+                    s_autoHarvestState.SprintDinoObjectIndex, &Serial) && Serial == s_autoHarvestState.SprintDinoSerialNumber &&
                 IsUsableObject(s_autoHarvestState.SprintDino) &&
                 s_autoHarvestState.SprintDino->Index ==
                     s_autoHarvestState.SprintDinoObjectIndex) {
@@ -5768,6 +5435,7 @@ namespace g_Hack {
             s_autoHarvestState.OwnsSprint = false;
             s_autoHarvestState.SprintDino = nullptr;
             s_autoHarvestState.SprintDinoObjectIndex = -1;
+            s_autoHarvestState.SprintDinoSerialNumber = -1;
             s_autoHarvestState.NextSprintRequest = {};
         }
 
@@ -5778,11 +5446,14 @@ namespace g_Hack {
                 return;
             }
 
+            int32_t Serial = -1;
+            if (!TryGetLiveObjectSerial(Dino, Dino->Index, &Serial)) { ReleaseAutoHarvestSprint(); return; }
             if (s_autoHarvestState.SprintDino != Dino ||
-                s_autoHarvestState.SprintDinoObjectIndex != Dino->Index) {
+                s_autoHarvestState.SprintDinoObjectIndex != Dino->Index || s_autoHarvestState.SprintDinoSerialNumber != Serial) {
                 ReleaseAutoHarvestSprint();
                 s_autoHarvestState.SprintDino = Dino;
                 s_autoHarvestState.SprintDinoObjectIndex = Dino->Index;
+                s_autoHarvestState.SprintDinoSerialNumber = Serial;
             }
 
             if (Dino->IsRunning()) return;
@@ -5854,21 +5525,40 @@ namespace g_Hack {
             return std::isfinite(Value.X) && std::isfinite(Value.Y) && std::isfinite(Value.Z);
         }
 
+        bool TryGetAutoHarvestInventorySnapshot(SDK::APrimalDinoCharacter* Dino,
+            Harvest::InventoryProgress::Snapshot* Out) {
+            if (!Out || !IsUsableObject(Dino) || !IsUsableObject(Dino->MyInventoryComponent)) return false;
+            const auto& Items = Dino->MyInventoryComponent->InventoryItems;
+            if (Items.Num() < 0 || Items.Num() > 10000) return false;
+            Out->clear();
+            // Group stacks by item class. Stack order/merges and food depletion
+            // must not hide gains in a different harvested resource type.
+            for (auto* Item : Items) {
+                if (!IsUsableObject(Item) || !IsUsableObject(Item->Class)) return false;
+                if (Item->ItemQuantity > 0)
+                    (*Out)[reinterpret_cast<uintptr_t>(Item->Class)] += Item->ItemQuantity;
+            }
+            return true;
+        }
+
         void RestoreAutoHarvestAquaticPitchControl() {
             AutoHarvestAquaticPitchState& State = s_autoHarvestAquaticPitchState;
+            int32_t Serial = -1;
             if (State.Dino && State.DinoObjectIndex >= 0 &&
+                TryGetLiveObjectSerial(State.Dino, State.DinoObjectIndex, &Serial) && Serial == State.DinoSerialNumber &&
                 IsUsableObject(State.Dino) && State.Dino->Index == State.DinoObjectIndex) {
-                State.Dino->bUseControllerRotationPitch = State.UseControllerRotationPitch;
-                State.Dino->bUseControllerRotationYaw = State.UseControllerRotationYaw;
+                if (State.Dino->bUseControllerRotationPitch) State.Dino->bUseControllerRotationPitch = State.UseControllerRotationPitch;
+                if (State.Dino->bUseControllerRotationYaw) State.Dino->bUseControllerRotationYaw = State.UseControllerRotationYaw;
             }
             if (State.Movement && State.MovementObjectIndex >= 0 &&
+                TryGetLiveObjectSerial(State.Movement, State.MovementObjectIndex, &Serial) && Serial == State.MovementSerialNumber &&
                 IsUsableObject(State.Movement) &&
                 State.Movement->Index == State.MovementObjectIndex) {
-                State.Movement->bForceAccelerationFollowsRotationInSwimming =
+                if (State.Movement->bForceAccelerationFollowsRotationInSwimming) State.Movement->bForceAccelerationFollowsRotationInSwimming =
                     State.ForceAccelerationFollowsRotationInSwimming;
-                State.Movement->bIgnoreRotationAccelerationWhenSwimming =
+                if (State.Movement->bIgnoreRotationAccelerationWhenSwimming) State.Movement->bIgnoreRotationAccelerationWhenSwimming =
                     State.IgnoreRotationAccelerationWhenSwimming;
-                State.Movement->bZeroPitchWhenNoAcceleration =
+                if (!State.Movement->bZeroPitchWhenNoAcceleration) State.Movement->bZeroPitchWhenNoAcceleration =
                     State.ZeroPitchWhenNoAcceleration;
             }
             State = AutoHarvestAquaticPitchState{};
@@ -5883,14 +5573,20 @@ namespace g_Hack {
 
             SDK::UPrimalCharacterMovement* Movement =
                 static_cast<SDK::UPrimalCharacterMovement*>(Dino->CharacterMovement);
+            int32_t DinoSerial = -1, MovementSerial = -1;
+            if (!TryGetLiveObjectSerial(Dino, Dino->Index, &DinoSerial) ||
+                !TryGetLiveObjectSerial(Movement, Movement->Index, &MovementSerial)) { RestoreAutoHarvestAquaticPitchControl(); return; }
             AutoHarvestAquaticPitchState& State = s_autoHarvestAquaticPitchState;
             if (State.Dino != Dino || State.DinoObjectIndex != Dino->Index ||
-                State.Movement != Movement || State.MovementObjectIndex != Movement->Index) {
+                State.Movement != Movement || State.MovementObjectIndex != Movement->Index ||
+                State.DinoSerialNumber != DinoSerial || State.MovementSerialNumber != MovementSerial) {
                 RestoreAutoHarvestAquaticPitchControl();
                 State.Dino = Dino;
                 State.DinoObjectIndex = Dino->Index;
+                State.DinoSerialNumber = DinoSerial;
                 State.Movement = Movement;
                 State.MovementObjectIndex = Movement->Index;
+                State.MovementSerialNumber = MovementSerial;
                 State.UseControllerRotationPitch = Dino->bUseControllerRotationPitch;
                 State.UseControllerRotationYaw = Dino->bUseControllerRotationYaw;
                 State.ForceAccelerationFollowsRotationInSwimming =
@@ -5945,140 +5641,340 @@ namespace g_Hack {
             };
         }
 
-        SDK::TArray<SDK::AActor*> MakeAutoHarvestTraceIgnoreActors(
-            SDK::APrimalDinoCharacter* Dino) {
-            SDK::TArray<SDK::AActor*> IgnoreActors;
-            if (Dino) {
-                IgnoreActors.Add(Dino);
-                if (SDK::AShooterCharacter* Rider = Dino->Rider.Get()) IgnoreActors.Add(Rider);
+        void PopulateAutoHarvestTraceIgnoreActors(
+            SDK::APrimalDinoCharacter* Dino,
+            SDK::TArray<SDK::AActor*>& IgnoreActors) {
+            if (!Dino || IgnoreActors.Max() <= 0 || !IgnoreActors.GetDataPtr()) return;
+
+            const auto AddUniqueActor = [&IgnoreActors](SDK::AActor* Actor) {
+                if (Actor && IsUsableObject(Actor) &&
+                    !IgnoreActors.Contains(Actor)) {
+                    IgnoreActors.Add(Actor);
+                }
+            };
+
+            // Avoid GetAttachedActors here: the generated SDK returns a shallow
+            // owning TArray without a destructor, so polling it would leak the
+            // engine allocation. Walk the live component attachment tree into
+            // fixed local storage instead; cross-actor root components expose
+            // Strider rigs, saddles and rider equipment through GetOwner().
+            std::array<SDK::USceneComponent*, 192> PendingComponents{};
+            size_t PendingCount = 0;
+            const auto QueueComponent = [&](SDK::USceneComponent* Component) {
+                if (!Component || !IsUsableObject(Component) ||
+                    PendingCount >= PendingComponents.size()) return;
+                for (size_t Index = 0; Index < PendingCount; ++Index) {
+                    if (PendingComponents[Index] == Component) return;
+                }
+                PendingComponents[PendingCount++] = Component;
+            };
+            const auto QueueActor = [&](SDK::AActor* Actor) {
+                if (!Actor || !IsUsableObject(Actor)) return;
+                AddUniqueActor(Actor);
+                QueueComponent(Actor->RootComponent);
+                const int32_t ChildCount = Actor->Children.Num();
+                if (ChildCount < 0 || ChildCount > 256) return;
+                for (int32_t Index = 0; Index < ChildCount && Index < 64; ++Index) {
+                    SDK::AActor* Child = Actor->Children[Index];
+                    AddUniqueActor(Child);
+                    if (Child && IsUsableObject(Child)) {
+                        QueueComponent(Child->RootComponent);
+                    }
+                }
+            };
+
+            QueueActor(Dino);
+            QueueActor(Dino->Rider.Get());
+            for (size_t Cursor = 0; Cursor < PendingCount; ++Cursor) {
+                SDK::USceneComponent* Component = PendingComponents[Cursor];
+                if (!Component || !IsUsableObject(Component)) continue;
+                AddUniqueActor(Component->GetOwner());
+
+                const auto QueueChildren = [&](const auto& Children) {
+                    const int32_t ChildCount = Children.Num();
+                    if (ChildCount < 0 || ChildCount > 512) return;
+                    for (int32_t Index = 0; Index < ChildCount && Index < 128; ++Index) {
+                        QueueComponent(Children[Index]);
+                    }
+                };
+                QueueChildren(Component->AttachChildren);
+                QueueChildren(Component->ClientAttachedChildren);
             }
-            return IgnoreActors;
+        }
+
+        AutoHarvestProbeFrame ResolveAutoHarvestProbeFrame(
+            SDK::APrimalDinoCharacter* Dino, const SDK::FVector& ActorLocation) {
+            const auto Now = Harvest::Clock::now();
+            if (Dino == s_autoHarvestState.ControlledDino && Now < s_autoHarvestState.NextProbeGeometry) {
+                auto Frame = s_autoHarvestState.CachedProbeFrame;
+                const auto Delta = ActorLocation - s_autoHarvestState.CachedProbeActorLocation;
+                Frame.CollisionCenter = Frame.CollisionCenter + Delta;
+                Frame.FootLocation = Frame.FootLocation + Delta;
+                return Frame;
+            }
+            AutoHarvestProbeFrame Frame{};
+            Frame.CollisionCenter = ActorLocation;
+
+            bool HasValidCapsule = false;
+            if (Dino && Dino->CapsuleComponent &&
+                IsUsableObject(Dino->CapsuleComponent)) {
+                const float Radius = Dino->CapsuleComponent->GetScaledCapsuleRadius();
+                const float HalfHeight =
+                    Dino->CapsuleComponent->GetScaledCapsuleHalfHeight();
+                const SDK::FVector Center =
+                    Dino->CapsuleComponent->K2_GetComponentLocation();
+                if (std::isfinite(Radius) && Radius > 1.0f &&
+                    std::isfinite(HalfHeight) && HalfHeight > 1.0f &&
+                    IsFiniteAutoHarvestVector(Center)) {
+                    Frame.CapsuleRadius = std::clamp(Radius, 25.0f, 2500.0f);
+                    Frame.CapsuleHalfHeight =
+                        std::clamp(HalfHeight, Frame.CapsuleRadius, 5000.0f);
+                    Frame.CollisionCenter = Center;
+                    HasValidCapsule = true;
+                }
+            }
+
+            if (!HasValidCapsule && Dino) {
+                SDK::FVector BoundsOrigin{};
+                SDK::FVector BoundsExtent{};
+                Dino->GetActorBounds(true, &BoundsOrigin, &BoundsExtent, false);
+                if (IsFiniteAutoHarvestVector(BoundsOrigin) &&
+                    IsFiniteAutoHarvestVector(BoundsExtent) &&
+                    BoundsExtent.X > 1.0 && BoundsExtent.Y > 1.0 &&
+                    BoundsExtent.Z > 1.0) {
+                    Frame.CollisionCenter = BoundsOrigin;
+                    Frame.CapsuleRadius = static_cast<float>(std::clamp(
+                        std::max(BoundsExtent.X, BoundsExtent.Y), 25.0, 2500.0));
+                    Frame.CapsuleHalfHeight = static_cast<float>(std::clamp(
+                        BoundsExtent.Z, static_cast<double>(Frame.CapsuleRadius), 5000.0));
+                }
+            }
+
+            if (Dino && Dino->CharacterMovement &&
+                IsUsableObject(Dino->CharacterMovement)) {
+                const float StepHeight = Dino->CharacterMovement->MaxStepHeight;
+                if (std::isfinite(StepHeight) && StepHeight > 0.0f) {
+                    Frame.MaxStepHeight = std::clamp(StepHeight, 20.0f, 400.0f);
+                }
+                const float FloorZ = Dino->CharacterMovement->K2_GetWalkableFloorZ();
+                if (std::isfinite(FloorZ) && FloorZ > 0.05f && FloorZ < 1.0f) {
+                    Frame.WalkableFloorZ = FloorZ;
+                }
+            }
+
+            Frame.FootLocation = Frame.CollisionCenter;
+            Frame.FootLocation.Z -= Frame.CapsuleHalfHeight;
+            if (Dino == s_autoHarvestState.ControlledDino) {
+                s_autoHarvestState.CachedProbeFrame = Frame;
+                s_autoHarvestState.CachedProbeActorLocation = ActorLocation;
+                s_autoHarvestState.NextProbeGeometry = Now + std::chrono::milliseconds(200);
+            }
+            return Frame;
+        }
+
+        bool IsAutoHarvestWalkableHit(SDK::APrimalDinoCharacter* Dino,
+            const SDK::FHitResult& Hit, float FallbackWalkableFloorZ) {
+            if (Dino && Dino->CharacterMovement &&
+                IsUsableObject(Dino->CharacterMovement)) {
+                return Dino->CharacterMovement->IsWalkable(Hit, true);
+            }
+            return Hit.ImpactNormal.Z >= FallbackWalkableFloorZ;
+        }
+
+        bool IsAutoHarvestBreakableObstacle(const SDK::FHitResult& Hit);
+
+        bool IsAutoHarvestHardBeamOccluder(const SDK::FHitResult& Hit) {
+            SDK::UPrimitiveComponent* Component = Hit.Component.Get();
+            SDK::UObject* HitObject = Hit.HitObjectHandle.ReferenceObject.Get();
+            SDK::AActor* Actor = Component ? Component->GetOwner() : nullptr;
+            if (!Actor && HitObject && IsUsableObject(HitObject) &&
+                HitObject->IsA(SDK::AActor::StaticClass())) {
+                Actor = static_cast<SDK::AActor*>(HitObject);
+            }
+
+            if (Actor && IsUsableObject(Actor) &&
+                Actor->IsA(SDK::APrimalStructure::StaticClass())) {
+                return true;
+            }
+
+            std::string Identity;
+            const auto AppendIdentity = [&Identity](SDK::UObject* Object) {
+                if (!Object || !IsUsableObject(Object)) return;
+                Identity += Object->GetFullName();
+                Identity += ' ';
+                Identity += Object->GetName();
+                Identity += ' ';
+                if (Object->Class) Identity += Object->Class->GetName();
+                Identity += ' ';
+            };
+            AppendIdentity(Component);
+            AppendIdentity(Actor);
+            AppendIdentity(HitObject);
+            std::transform(Identity.begin(), Identity.end(), Identity.begin(),
+                [](unsigned char Character) {
+                    return static_cast<char>(std::tolower(Character));
+                });
+            constexpr std::array<const char*, 10> HardOccluderNames{
+                "landscape", "terrain", "cliff", "wall", "pillar",
+                "foundation", "ceiling", "doorframe", "gateway", "structure"
+            };
+            return std::any_of(HardOccluderNames.begin(), HardOccluderNames.end(),
+                [&](const char* Name) {
+                    return Identity.find(Name) != std::string::npos;
+                });
+        }
+
+        bool AutoHarvestHasClearBeamPath(SDK::UWorld* World,
+            const SDK::FVector& BeamOrigin, const SDK::FVector& Target,
+            double TargetHitToleranceUU,
+            const SDK::TArray<SDK::AActor*>& IgnoreActors,
+            SDK::FHitResult* OutBlockingHit = nullptr) {
+            if (OutBlockingHit) *OutBlockingHit = {};
+            if (!World || !IsFiniteAutoHarvestVector(BeamOrigin) ||
+                !IsFiniteAutoHarvestVector(Target)) {
+                return false;
+            }
+
+            const double BeamDistanceSquared = AutoHarvestDistanceSquared(
+                BeamOrigin, Target);
+            if (!std::isfinite(BeamDistanceSquared)) return false;
+            const double ToleranceUU = std::clamp(TargetHitToleranceUU,
+                75.0, 350.0);
+            if (BeamDistanceSquared <= ToleranceUU * ToleranceUU) return true;
+
+            SDK::FHitResult Hit{};
+            const bool HasHit = SDK::UKismetSystemLibrary::LineTraceSingle(
+                World, BeamOrigin, Target, SDK::ETraceTypeQuery::TraceTypeQuery1,
+                true, IgnoreActors, SDK::EDrawDebugTrace::None, &Hit, true,
+                SDK::FLinearColor(0, 0, 0, 0),
+                SDK::FLinearColor(0, 0, 0, 0), 0.0f);
+            if (!HasHit || !Hit.bBlockingHit) return true;
+
+            // A tree or another harvestable node in front of the selected
+            // resource is a valid beam contact: the persistent rig can remove
+            // it and expose the original target. Only non-harvestable geometry
+            // must force a navigation detour.
+            const bool HarvestableBeamContact =
+                IsAutoHarvestBreakableObstacle(Hit);
+            const bool HardOccluder = !HarvestableBeamContact &&
+                IsAutoHarvestHardBeamOccluder(Hit);
+            const double HitToTargetSquared = IsFiniteAutoHarvestVector(Hit.ImpactPoint)
+                ? AutoHarvestDistanceSquared(Hit.ImpactPoint, Target)
+                : std::numeric_limits<double>::infinity();
+            const bool HitSelectedNode = HarvestableBeamContact ||
+                (!HardOccluder &&
+                ((std::isfinite(HitToTargetSquared) &&
+                    HitToTargetSquared <= ToleranceUU * ToleranceUU) ||
+                    (std::isfinite(Hit.Time) && Hit.Time >= 0.965f)));
+            if (HitSelectedNode) return true;
+
+            if (OutBlockingHit) *OutBlockingHit = Hit;
+            return false;
         }
 
         bool RefreshAutoHarvestNavigationPath(SDK::UWorld* World,
-            SDK::APrimalDinoCharacter* Dino, const SDK::FVector& Start,
-            const SDK::FVector& End) {
-            s_autoHarvestState.NavigationPoints.clear();
-            s_autoHarvestState.NavigationPointIndex = 0;
-            s_autoHarvestState.NavigationPathAvailable = false;
-            s_autoHarvestState.NavigationPathPartial = false;
-
-            if (!World || !Dino) return false;
-            SDK::UNavigationSystemV1* NavigationSystem =
-                SDK::UNavigationSystemV1::GetNavigationSystem(World);
-            if (!IsUsableObject(NavigationSystem)) return false;
-
-            const int32_t NavigationDataCount = NavigationSystem->NavDataSet.Num();
-            const bool HasNavigationData = IsUsableObject(NavigationSystem->MainNavData) ||
-                (NavigationDataCount > 0 && NavigationDataCount <= 128);
-            if (!HasNavigationData) return false;
-
-            struct NavigationCandidate {
-                std::vector<SDK::FVector> Points;
-                double Score = std::numeric_limits<double>::infinity();
-                bool Partial = true;
+            SDK::APrimalDinoCharacter* Dino, const AutoHarvestProbeFrame& ProbeFrame,
+            const SDK::FVector& Start, const SDK::FVector& End,
+            float HarvestRangeMeters, bool RequireTargetVisibility,
+            const SDK::TArray<SDK::AActor*>& IgnoreActors) {
+            // Keep the current route while trying alternatives. A transient
+            // projection failure must not make a moving mount abandon its path.
+            const bool HadPath = s_autoHarvestState.NavigationPathAvailable &&
+                s_autoHarvestState.NavigationPointIndex < s_autoHarvestState.NavigationPoints.size();
+            if (!World || !Dino) return HadPath;
+            auto* Navigation = SDK::UNavigationSystemV1::GetNavigationSystem(World);
+            if (!IsUsableObject(Navigation) || (!IsUsableObject(Navigation->MainNavData) &&
+                (Navigation->NavDataSet.Num() <= 0 || Navigation->NavDataSet.Num() > 128))) return HadPath;
+            const double Range = PhoenixInterface::FiniteClamp(HarvestRangeMeters, 1.5f,
+                PhoenixInterface::MaxHarvestBeamMeters, 4.5f) * 100.;
+            const double Margin = std::clamp(double(ProbeFrame.CapsuleRadius) * .35 + 75., 125., 450.);
+            const double VisibleRange = std::max(100., Range - Margin);
+            const double Radius = std::clamp(Range * .68, std::min(200., VisibleRange), VisibleRange);
+            SDK::FVector TowardStart{};
+            if (!MakeHorizontalAutoHarvestDirection(End, Start, &TowardStart)) return HadPath;
+            const SDK::FVector Extent{std::max(200., double(ProbeFrame.CapsuleRadius) * 1.75),
+                std::max(200., double(ProbeFrame.CapsuleRadius) * 1.75),
+                std::max(300., double(ProbeFrame.CapsuleHalfHeight) * 1.5)};
+            const double Tolerance = std::clamp(double(ProbeFrame.CapsuleRadius) * .35, 125., 300.);
+            const auto Distance = [](const SDK::FVector& A, const SDK::FVector& B) {
+                return std::sqrt(AutoHarvestDistanceSquared(A, B));
             };
-            NavigationCandidate Best{};
-
-            auto EvaluateCandidate = [&](const SDK::FVector& CandidateEnd) {
-                if (!IsFiniteAutoHarvestVector(CandidateEnd)) return;
-                SDK::UNavigationPath* Path =
-                    SDK::UNavigationSystemV1::FindPathToLocationSynchronously(
-                        World, Start, CandidateEnd, Dino,
-                        SDK::TSubclassOf<SDK::UNavigationQueryFilter>(nullptr));
-                if (!IsUsableObject(Path) || !Path->IsValid()) return;
-                const int32_t PointCount = Path->PathPoints.Num();
-                if (PointCount < 2 || PointCount > 512) return;
-
-                std::vector<SDK::FVector> Points;
-                Points.reserve(PointCount);
-                for (int32_t Index = 0; Index < PointCount; ++Index) {
-                    const SDK::FVector Point = Path->PathPoints[Index];
-                    if (IsFiniteAutoHarvestVector(Point)) Points.push_back(Point);
+            double BestScore = std::numeric_limits<double>::infinity();
+            bool BestPartial = true;
+            std::vector<SDK::FVector> Best;
+            if (HadPath && !RequireTargetVisibility && s_autoHarvestState.UnsafeSince == Harvest::Time{} &&
+                s_autoHarvestState.StationarySince == Harvest::Time{} && s_autoHarvestState.LayerMismatchSince == Harvest::Time{}) {
+                BestPartial = s_autoHarvestState.NavigationPathPartial;
+                BestScore = BestPartial ? 2000000. : 0.;
+                auto Previous = Start;
+                for (size_t I = s_autoHarvestState.NavigationPointIndex; I < s_autoHarvestState.NavigationPoints.size(); ++I) {
+                    BestScore += Distance(Previous, s_autoHarvestState.NavigationPoints[I]);
+                    Previous = s_autoHarvestState.NavigationPoints[I];
                 }
-                if (Points.size() < 2) return;
-
-                double PathLength = 0.0;
-                for (size_t Index = 1; Index < Points.size(); ++Index) {
-                    const double SegmentSquared = AutoHarvestDistanceSquared(
-                        Points[Index - 1], Points[Index]);
-                    if (!std::isfinite(SegmentSquared)) return;
-                    PathLength += std::sqrt(std::max(0.0, SegmentSquared));
-                }
-                const double EndDistanceSquared = AutoHarvestDistanceSquared(
-                    Points.back(), End);
-                if (!std::isfinite(EndDistanceSquared)) return;
-
-                const bool Partial = Path->IsPartial();
-                // A complete route is always preferred. Among routes with the
-                // same completeness, favor the shorter walk while retaining a
-                // small preference for an endpoint close to attack range.
-                const double Score = PathLength + std::sqrt(EndDistanceSquared) * 0.25 +
-                    (Partial ? 2000000.0 : 0.0);
-                if (Score >= Best.Score) return;
-                Best.Points = std::move(Points);
-                Best.Score = Score;
-                Best.Partial = Partial;
-            };
-
-            EvaluateCandidate(End);
-
-            if (g_Config::bAutoHarvestExperimentalNavigation) {
-                float CapsuleRadius = 75.0f;
-                float CapsuleHalfHeight = 100.0f;
-                if (Dino->CapsuleComponent && IsUsableObject(Dino->CapsuleComponent)) {
-                    CapsuleRadius = std::max(25.0f,
-                        Dino->CapsuleComponent->GetScaledCapsuleRadius());
-                    CapsuleHalfHeight = std::max(50.0f,
-                        Dino->CapsuleComponent->GetScaledCapsuleHalfHeight());
-                }
-
-                SDK::FVector TowardStart{};
-                if (MakeHorizontalAutoHarvestDirection(End, Start, &TowardStart)) {
-                    const double ApproachRadiusUU = std::clamp(
-                        std::max(static_cast<double>(g_Config::AutoHarvestAttackDistanceMeters) *
-                            80.0, static_cast<double>(CapsuleRadius) * 1.2),
-                        250.0, 1000.0);
-                    const SDK::FVector QueryExtent{
-                        std::max(200.0, static_cast<double>(CapsuleRadius) * 1.75),
-                        std::max(200.0, static_cast<double>(CapsuleRadius) * 1.75),
-                        std::max(300.0, static_cast<double>(CapsuleHalfHeight) * 1.5)
-                    };
-                    constexpr std::array<float, 5> CandidateAngles{
-                        0.0f, -50.0f, 50.0f, -105.0f, 105.0f
-                    };
-                    for (const float Angle : CandidateAngles) {
-                        const SDK::FVector OffsetDirection =
-                            RotateAutoHarvestDirection(TowardStart, Angle);
-                        const SDK::FVector Candidate{
-                            End.X + OffsetDirection.X * ApproachRadiusUU,
-                            End.Y + OffsetDirection.Y * ApproachRadiusUU,
-                            End.Z
-                        };
-                        SDK::FVector Projected{};
-                        if (!SDK::UNavigationSystemV1::K2_ProjectPointToNavigation(
-                            World, Candidate, &Projected, NavigationSystem->MainNavData,
-                            SDK::TSubclassOf<SDK::UNavigationQueryFilter>(nullptr),
-                            QueryExtent)) {
-                            continue;
-                        }
-                        const double MaximumVerticalShift = std::max(
-                            350.0, static_cast<double>(CapsuleHalfHeight) * 1.5);
-                        if (!IsFiniteAutoHarvestVector(Projected) ||
-                            std::abs(Projected.Z - End.Z) > MaximumVerticalShift) {
-                            continue;
-                        }
-                        EvaluateCandidate(Projected);
-                    }
-                }
+                BestScore += Distance(Previous, End) * .25;
             }
-
-            if (Best.Points.size() < 2) return false;
-            s_autoHarvestState.NavigationPoints = std::move(Best.Points);
-            s_autoHarvestState.NavigationPointIndex = 1;
-            s_autoHarvestState.NavigationPathAvailable = true;
-            s_autoHarvestState.NavigationPathPartial = Best.Partial;
-            return true;
+            constexpr std::array<float, 12> Angles{0,-30,30,-60,60,-90,90,-120,120,-150,150,180};
+            std::array<SDK::FVector, Harvest::NavigationQueriesPerRefresh> Queried{};
+            unsigned Queries = 0;
+            const auto Began = Harvest::Clock::now();
+            // The ring cursor persists across failed/partial refreshes, spreading
+            // the former thirteen synchronous path queries over several updates.
+            for (unsigned Sample = 0; Sample < 4 && Queries < Harvest::NavigationQueriesPerRefresh; ++Sample) {
+                if (Sample && Harvest::Clock::now() - Began > std::chrono::milliseconds(2)) break;
+                const float Angle = Angles[s_autoHarvestState.NavigationCandidateCursor++ % Angles.size()];
+                const auto Direction = RotateAutoHarvestDirection(TowardStart, Angle);
+                const auto Candidate = End + Direction * Radius;
+                SDK::FVector Projected{};
+                if (!SDK::UNavigationSystemV1::K2_ProjectPointToNavigation(World, Candidate, &Projected,
+                    Navigation->MainNavData, SDK::TSubclassOf<SDK::UNavigationQueryFilter>(nullptr), Extent) ||
+                    !IsFiniteAutoHarvestVector(Projected) ||
+                    std::abs(Projected.Z - End.Z) > std::max(350., double(ProbeFrame.CapsuleHalfHeight) * 1.5)) continue;
+                bool Duplicate = false;
+                for (unsigned I = 0; I < Queries; ++I)
+                    Duplicate |= AutoHarvestDistanceSquared(Projected, Queried[I]) < 50. * 50.;
+                if (Duplicate) continue;
+                Queried[Queries++] = Projected;
+                auto* Path = SDK::UNavigationSystemV1::FindPathToLocationSynchronously(World, Start,
+                    Projected, Dino, SDK::TSubclassOf<SDK::UNavigationQueryFilter>(nullptr));
+                if (!IsUsableObject(Path) || !Path->IsValid() || Path->PathPoints.Num() < 2 || Path->PathPoints.Num() > 512) continue;
+                std::vector<SDK::FVector> Points;
+                Points.reserve(Path->PathPoints.Num());
+                double Length = 0;
+                auto Previous = Start;
+                bool Valid = true;
+                for (const auto& Point : Path->PathPoints) {
+                    if (!IsFiniteAutoHarvestVector(Point)) { Valid = false; break; }
+                    Length += Distance(Previous, Point); Points.push_back(Point); Previous = Point;
+                }
+                if (!Valid || !std::isfinite(Length) || Points.size() < 2) continue;
+                const double Remaining = Distance(Points.back(), End);
+                if (RequireTargetVisibility) {
+                    if (Remaining > VisibleRange) continue;
+                    auto Origin = Points.back();
+                    Origin.Z += std::clamp(double(ProbeFrame.CapsuleHalfHeight) * 1.15, 250., 2200.);
+                    if (!AutoHarvestHasClearBeamPath(World, Origin, End, Tolerance, IgnoreActors)) continue;
+                }
+                const bool Partial = Path->IsPartial();
+                const double Score = Length + Remaining * .25 + (Partial ? 2000000. : 0.);
+                if (Score < BestScore) { Best = std::move(Points); BestScore = Score; BestPartial = Partial; }
+                // A direct complete standing-position route is sufficient; avoid
+                // exploring the far side of the resource for a marginal saving.
+                if (!Partial && Length <= std::max(0., Distance(Start, End) - Radius) * 1.2 + ProbeFrame.CapsuleRadius) break;
+            }
+            if (!Best.empty()) {
+                s_autoHarvestState.NavigationPoints = std::move(Best);
+                s_autoHarvestState.NavigationRemaining = Harvest::PathSuffix(s_autoHarvestState.NavigationPoints, Distance);
+                s_autoHarvestState.NavigationPointIndex = 1;
+                s_autoHarvestState.NavigationPathAvailable = true;
+                s_autoHarvestState.NavigationPathPartial = BestPartial;
+                s_autoHarvestState.NextPathSmoothing = {};
+                return true;
+            }
+            if (!HadPath) {
+                s_autoHarvestState.NavigationPoints.clear(); s_autoHarvestState.NavigationRemaining.clear();
+                s_autoHarvestState.NavigationPathAvailable = false; s_autoHarvestState.NavigationPathPartial = false;
+            }
+            return HadPath;
         }
 
         SDK::FVector GetAutoHarvestNavigationGoal(const SDK::FVector& CurrentLocation,
@@ -6104,13 +6000,15 @@ namespace g_Hack {
 
             if (s_autoHarvestState.NavigationPointIndex <
                 s_autoHarvestState.NavigationPoints.size()) {
-                if (g_Config::bAutoHarvestExperimentalNavigation && World && Dino) {
+                if (g_Config::bAutoHarvestExperimentalNavigation && World && Dino &&
+                    Harvest::Clock::now() >= s_autoHarvestState.NextPathSmoothing) {
+                    s_autoHarvestState.NextPathSmoothing = Harvest::Clock::now() + std::chrono::milliseconds(180);
                     // Navigation raycasts cheaply determine whether intermediate
                     // corners can be skipped. Looking only a few points ahead
                     // smooths zig-zags without cutting across non-navigable space.
                     const size_t First = s_autoHarvestState.NavigationPointIndex;
                     const size_t Last = std::min(
-                        s_autoHarvestState.NavigationPoints.size() - 1, First + 4);
+                        s_autoHarvestState.NavigationPoints.size() - 1, First + 2);
                     for (size_t CandidateIndex = Last;
                         CandidateIndex > First; --CandidateIndex) {
                         const SDK::FVector& Candidate =
@@ -6158,92 +6056,121 @@ namespace g_Hack {
                 return Distance(CurrentLocation, FinalTarget);
             }
 
-            double RemainingDistance = 0.0;
-            SDK::FVector Previous = CurrentLocation;
-            for (size_t Index = s_autoHarvestState.NavigationPointIndex;
-                Index < s_autoHarvestState.NavigationPoints.size(); ++Index) {
-                const double SegmentDistance = Distance(
-                    Previous, s_autoHarvestState.NavigationPoints[Index]);
-                if (!std::isfinite(SegmentDistance)) {
-                    return std::numeric_limits<double>::infinity();
-                }
-                RemainingDistance += SegmentDistance;
-                Previous = s_autoHarvestState.NavigationPoints[Index];
-            }
-
-            const double FinalSegmentDistance = Distance(Previous, FinalTarget);
+            if (s_autoHarvestState.NavigationRemaining.size() != s_autoHarvestState.NavigationPoints.size())
+                s_autoHarvestState.NavigationRemaining = Harvest::PathSuffix(s_autoHarvestState.NavigationPoints, Distance);
+            const auto Index = s_autoHarvestState.NavigationPointIndex;
+            const double RemainingDistance = Distance(CurrentLocation, s_autoHarvestState.NavigationPoints[Index]) +
+                s_autoHarvestState.NavigationRemaining[Index];
+            const double FinalSegmentDistance = Distance(s_autoHarvestState.NavigationPoints.back(), FinalTarget);
             return std::isfinite(FinalSegmentDistance)
                 ? RemainingDistance + FinalSegmentDistance
                 : std::numeric_limits<double>::infinity();
         }
 
         bool AutoHarvestHasSafeGround(SDK::UWorld* World,
-            SDK::APrimalDinoCharacter* Dino, const SDK::FVector& CurrentLocation,
-            const SDK::FVector& Direction, float CapsuleRadius, float CapsuleHalfHeight,
-            float MaxSafeDropMeters) {
+            SDK::APrimalDinoCharacter* Dino, const AutoHarvestProbeFrame& ProbeFrame,
+            const SDK::FVector& Direction, float MaxSafeDropMeters,
+            const SDK::TArray<SDK::AActor*>& IgnoreActors,
+            SDK::FVector* OutNextFootLocation = nullptr) {
             if (!World || !Dino) return false;
             if (Dino->CanFly() && Dino->bIsFlying) return true;
 
+            // Probe the near and far halves consecutively. Each segment starts
+            // from the previously observed ground height, so a long Strider
+            // footprint can follow a gentle slope without being mistaken for a
+            // single large drop. A real gap still fails at the first missing step.
             const double ProbeDistance = std::clamp(
-                static_cast<double>(CapsuleRadius) * 1.4 + 125.0, 250.0, 900.0);
-            SDK::FVector TraceStart{
-                CurrentLocation.X + Direction.X * ProbeDistance,
-                CurrentLocation.Y + Direction.Y * ProbeDistance,
-                CurrentLocation.Z + std::max(100.0, static_cast<double>(CapsuleHalfHeight) * 0.25)
-            };
-            SDK::FVector TraceEnd = TraceStart;
-            TraceEnd.Z = CurrentLocation.Z - static_cast<double>(CapsuleHalfHeight) -
-                std::clamp(static_cast<double>(MaxSafeDropMeters), 0.5, 8.0) * 100.0;
+                static_cast<double>(ProbeFrame.CapsuleRadius) * 1.4 + 125.0,
+                250.0, 900.0);
+            const double MaxDropUU = PhoenixInterface::FiniteClamp(MaxSafeDropMeters,
+                .5f, PhoenixInterface::MaxHarvestSafeDropMeters, 2.5f) * 100.0;
+            double PreviousFraction = 0.0;
+            double PreviousGroundZ = ProbeFrame.FootLocation.Z;
+            constexpr std::array<double, 2> ProbeFractions{ 0.5, 1.0 };
+            for (const double Fraction : ProbeFractions) {
+                const double SegmentDistance =
+                    ProbeDistance * (Fraction - PreviousFraction);
+                const double RiseAllowance = std::clamp(std::max(
+                    static_cast<double>(ProbeFrame.MaxStepHeight) + 60.0,
+                    SegmentDistance * 0.45), 100.0, 350.0);
+                SDK::FVector TraceStart{
+                    ProbeFrame.FootLocation.X + Direction.X * ProbeDistance * Fraction,
+                    ProbeFrame.FootLocation.Y + Direction.Y * ProbeDistance * Fraction,
+                    PreviousGroundZ + RiseAllowance
+                };
+                SDK::FVector TraceEnd = TraceStart;
+                TraceEnd.Z = PreviousGroundZ - MaxDropUU;
 
-            SDK::FHitResult Hit{};
-            const SDK::TArray<SDK::AActor*> IgnoreActors =
-                MakeAutoHarvestTraceIgnoreActors(Dino);
-            const bool HasGround = SDK::UKismetSystemLibrary::LineTraceSingle(
-                World, TraceStart, TraceEnd, SDK::ETraceTypeQuery::TraceTypeQuery1,
-                false, IgnoreActors, SDK::EDrawDebugTrace::None, &Hit, true,
-                SDK::FLinearColor(0, 0, 0, 0), SDK::FLinearColor(0, 0, 0, 0), 0.0f);
-            return HasGround && Hit.bBlockingHit && Hit.ImpactNormal.Z >= 0.22;
+                SDK::FHitResult Hit{};
+                const bool HasGround = SDK::UKismetSystemLibrary::LineTraceSingle(
+                    World, TraceStart, TraceEnd, SDK::ETraceTypeQuery::TraceTypeQuery1,
+                    false, IgnoreActors, SDK::EDrawDebugTrace::None, &Hit, true,
+                    SDK::FLinearColor(0, 0, 0, 0),
+                    SDK::FLinearColor(0, 0, 0, 0), 0.0f);
+                if (!HasGround || !Hit.bBlockingHit ||
+                    !IsFiniteAutoHarvestVector(Hit.ImpactPoint) ||
+                    !IsAutoHarvestWalkableHit(Dino, Hit,
+                        ProbeFrame.WalkableFloorZ)) {
+                    return false;
+                }
+                PreviousGroundZ = Hit.ImpactPoint.Z;
+                PreviousFraction = Fraction;
+                if (OutNextFootLocation) *OutNextFootLocation = Hit.ImpactPoint;
+            }
+            return true;
         }
 
         bool AutoHarvestDirectionIsBlocked(SDK::UWorld* World,
-            SDK::APrimalDinoCharacter* Dino, const SDK::FVector& CurrentLocation,
-            const SDK::FVector& Direction, float CapsuleRadius,
-            const SDK::FVector& FinalTarget, float AttackDistanceMeters,
+            SDK::APrimalDinoCharacter* Dino, const AutoHarvestProbeFrame& ProbeFrame,
+            const SDK::FVector& Direction,
+            const SDK::FVector& FinalTarget,
+            const SDK::TArray<SDK::AActor*>& IgnoreActors,
             SDK::FHitResult* OutBlockingHit = nullptr) {
             if (OutBlockingHit) *OutBlockingHit = {};
             if (!World || !Dino) return true;
             const double ProbeDistance = std::clamp(
-                static_cast<double>(CapsuleRadius) * 2.0 + 150.0, 300.0, 1100.0);
+                static_cast<double>(ProbeFrame.CapsuleRadius) * 2.0 + 150.0,
+                300.0, 1100.0);
             const float ProbeRadius = static_cast<float>(std::clamp(
-                static_cast<double>(CapsuleRadius) * 0.38, 35.0, 200.0));
+                static_cast<double>(ProbeFrame.CapsuleRadius) * 0.38,
+                35.0, 200.0));
+            SDK::FVector TraceStart = ProbeFrame.FootLocation;
+            TraceStart.Z += std::max(
+                static_cast<double>(ProbeFrame.MaxStepHeight) +
+                    static_cast<double>(ProbeRadius) + 25.0,
+                static_cast<double>(ProbeRadius) * 1.35);
             SDK::FVector TraceEnd{
-                CurrentLocation.X + Direction.X * ProbeDistance,
-                CurrentLocation.Y + Direction.Y * ProbeDistance,
-                CurrentLocation.Z
+                TraceStart.X + Direction.X * ProbeDistance,
+                TraceStart.Y + Direction.Y * ProbeDistance,
+                TraceStart.Z
             };
 
             SDK::FHitResult Hit{};
-            const SDK::TArray<SDK::AActor*> IgnoreActors =
-                MakeAutoHarvestTraceIgnoreActors(Dino);
             const bool HasHit = SDK::UKismetSystemLibrary::SphereTraceSingle(
-                World, CurrentLocation, TraceEnd, ProbeRadius,
+                World, TraceStart, TraceEnd, ProbeRadius,
                 SDK::ETraceTypeQuery::TraceTypeQuery1, false, IgnoreActors,
                 SDK::EDrawDebugTrace::None, &Hit, true,
                 SDK::FLinearColor(0, 0, 0, 0), SDK::FLinearColor(0, 0, 0, 0), 0.0f);
             if (!HasHit || !Hit.bBlockingHit) return false;
+            // A sphere that starts against a small uphill surface may report
+            // penetration. Honor the mount's own walkable-floor rule before
+            // treating that contact as an obstacle.
+            if (IsAutoHarvestWalkableHit(Dino, Hit,
+                ProbeFrame.WalkableFloorZ)) return false;
             if (Hit.bStartPenetrating) {
                 if (OutBlockingHit) *OutBlockingHit = Hit;
                 return true;
             }
-            if (Hit.ImpactNormal.Z >= 0.55) return false;
 
             // Only ignore a hit very close to the selected node itself. The old
             // attack-distance-sized allowance also ignored cliffs and walls in
             // front of a node, so the mount continuously walked into them.
             const double AllowedTargetDistanceUU = std::clamp(
-                static_cast<double>(CapsuleRadius) * 0.75 + 150.0, 250.0, 500.0);
-            const bool Blocked = AutoHarvestDistanceSquared(Hit.ImpactPoint, FinalTarget) >
-                AllowedTargetDistanceUU * AllowedTargetDistanceUU;
+                static_cast<double>(ProbeFrame.CapsuleRadius) * 0.75 + 150.0,
+                250.0, 500.0);
+            const bool Blocked = !IsAutoHarvestBreakableObstacle(Hit) ||
+                AutoHarvestDistanceSquared(Hit.ImpactPoint, FinalTarget) >
+                    AllowedTargetDistanceUU * AllowedTargetDistanceUU;
             if (Blocked && OutBlockingHit) *OutBlockingHit = Hit;
             return Blocked;
         }
@@ -6313,22 +6240,30 @@ namespace g_Hack {
 
         AutoHarvestSafeDirectionResult FindAutoHarvestSafeDirection(
             SDK::UWorld* World, SDK::APrimalDinoCharacter* Dino,
-            const SDK::FVector& CurrentLocation, const SDK::FVector& BaseDirection,
-            float CapsuleRadius, float CapsuleHalfHeight, const SDK::FVector& FinalTarget,
-            float AttackDistanceMeters, float MaxSafeDropMeters,
+            const AutoHarvestProbeFrame& ProbeFrame,
+            const SDK::FVector& BaseDirection, const SDK::FVector& FinalTarget,
+            float MaxSafeDropMeters,
             const std::chrono::steady_clock::time_point Now,
+            const SDK::TArray<SDK::AActor*>& IgnoreActors,
             bool ForceDetour = false, bool PreferRight = false) {
             AutoHarvestSafeDirectionResult Result{};
 
-            auto IsDirectionSafe = [&](const SDK::FVector& Direction, bool* OutCliff) {
-                const bool HasGround = AutoHarvestHasSafeGround(World, Dino, CurrentLocation,
-                    Direction, CapsuleRadius, CapsuleHalfHeight, MaxSafeDropMeters);
-                if (!HasGround) {
+            auto IsDirectionSafe = [&](const SDK::FVector& Direction, bool* OutCliff,
+                AutoHarvestProbeFrame* OutNext = nullptr) {
+                SDK::FVector NextFoot{};
+                if (!AutoHarvestHasSafeGround(World, Dino, ProbeFrame, Direction,
+                    MaxSafeDropMeters, IgnoreActors, &NextFoot)) {
                     if (OutCliff) *OutCliff = true;
                     return false;
                 }
-                return !AutoHarvestDirectionIsBlocked(World, Dino, CurrentLocation,
-                    Direction, CapsuleRadius, FinalTarget, AttackDistanceMeters);
+                if (AutoHarvestDirectionIsBlocked(World, Dino, ProbeFrame,
+                    Direction, FinalTarget, IgnoreActors)) return false;
+                if (OutNext) {
+                    *OutNext = ProbeFrame;
+                    OutNext->CollisionCenter = OutNext->CollisionCenter + (NextFoot - ProbeFrame.FootLocation);
+                    OutNext->FootLocation = NextFoot;
+                }
+                return true;
             };
 
             if (Now < s_autoHarvestState.AvoidUntil &&
@@ -6341,7 +6276,6 @@ namespace g_Hack {
                     Result.Direction = s_autoHarvestState.AvoidDirection;
                     return Result;
                 }
-                Result.CliffDetected = Cliff;
                 s_autoHarvestState.AvoidUntil = {};
             }
 
@@ -6350,42 +6284,84 @@ namespace g_Hack {
                     ? std::array<float, 7>{ 72.0f, -72.0f, 105.0f, -105.0f, 140.0f, -140.0f, 180.0f }
                     : std::array<float, 7>{ -72.0f, 72.0f, -105.0f, 105.0f, -140.0f, 140.0f, 180.0f })
                 : std::array<float, 7>{ 0.0f, -32.0f, 32.0f, -62.0f, 62.0f, -100.0f, 100.0f };
-            for (const float Angle : SteeringAngles) {
-                const SDK::FVector Candidate = RotateAutoHarvestDirection(BaseDirection, Angle);
+            size_t FirstSide = 0;
+            if (!ForceDetour) {
                 bool Cliff = false;
-                if (!IsDirectionSafe(Candidate, &Cliff)) {
-                    Result.CliffDetected = Result.CliffDetected || Cliff;
-                    continue;
+                if (IsDirectionSafe(BaseDirection, &Cliff)) {
+                    s_autoHarvestState.SteeringPairCursor = 0;
+                    Result.Found = true; Result.Direction = BaseDirection;
+                    return Result; // The clear direct route needs no side probes.
                 }
-                Result.Found = true;
-                Result.Avoiding = std::abs(Angle) > 0.1f;
-                Result.Direction = Candidate;
-                if (Result.Avoiding) {
-                    s_autoHarvestState.AvoidDirection = Candidate;
-                    s_autoHarvestState.AvoidUntil = Now + std::chrono::milliseconds(
-                        ForceDetour ? 1600 : 700);
+                Result.CliffDetected = Cliff;
+                FirstSide = 1;
+            }
+            SDK::FVector TowardTarget{};
+            if (!MakeHorizontalAutoHarvestDirection(ProbeFrame.CollisionCenter, FinalTarget, &TowardTarget))
+                TowardTarget = BaseDirection;
+            // Compare paired left/right detours at each angle, with one extra
+            // ground segment of lookahead. Do not blindly choose the first side
+            // when it leads straight into another wall or a missing floor.
+            // Try one symmetric pair per update. If both fail, the next update
+            // explores wider angles; never cast every side probe in one frame.
+            const size_t PairCount = (SteeringAngles.size() - FirstSide + 1) / 2;
+            const size_t NextPair = FirstSide + 2 * (s_autoHarvestState.SteeringPairCursor++ % PairCount);
+            {
+                const size_t Pair = NextPair;
+                Harvest::DetourCost BestCost{};
+                bool Found = false;
+                for (size_t Index = Pair; Index < std::min(Pair + 2, SteeringAngles.size()); ++Index) {
+                    const float Angle = SteeringAngles[Index];
+                    const auto Candidate = RotateAutoHarvestDirection(BaseDirection, Angle);
+                    AutoHarvestProbeFrame NextFrame{};
+                    if (!IsDirectionSafe(Candidate, nullptr, &NextFrame)) continue;
+                    const bool ContinuationClear = AutoHarvestHasSafeGround(World, Dino, NextFrame,
+                        Candidate, MaxSafeDropMeters, IgnoreActors) &&
+                        !AutoHarvestDirectionIsBlocked(World, Dino, NextFrame, Candidate, FinalTarget, IgnoreActors);
+                    const Harvest::DetourCost Cost{ContinuationClear,
+                        Candidate.X * TowardTarget.X + Candidate.Y * TowardTarget.Y,
+                        PreferRight ? Angle > 0 : Angle < 0};
+                    if (Found && !Harvest::PreferDetour(Cost, BestCost)) continue;
+                    BestCost = Cost; Found = true;
+                    Result.Direction = Candidate;
                 }
+                if (!Found) return Result;
+                Result.Found = true; Result.Avoiding = true;
+                s_autoHarvestState.AvoidDirection = Result.Direction;
+                s_autoHarvestState.AvoidUntil = Now + std::chrono::milliseconds(ForceDetour ? 1600 : 700);
                 return Result;
             }
-            return Result;
         }
+
+#include "HarvestEfficiency.inl"
 
         void ClearAutoHarvestTarget() {
             ReleaseAutoHarvestAttack();
-            StopAutoHarvestTekStriderBeam();
             ReleaseAutoHarvestSprint();
+            ClearAutoHarvestViewLock();
             s_autoHarvestState.HasTarget = false;
+            s_autoHarvestState.NextTargetSearch = {};
+            s_autoHarvestState.NextTargetResolve = {};
+            ResetAutoHarvestSelection();
+            s_autoHarvestState.RangeRefinements = 0;s_autoHarvestState.LastRangeAdjustment = {};
+            s_autoHarvestState.MeleeApproachLimitMeters = std::numeric_limits<float>::infinity();
+            s_autoHarvestState.BeamApproachLimitMeters = std::numeric_limits<float>::infinity();
             s_autoHarvestState.TargetLocation = {};
             s_autoHarvestState.TargetType.clear();
             s_autoHarvestState.TargetLastSeen = {};
             s_autoHarvestState.TargetAcquired = {};
             s_autoHarvestState.AttackStarted = {};
+            s_autoHarvestState.DesiredMountFacingRotation = {};
+            s_autoHarvestState.HasDesiredMountFacingRotation = false;
             s_autoHarvestState.NavigationPoints.clear();
+            s_autoHarvestState.NavigationRemaining.clear();
+            s_autoHarvestState.NavigationCandidateCursor = 0;
+            s_autoHarvestState.NextPathSmoothing = {};
             s_autoHarvestState.NavigationPointIndex = 0;
             s_autoHarvestState.NavigationPathAvailable = false;
             s_autoHarvestState.NavigationPathPartial = false;
             s_autoHarvestState.NextPathRefresh = {};
             s_autoHarvestState.AvoidDirection = {};
+            s_autoHarvestState.SteeringPairCursor = 0;
             s_autoHarvestState.AvoidUntil = {};
             s_autoHarvestState.UnsafeSince = {};
             s_autoHarvestState.MovementSampleLocation = {};
@@ -6400,6 +6376,9 @@ namespace g_Hack {
             s_autoHarvestState.ObstacleClearCooldownUntil = {};
             s_autoHarvestState.ObstacleClearAttacksRemaining = 0;
             s_autoHarvestState.ObstacleClearBursts = 0;
+            s_autoHarvestState.NextHarvestProgressSample = {};
+            s_autoHarvestState.LastHarvestProgress = {};
+            s_autoHarvestState.InventoryProgress = {};
             s_autoHarvestState.BestApproachDistanceUU =
                 std::numeric_limits<double>::infinity();
             s_autoHarvestState.ApproachProgressUsesNavigation = false;
@@ -6411,50 +6390,157 @@ namespace g_Hack {
         return s_autoHarvestStatus;
     }
 
+    void MaintainAutoHarvestCameraAim(
+        SDK::AShooterPlayerCameraManager* CameraManager) {
+        AutoHarvestViewLockSnapshot Snapshot{};
+        {
+            std::scoped_lock Lock(s_autoHarvestViewLockMutex);
+            Snapshot = s_autoHarvestViewLock;
+        }
+        if (!CameraManager || !g_Config::bAutoHarvestResources ||
+            !g_Config::bAutoHarvestTekStrider ||
+            !Snapshot.Active ||
+            !IsFiniteAutoHarvestVector(Snapshot.TargetLocation) ||
+            g_MDX12::g_MenuState::g_isOpen) {
+            return;
+        }
+
+        const HWND GameWindow = g_MDX12::g_ProcessWindow::g_mainWindow;
+        if (!GameWindow || GetForegroundWindow() != GameWindow) return;
+
+        SDK::APlayerController* LocalPC = g_Util::GetLocalPC();
+        if (!IsUsableObject(LocalPC) || LocalPC->PlayerCameraManager != CameraManager ||
+            LocalPC->bShowMouseCursor || !IsUsableObject(LocalPC->Pawn) ||
+            !LocalPC->Pawn->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
+            return;
+        }
+
+        auto* Dino = static_cast<SDK::APrimalDinoCharacter*>(LocalPC->Pawn);
+        int32_t LiveDinoSerialNumber = -1;
+        if (!IsUsableObject(Dino) || !Dino->IsLocallyControlled() ||
+            Dino->Controller != LocalPC || !Dino->Rider.Get() ||
+            !IsTekStrider(Dino) || Dino != Snapshot.Dino ||
+            Snapshot.DinoObjectIndex < 0 ||
+            Dino->Index != Snapshot.DinoObjectIndex ||
+            !TryGetLiveObjectSerial(Dino, Snapshot.DinoObjectIndex,
+                &LiveDinoSerialNumber) ||
+            LiveDinoSerialNumber != Snapshot.DinoSerialNumber) {
+            return;
+        }
+
+        const SDK::FVector CameraLocation = CameraManager->GetCameraLocation();
+        if (!IsFiniteAutoHarvestVector(CameraLocation)) return;
+
+        SDK::FRotator ViewRotation = SDK::UKismetMathLibrary::FindLookAtRotation(
+            CameraLocation, Snapshot.TargetLocation);
+        ViewRotation.Pitch = std::clamp(ViewRotation.Pitch, -89.0, 89.0);
+        ViewRotation.Roll = 0.0;
+        LocalPC->SetControlRotation(ViewRotation);
+    }
+
+    bool ResetAutoHarvestForUnload() {
+        using Clock = std::chrono::steady_clock;
+        ClearAutoHarvestViewLock();
+        ResetAutoHarvestMeleeReach();
+        ReleaseAutoHarvestAttack();
+        ReleaseAutoHarvestSprint();
+        RestoreAutoHarvestAquaticPitchControl();
+        if (s_autoHarvestState.OwnsForceTurn) g_Config::bForceTurn = false;
+        g_Config::bAutoHarvestResources = false;
+
+        if (s_autoHarvestState.TekStriderBeamStartRequested) {
+            if (Clock::now() < s_autoHarvestState.NextTekStriderBeamToggle) {
+                return false;
+            }
+
+            SDK::APrimalDinoCharacter* BeamDino = nullptr;
+            int32_t LiveSerialNumber = -1;
+            const int32_t BeamDinoIndex =
+                s_autoHarvestState.TekStriderBeamDinoObjectIndex;
+            if (BeamDinoIndex >= 0 && SDK::UObject::GObjects.GetTypedPtr() &&
+                BeamDinoIndex < SDK::UObject::GObjects->Num()) {
+                SDK::UObject* CurrentObject =
+                    SDK::UObject::GObjects->GetByIndex(BeamDinoIndex);
+                if (CurrentObject == s_autoHarvestState.TekStriderBeamDino &&
+                    TryGetLiveObjectSerial(CurrentObject, BeamDinoIndex,
+                        &LiveSerialNumber) &&
+                    LiveSerialNumber ==
+                        s_autoHarvestState.TekStriderBeamDinoSerialNumber &&
+                    IsUsableObject(CurrentObject) &&
+                    CurrentObject->IsA(
+                        SDK::APrimalDinoCharacter::StaticClass())) {
+                    BeamDino = static_cast<SDK::APrimalDinoCharacter*>(
+                        CurrentObject);
+                }
+            }
+            SDK::APlayerController* LocalPC = g_Util::GetLocalPC();
+            const bool StillControlsBeamDino = BeamDino &&
+                IsUsableObject(LocalPC) && IsUsableObject(LocalPC->Pawn) &&
+                LocalPC->Pawn == BeamDino && BeamDino->Controller == LocalPC &&
+                BeamDino->IsLocallyControlled();
+            if (StillControlsBeamDino) {
+                // This is the native path used by the pawn's right-click input.
+                // It executes synchronously on the UE game thread, so unload
+                // does not depend on a queued Windows input surviving teardown.
+                BeamDino->OnAltFirePressed();
+                BeamDino->OnAltFireReleased();
+            }
+            ForgetAutoHarvestTekStriderBeamRequest();
+        }
+
+        ClearAutoHarvestTarget();
+        s_autoHarvestState = AutoHarvestRuntimeState{};
+        SetAutoHarvestStatus("未启用");
+        return true;
+    }
+
     void AutoHarvestResources(SDK::UWorld* World) {
         using Clock = std::chrono::steady_clock;
         const Clock::time_point Now = Clock::now();
-        const bool TekStriderElementShardMode =
-            g_Config::bAutoHarvestTekStriderElementShard;
+        const bool TekStriderMode = g_Config::bAutoHarvestTekStrider;
+        const bool AutoApproachEnabled =
+            TekStriderMode || g_Config::bAutoHarvestApproach;
 
-        if (!g_Config::bAutoHarvestResources) {
+        if (!g_Config::bAutoHarvestResources || IsFreeCameraActive()) {
+            ResetAutoHarvestMeleeReach();
+            ClearAutoHarvestViewLock();
             if (s_autoHarvestState.AttackHeld) ReleaseAutoHarvestAttack();
-            if (!StopAutoHarvestTekStriderBeam()) {
-                SetAutoHarvestStatus("自动采集已关闭；返回游戏并关闭菜单后将停止跨步者采集钻头");
-                return;
-            }
             ReleaseAutoHarvestSprint();
             if (s_autoHarvestState.OwnsForceTurn) g_Config::bForceTurn = false;
             RestoreAutoHarvestAquaticPitchControl();
-            if (s_autoHarvestState.WasEnabled) SetAutoHarvestStatus("未启用");
+            if (!StopAutoHarvestTekStriderBeamIfOwned()) {
+                SetAutoHarvestStatus(
+                    "自动采集已关闭；回到游戏并关闭菜单后将停止跨步者采集光束");
+                return;
+            }
+            if (s_autoHarvestState.WasEnabled) SetAutoHarvestStatus(IsFreeCameraActive() ? "自由视角期间暂停采集" : "未启用");
             s_autoHarvestState = AutoHarvestRuntimeState{};
             return;
         }
 
         if (!s_autoHarvestState.WasEnabled) {
             s_autoHarvestState.WasEnabled = true;
-            s_autoHarvestState.TekStriderElementShardMode =
-                TekStriderElementShardMode;
+            s_autoHarvestState.TekStriderMode = TekStriderMode;
             s_autoHarvestState.NextUpdate = Clock::time_point::min();
             s_autoHarvestState.NextAttack = Now + std::chrono::milliseconds(250);
         }
-        else if (s_autoHarvestState.TekStriderElementShardMode !=
-            TekStriderElementShardMode) {
-            if (!StopAutoHarvestTekStriderBeam()) {
-                SetAutoHarvestStatus("返回游戏并关闭菜单后才能切换跨步者碎片矿模式");
+        else if (s_autoHarvestState.TekStriderMode != TekStriderMode) {
+            if (s_autoHarvestState.TekStriderMode &&
+                !StopAutoHarvestTekStriderBeamIfOwned()) {
+                SetAutoHarvestStatus(
+                    "等待回到游戏并关闭菜单，以停止跨步者采集光束并切换模式");
                 return;
             }
             ClearAutoHarvestTarget();
-            s_autoHarvestState.TekStriderElementShardMode =
-                TekStriderElementShardMode;
+            s_autoHarvestState.TekStriderMode = TekStriderMode;
         }
-        if (!g_Config::bForceTurn) {
+        if (!g_Config::bForceTurn || IsFreeCameraActive()) {
             g_Config::bForceTurn = true;
             s_autoHarvestState.OwnsForceTurn = true;
         }
 
-        // The actor tick hook runs for many actors. This cap makes the automation
-        // execute at most once every 30 ms while still releasing a held click promptly.
+        // Camera updates and the viewport fallback share serialized scheduling.
+        // Limit automation work to 30 ms intervals while releasing held clicks promptly.
         if (Now < s_autoHarvestState.NextUpdate) return;
         s_autoHarvestState.NextUpdate = Now + std::chrono::milliseconds(30);
 
@@ -6470,24 +6556,29 @@ namespace g_Hack {
         }
 
         if (g_MDX12::g_MenuState::g_isOpen) {
+            ResetAutoHarvestMeleeReach();
+            ClearAutoHarvestTarget();RestoreAutoHarvestAquaticPitchControl();
             ReleaseAutoHarvestAttack();
             ReleaseAutoHarvestSprint();
-            SetAutoHarvestStatus(s_autoHarvestState.TekStriderBeamActive
-                ? "菜单打开，已暂停；关闭菜单后将安全停止跨步者采集钻头"
+            SetAutoHarvestStatus(s_autoHarvestState.TekStriderBeamStartRequested
+                ? "菜单打开，已暂停移动；跨步者采集光束保持开启"
                 : "菜单打开，已暂停");
             return;
         }
         const HWND GameWindow = g_MDX12::g_ProcessWindow::g_mainWindow;
         if (!GameWindow || GetForegroundWindow() != GameWindow) {
+            ResetAutoHarvestMeleeReach();
+            ClearAutoHarvestTarget();RestoreAutoHarvestAquaticPitchControl();
             ReleaseAutoHarvestAttack();
             ReleaseAutoHarvestSprint();
-            SetAutoHarvestStatus(s_autoHarvestState.TekStriderBeamActive
-                ? "游戏未处于前台，已暂停；返回游戏后将安全停止跨步者采集钻头"
+            SetAutoHarvestStatus(s_autoHarvestState.TekStriderBeamStartRequested
+                ? "游戏未处于前台，已暂停移动；跨步者采集光束保持开启"
                 : "游戏未处于前台，已暂停");
             return;
         }
 
         if (!World || !World->OwningGameInstance || World->OwningGameInstance->LocalPlayers.Num() <= 0) {
+            ResetAutoHarvestMeleeReach();
             ReleaseAutoHarvestAttack();
             RestoreAutoHarvestAquaticPitchControl();
             ClearAutoHarvestTarget();
@@ -6498,13 +6589,16 @@ namespace g_Hack {
         SDK::APlayerController* LocalPC = g_Util::GetLocalPC();
         if (!IsUsableObject(LocalPC) || !LocalPC->Pawn ||
             !LocalPC->Pawn->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
+            ResetAutoHarvestMeleeReach();
             ReleaseAutoHarvestAttack();
             RestoreAutoHarvestAquaticPitchControl();
             ClearAutoHarvestTarget();
             SetAutoHarvestStatus("需要骑乘可采集资源的生物");
             return;
         }
-        if (LocalPC->bShowMouseCursor) {
+        if (LocalPC->bShowMouseCursor || !PhoenixShortcuts::GameplayInputReady(LocalPC, false, false)) {
+            ResetAutoHarvestMeleeReach();
+            ClearAutoHarvestTarget();
             ReleaseAutoHarvestAttack();
             ReleaseAutoHarvestSprint();
             RestoreAutoHarvestAquaticPitchControl();
@@ -6514,7 +6608,8 @@ namespace g_Hack {
 
         SDK::APrimalDinoCharacter* Dino =
             static_cast<SDK::APrimalDinoCharacter*>(LocalPC->Pawn);
-        if (!IsUsableObject(Dino) || Dino->IsDead() || !Dino->Rider.Get() || !Dino->IsLocallyControlled()) {
+        if (!IsUsableObject(Dino) || Dino->IsDead() || !Dino->Rider.Get() || !Dino->IsLocallyControlled() || Dino->Controller != LocalPC) {
+            ResetAutoHarvestMeleeReach();
             ReleaseAutoHarvestAttack();
             RestoreAutoHarvestAquaticPitchControl();
             ClearAutoHarvestTarget();
@@ -6522,22 +6617,71 @@ namespace g_Hack {
             return;
         }
 
-        if (TekStriderElementShardMode && !IsTekStrider(Dino)) {
+        int32_t WorldSerial = -1, DinoSerial = -1;
+        if (!TryGetLiveObjectSerial(World, World->Index, &WorldSerial) ||
+            !TryGetLiveObjectSerial(Dino, Dino->Index, &DinoSerial)) {
+            ResetAutoHarvestMeleeReach();ClearAutoHarvestTarget();RestoreAutoHarvestAquaticPitchControl();return;
+        }
+        if (s_autoHarvestState.ControlledDino && (s_autoHarvestState.ControlledDino != Dino ||
+            s_autoHarvestState.DinoIndex != Dino->Index || s_autoHarvestState.DinoSerial != DinoSerial ||
+            s_autoHarvestState.World != World || s_autoHarvestState.WorldIndex != World->Index || s_autoHarvestState.WorldSerial != WorldSerial)) {
+            ResetAutoHarvestMeleeReach();RestoreAutoHarvestAquaticPitchControl();ClearAutoHarvestTarget();
+            StopAutoHarvestTekStriderBeamIfOwned();
+            s_autoHarvestState.SkippedTargets.clear();s_autoHarvestState.NextProbeGeometry = {};
+            s_autoHarvestState.EmptySearches = 0;s_autoHarvestState.AquaticSettleUntil = {};
+        }
+        s_autoHarvestState.World = World;s_autoHarvestState.WorldIndex = World->Index;s_autoHarvestState.WorldSerial = WorldSerial;
+        s_autoHarvestState.ControlledDino = Dino;s_autoHarvestState.DinoIndex = Dino->Index;s_autoHarvestState.DinoSerial = DinoSerial;
+        const float RangeMultiplier = PhoenixInterface::FiniteClamp(
+            g_Config::DinoHarvestRangeMultiplier, 1.f, PhoenixInterface::MaxDinoHarvestRangeMultiplier, 2.f);
+        if (TekStriderMode) ResetAutoHarvestMeleeReach();
+        else if (Now >= s_autoHarvestState.NextMeleeReach || !s_autoHarvestState.MeleeReachReady ||
+            s_autoHarvestState.CachedRangeEnabled != g_Config::bDinoHarvestRange ||
+            s_autoHarvestState.CachedRangeMultiplier != RangeMultiplier) {
+            UpdateDinoHarvestRange(Dino, g_Config::bDinoHarvestRange, RangeMultiplier, GetTickCount64());
+            s_autoHarvestState.NativeMeleeReachMeters = 0;
+            GetDinoHarvestReachMeters(Dino, s_autoHarvestState.NativeMeleeReachMeters);
+            s_autoHarvestState.MeleeReachReady = true;s_autoHarvestState.CachedRangeEnabled = g_Config::bDinoHarvestRange;
+            s_autoHarvestState.CachedRangeMultiplier = RangeMultiplier;
+            s_autoHarvestState.NextMeleeReach = Now + std::chrono::milliseconds(250);
+        }
+
+        if (TekStriderMode && !IsTekStrider(Dino)) {
             ClearAutoHarvestTarget();
-            SetAutoHarvestStatus("元素碎片模式需要骑乘跨步者");
+            SetAutoHarvestStatus("跨步者采集模式需要骑乘跨步者");
             return;
         }
-        if (TekStriderElementShardMode && !HasTekStriderExcavationRig(Dino)) {
+        if (TekStriderMode && !HasTekStriderExcavationRig(Dino)) {
             ClearAutoHarvestTarget();
             SetAutoHarvestStatus("当前跨步者没有装备采集钻头头部配件");
             return;
         }
+        if (TekStriderMode && s_autoHarvestState.TekStriderBeamStartRequested) {
+            int32_t CurrentDinoSerialNumber = -1;
+            const bool SameBeamOwner =
+                s_autoHarvestState.TekStriderBeamDino == Dino &&
+                s_autoHarvestState.TekStriderBeamDinoObjectIndex == Dino->Index &&
+                TryGetLiveObjectSerial(Dino, Dino->Index,
+                    &CurrentDinoSerialNumber) &&
+                s_autoHarvestState.TekStriderBeamDinoSerialNumber ==
+                    CurrentDinoSerialNumber;
+            if (!SameBeamOwner) {
+                // A persistent toggle belongs to the exact mount on which it
+                // was sent. A newly controlled Strider gets one fresh request.
+                ForgetAutoHarvestTekStriderBeamRequest();
+            }
+        }
 
         const SDK::FVector DinoLocation = Dino->K2_GetActorLocation();
-        const float SearchRadius = std::clamp(g_Config::AutoHarvestSearchRadiusMeters, 5.0f, 100.0f);
-        const float AttackDistance = TekStriderElementShardMode
-            ? std::clamp(g_Config::AutoHarvestTekStriderBeamRangeMeters, 10.0f, 80.0f)
-            : std::clamp(g_Config::AutoHarvestAttackDistanceMeters, 1.5f, 15.0f);
+        const float SearchRadius = PhoenixInterface::FiniteClamp(g_Config::AutoHarvestSearchRadiusMeters, 5.f, PhoenixInterface::MaxHarvestSearchMeters, 30.f);
+        const auto CurrentProbeFrame = ResolveAutoHarvestProbeFrame(Dino, DinoLocation);
+        float AttackDistance = TekStriderMode
+            ? std::min(PhoenixInterface::FiniteClamp(g_Config::AutoHarvestTekStriderBeamRangeMeters, 10.f,
+                PhoenixInterface::MaxHarvestBeamMeters, 35.f), s_autoHarvestState.BeamApproachLimitMeters)
+            : std::min(Harvest::MeleeApproachRange(g_Config::AutoHarvestAttackDistanceMeters,
+                s_autoHarvestState.NativeMeleeReachMeters, CurrentProbeFrame.CapsuleRadius * .01f), s_autoHarvestState.MeleeApproachLimitMeters);
+        const int ConfiguredAttackIntervalMs = int(PhoenixInterface::FiniteClamp(g_Config::AutoHarvestAttackIntervalMs,
+            200.f, PhoenixInterface::MaxHarvestAttackIntervalMs, 850.f));
         const bool IsAerialCreature = Dino->CanFly() && Dino->bIsFlying;
         // Movement-mode-only checks miss several dedicated water-dino
         // blueprints (notably Dunkleosteus) while mounted. Use the species
@@ -6564,7 +6708,8 @@ namespace g_Hack {
                 Velocity.Z * Velocity.Z);
         };
 
-        if (s_autoHarvestState.HasTarget) {
+        if (s_autoHarvestState.HasTarget && Now >= s_autoHarvestState.NextTargetResolve) {
+            s_autoHarvestState.NextTargetResolve = Now + std::chrono::milliseconds(IsAquaticCreature ? 150 : 180);
             SDK::FVector ResolvedLocation{};
             std::string ResolvedType;
             // Underwater metal clusters often contain many instances only a
@@ -6575,7 +6720,7 @@ namespace g_Hack {
             const float ResolveRadiusMeters = IsAquaticCreature ? 0.65f : 1.75f;
             if (g_DrawESP::FindResourceTargetNear(s_autoHarvestState.TargetLocation,
                 ResolveRadiusMeters,
-                &ResolvedLocation, &ResolvedType, TekStriderElementShardMode)) {
+                &ResolvedLocation, &ResolvedType)) {
                 s_autoHarvestState.TargetLocation = ResolvedLocation;
                 s_autoHarvestState.TargetType = std::move(ResolvedType);
                 s_autoHarvestState.TargetLastSeen = Now;
@@ -6615,13 +6760,42 @@ namespace g_Hack {
         // An unreachable node must not hold the automation forever. Skip it for
         // a few seconds, then let the nearest-target selector choose another node.
         if (s_autoHarvestState.HasTarget) {
-            const bool ApproachTimedOut = s_autoHarvestState.TargetAcquired != Clock::time_point{} &&
-                Now - s_autoHarvestState.TargetAcquired > std::chrono::seconds(
-                    IsAquaticCreature ? 45 : 30);
-            const bool AttackTimedOut = s_autoHarvestState.AttackStarted != Clock::time_point{} &&
-                Now - s_autoHarvestState.AttackStarted > std::chrono::seconds(
-                    IsAquaticCreature ? 15 : (TekStriderElementShardMode ? 20 : 10));
-            if (ApproachTimedOut || AttackTimedOut) {
+            if (s_autoHarvestState.AttackStarted != Clock::time_point{})
+                SampleAutoHarvestProgress(Dino, Now);
+            const bool ApproachTimedOut = s_autoHarvestState.AttackStarted == Clock::time_point{} &&
+                Harvest::IdleExpired(Now, s_autoHarvestState.TargetAcquired,
+                    s_autoHarvestState.LastApproachProgress,
+                    std::chrono::seconds(IsAquaticCreature ? 45 : 30));
+            if (!TekStriderMode && s_autoHarvestState.AttackStarted != Clock::time_point{} &&
+                s_autoHarvestState.RangeRefinements < 5 &&
+                Now - std::max({s_autoHarvestState.AttackStarted, s_autoHarvestState.LastHarvestProgress,
+                    s_autoHarvestState.LastRangeAdjustment}) > Harvest::MeleeFeedbackDelay(ConfiguredAttackIntervalMs)) {
+                const float Closer = Harvest::RefineMeleeRange(AttackDistance, CurrentProbeFrame.CapsuleRadius * .01f);
+                if (Closer + .15f < AttackDistance && AutoApproachEnabled) {
+                    s_autoHarvestState.MeleeApproachLimitMeters = AttackDistance = Closer;
+                    ++s_autoHarvestState.RangeRefinements;s_autoHarvestState.LastRangeAdjustment = Now;
+                    s_autoHarvestState.AttackStarted = {};s_autoHarvestState.NextPathRefresh = {};
+                    ReleaseAutoHarvestAttack();
+                }
+            }
+            if (TekStriderMode && s_autoHarvestState.AttackStarted != Clock::time_point{} &&
+                s_autoHarvestState.RangeRefinements < 4 &&
+                Now - std::max({s_autoHarvestState.AttackStarted, s_autoHarvestState.LastHarvestProgress,
+                    s_autoHarvestState.LastRangeAdjustment}) > std::chrono::seconds(3)) {
+                const float Closer = Harvest::RefineBeamRange(AttackDistance);
+                if (Closer + .5f < AttackDistance) {
+                    s_autoHarvestState.BeamApproachLimitMeters = AttackDistance = Closer;
+                    ++s_autoHarvestState.RangeRefinements;s_autoHarvestState.LastRangeAdjustment = Now;
+                    s_autoHarvestState.AttackStarted = {};s_autoHarvestState.NextPathRefresh = {};
+                }
+            }
+            const bool AttackTimedOut = !TekStriderMode && Harvest::IdleExpired(Now,
+                s_autoHarvestState.AttackStarted, s_autoHarvestState.LastHarvestProgress,
+                Harvest::MeleeIdleLimit(ConfiguredAttackIntervalMs, IsAquaticCreature));
+            const bool TekStriderBeamTimedOut = TekStriderMode && Harvest::IdleExpired(Now,
+                s_autoHarvestState.AttackStarted, s_autoHarvestState.LastHarvestProgress,
+                std::chrono::seconds(14));
+            if (ApproachTimedOut || AttackTimedOut || TekStriderBeamTimedOut) {
                 AddAutoHarvestSkippedTarget(s_autoHarvestState.TargetLocation,
                     Now + std::chrono::seconds(12));
                 if (IsAquaticCreature) {
@@ -6633,7 +6807,7 @@ namespace g_Hack {
         }
 
         if (!s_autoHarvestState.HasTarget) {
-            if (IsAquaticCreature && g_Config::bAutoHarvestApproach &&
+            if (IsAquaticCreature && AutoApproachEnabled &&
                 Now < s_autoHarvestState.AquaticSettleUntil) {
                 const double Speed = GetAquaticSpeed();
                 if (Speed > 35.0 && Dino->CharacterMovement) {
@@ -6649,6 +6823,9 @@ namespace g_Hack {
                 return;
             }
 
+            if (Now < s_autoHarvestState.NextTargetSearch &&
+                (s_autoHarvestState.EmptySearches == 0 || AutoHarvestDistanceSquared(DinoLocation, s_autoHarvestState.SelectionOrigin) < 400. * 400.)) return;
+            s_autoHarvestState.NextTargetSearch = Now + std::chrono::milliseconds(250);
             SDK::FVector TargetLocation{};
             float TargetDistance = 0.0f;
             std::string TargetType;
@@ -6670,42 +6847,49 @@ namespace g_Hack {
                 RequireForwardTarget = true;
             }
 
-            // While the mount still has momentum, inspect several nearest
-            // candidates but commit only to one in the current forward
-            // hemisphere. Rejected rear targets are temporary exclusions for
-            // this selection pass; once speed is low they become valid again.
-            for (int Attempt = 0; Attempt < (RequireForwardTarget ? 10 : 1); ++Attempt) {
-                const auto* ExcludedLocationList = ExcludedLocations.empty()
-                    ? nullptr : &ExcludedLocations;
-                SDK::FVector CandidateLocation{};
-                float CandidateDistance = 0.0f;
-                std::string CandidateType;
-                if (!g_DrawESP::FindNearestResourceTarget(DinoLocation, SearchRadius,
-                    &CandidateLocation, &CandidateDistance, &CandidateType,
-                    ExcludedLocationList, 3.0f, TekStriderElementShardMode)) {
-                    break;
+            const bool RankGroundRoutes = !IsAquaticCreature && !IsAerialCreature && AutoApproachEnabled &&
+                (g_Config::bAutoHarvestSafeNavigation || g_Config::bAutoHarvestExperimentalNavigation);
+            std::vector<SDK::FVector> SelectedRoute;
+            if (RankGroundRoutes) {
+                if (!s_autoHarvestState.SelectionCandidates.empty() &&
+                    (AutoHarvestDistanceSquared(DinoLocation, s_autoHarvestState.SelectionOrigin) > 200. * 200. ||
+                        s_autoHarvestState.SelectionRadius != SearchRadius || s_autoHarvestState.SelectionRange != AttackDistance))
+                    ResetAutoHarvestSelection();
+                if (s_autoHarvestState.SelectionCandidates.empty()) {
+                    s_autoHarvestState.SelectionCandidates = g_DrawESP::FindResourceTargetCandidates(
+                        DinoLocation, SearchRadius, 6, ExcludedLocations, 3.0f);
+                    s_autoHarvestState.SelectionOrigin = DinoLocation;
+                    s_autoHarvestState.SelectionRadius = SearchRadius;
+                    s_autoHarvestState.SelectionRange = AttackDistance;
                 }
-
-                if (RequireForwardTarget) {
-                    SDK::FVector CandidateDirection{};
-                    const bool HasDirection = MakeThreeDimensionalAutoHarvestDirection(
-                        DinoLocation, CandidateLocation, &CandidateDirection);
-                    const double ForwardDot = HasDirection
-                        ? CandidateDirection.X * AquaticForward.X +
-                            CandidateDirection.Y * AquaticForward.Y +
-                            CandidateDirection.Z * AquaticForward.Z
-                        : -1.0;
-                    if (ForwardDot < 0.10) {
-                        ExcludedLocations.push_back(CandidateLocation);
-                        continue;
+                const auto Frame = ResolveAutoHarvestProbeFrame(Dino, DinoLocation);
+                std::array<SDK::AActor*, 128> Storage{};
+                SDK::TArray<SDK::AActor*> Ignore(Storage.data(), 0, int32_t(Storage.size()));
+                PopulateAutoHarvestTraceIgnoreActors(Dino, Ignore);
+                if (!AdvanceAutoHarvestRouteSelection(World, Dino, Frame, DinoLocation, AttackDistance, Ignore)) {
+                    s_autoHarvestState.NextTargetSearch = Now + std::chrono::milliseconds(30);
+                    ReleaseAutoHarvestAttack();ReleaseAutoHarvestSprint();
+                    SetAutoHarvestStatus("正在分步比较附近资源的可达路线");
+                    return;
+                }
+                if (s_autoHarvestState.SelectionHasBest) {
+                    FoundTarget = g_DrawESP::FindResourceTargetNear(s_autoHarvestState.SelectionBest.Location,
+                        .8f, &TargetLocation, &TargetType);
+                    if (FoundTarget) {
+                        TargetDistance = float(std::sqrt(AutoHarvestDistanceSquared(DinoLocation, TargetLocation)) * .01);
+                        SelectedRoute = std::move(s_autoHarvestState.SelectionBestRoute);
                     }
                 }
-
-                TargetLocation = CandidateLocation;
-                TargetDistance = CandidateDistance;
-                TargetType = std::move(CandidateType);
-                FoundTarget = true;
-                break;
+                ResetAutoHarvestSelection();
+            } else {
+                ResetAutoHarvestSelection();
+                const auto Candidates = g_DrawESP::FindResourceTargetCandidates(DinoLocation, SearchRadius,
+                    RequireForwardTarget ? 10 : 1, ExcludedLocations, 3.0f,
+                    RequireForwardTarget ? &AquaticForward : nullptr);
+                if (!Candidates.empty()) {
+                    FoundTarget = true;TargetLocation = Candidates.front().Location;
+                    TargetDistance = Candidates.front().DistanceMeters;TargetType = Candidates.front().TypeName;
+                }
             }
 
             if (!FoundTarget && RequireForwardTarget) {
@@ -6727,24 +6911,38 @@ namespace g_Hack {
             const auto* ExcludedLocationList = ExcludedLocations.empty()
                 ? nullptr : &ExcludedLocations;
             if (!FoundTarget) {
+                s_autoHarvestState.SelectionOrigin = DinoLocation;
+                s_autoHarvestState.NextTargetSearch = Now + Harvest::EmptySearchDelay(s_autoHarvestState.EmptySearches++);
                 ReleaseAutoHarvestAttack();
-                StopAutoHarvestTekStriderBeam();
                 SetAutoHarvestStatus(ExcludedLocationList
                     ? "正在跳过无法到达的资源并寻找下一个"
-                    : (TekStriderElementShardMode
-                        ? "范围内没有识别到元素碎片矿石"
+                    : (TekStriderMode &&
+                        s_autoHarvestState.TekStriderBeamStartRequested
+                        ? "范围内没有已勾选的资源；跨步者采集光束保持开启"
                         : "范围内没有已勾选的资源"));
                 return;
             }
 
             s_autoHarvestState.HasTarget = true;
+            s_autoHarvestState.EmptySearches = 0;
             s_autoHarvestState.TargetLocation = TargetLocation;
             s_autoHarvestState.TargetType = std::move(TargetType);
             s_autoHarvestState.TargetLastSeen = Now;
             s_autoHarvestState.TargetAcquired = Now;
             s_autoHarvestState.AttackStarted = {};
-            s_autoHarvestState.NextAttack = Now + std::chrono::milliseconds(250);
-            s_autoHarvestState.NextPathRefresh = Clock::time_point::min();
+            s_autoHarvestState.NextHarvestProgressSample = Now;
+            s_autoHarvestState.LastHarvestProgress = {};
+            s_autoHarvestState.InventoryProgress = {};
+            s_autoHarvestState.NextAttack = Harvest::NextTargetAttack(s_autoHarvestState.NextAttack, Now);
+            s_autoHarvestState.NavigationPoints = std::move(SelectedRoute);
+            s_autoHarvestState.NavigationRemaining = Harvest::PathSuffix(s_autoHarvestState.NavigationPoints,
+                [](const auto& A, const auto& B) { return std::sqrt(AutoHarvestDistanceSquared(A, B)); });
+            s_autoHarvestState.NavigationPointIndex = 1;
+            s_autoHarvestState.NavigationPathAvailable = s_autoHarvestState.NavigationPoints.size() >= 2;
+            s_autoHarvestState.NavigationPathPartial = false;
+            s_autoHarvestState.NextPathRefresh = s_autoHarvestState.NavigationPathAvailable
+                ? Now + std::chrono::milliseconds(2800) : Clock::time_point::min();
+            SampleAutoHarvestProgress(Dino, Now); // Baseline before the first swing/beam contact.
             s_autoHarvestState.MovementSampleLocation = DinoLocation;
             s_autoHarvestState.MovementSampleTime = Now;
             s_autoHarvestState.StationarySince = {};
@@ -6775,32 +6973,59 @@ namespace g_Hack {
             return;
         }
 
-        float CapsuleRadius = 75.0f;
-        float CapsuleHalfHeight = 100.0f;
-        if (Dino->CapsuleComponent && IsUsableObject(Dino->CapsuleComponent)) {
-            const float ResolvedRadius = Dino->CapsuleComponent->GetScaledCapsuleRadius();
-            const float ResolvedHalfHeight = Dino->CapsuleComponent->GetScaledCapsuleHalfHeight();
-            if (std::isfinite(ResolvedRadius) && ResolvedRadius > 1.0f) {
-                CapsuleRadius = ResolvedRadius;
-            }
-            if (std::isfinite(ResolvedHalfHeight) && ResolvedHalfHeight > 1.0f) {
-                CapsuleHalfHeight = ResolvedHalfHeight;
-            }
-        }
+        const AutoHarvestProbeFrame ProbeFrame = CurrentProbeFrame;
+        const float CapsuleRadius = ProbeFrame.CapsuleRadius;
         const bool IsGroundCreature = !IsAerialCreature && !IsAquaticCreature;
         const bool UseThreeDimensionalMovement = IsAerialCreature || IsAquaticCreature;
+
+        // Visibility and safe steering must ignore the Strider's own body,
+        // recursive rig attachments, saddle and rider. Keep one shared list for
+        // this update so path candidate checks do not rebuild it repeatedly.
+        std::array<SDK::AActor*, 128> TraceIgnoreStorage{};
+        SDK::TArray<SDK::AActor*> TraceIgnoreActors(
+            TraceIgnoreStorage.data(), 0,
+            static_cast<int32_t>(TraceIgnoreStorage.size()));
+        if (TekStriderMode || (IsGroundCreature &&
+            (g_Config::bAutoHarvestSafeNavigation ||
+                g_Config::bAutoHarvestExperimentalNavigation ||
+                g_Config::bAutoHarvestBreakObstacles))) {
+            PopulateAutoHarvestTraceIgnoreActors(Dino, TraceIgnoreActors);
+        }
+
+        SDK::FVector BeamPathOrigin = ProbeFrame.CollisionCenter;
+        BeamPathOrigin.Z += std::clamp(
+            static_cast<double>(ProbeFrame.CapsuleHalfHeight) * 0.35,
+            100.0, 900.0);
+        if (TekStriderMode) {
+            SDK::FVector CameraLocation{};
+            SDK::FRotator CameraRotation{};
+            LocalPC->GetPlayerViewPoint(&CameraLocation, &CameraRotation);
+            if (IsFiniteAutoHarvestVector(CameraLocation)) {
+                BeamPathOrigin = CameraLocation;
+            }
+        }
+        const double BeamTargetHitToleranceUU = std::clamp(
+            static_cast<double>(CapsuleRadius) * 0.35, 125.0, 300.0);
+        const bool TekStriderTargetVisible = !TekStriderMode ||
+            AutoHarvestHasClearBeamPath(World, BeamPathOrigin,
+                s_autoHarvestState.TargetLocation, BeamTargetHitToleranceUU,
+                TraceIgnoreActors);
+        const bool TekStriderTargetOccluded =
+            TekStriderMode && !TekStriderTargetVisible;
+        const bool NeedsApproach = DistanceMeters > AttackDistance ||
+            TekStriderTargetOccluded;
 
         if (IsGroundCreature) {
             const double DeltaX = s_autoHarvestState.TargetLocation.X - DinoLocation.X;
             const double DeltaY = s_autoHarvestState.TargetLocation.Y - DinoLocation.Y;
             const double HorizontalDistanceUU = std::sqrt(DeltaX * DeltaX + DeltaY * DeltaY);
             const double VerticalDistanceUU = std::abs(
-                s_autoHarvestState.TargetLocation.Z - DinoLocation.Z);
+                s_autoHarvestState.TargetLocation.Z - ProbeFrame.FootLocation.Z);
             const double NearbyHorizontalLimitUU = std::max(
                 static_cast<double>(AttackDistance) * 100.0 + CapsuleRadius * 3.0, 1200.0);
             const double ReachableVerticalUU = std::max(
                 static_cast<double>(AttackDistance) * 100.0 * 0.62,
-                static_cast<double>(CapsuleHalfHeight) * 0.85 + 75.0);
+                static_cast<double>(ProbeFrame.MaxStepHeight) + 75.0);
             if (HorizontalDistanceUU <= NearbyHorizontalLimitUU &&
                 VerticalDistanceUU > ReachableVerticalUU) {
                 // Do not reject a resource merely because it is currently uphill:
@@ -6809,8 +7034,10 @@ namespace g_Hack {
                 bool HasReachableLayerPath = false;
                 if (g_Config::bAutoHarvestSafeNavigation &&
                     Now >= s_autoHarvestState.NextPathRefresh) {
-                    RefreshAutoHarvestNavigationPath(World, Dino, DinoLocation,
-                        s_autoHarvestState.TargetLocation);
+                    RefreshAutoHarvestNavigationPath(World, Dino, ProbeFrame,
+                        DinoLocation, s_autoHarvestState.TargetLocation,
+                        AttackDistance, TekStriderTargetOccluded,
+                        TraceIgnoreActors);
                     s_autoHarvestState.NextPathRefresh =
                         Now + std::chrono::milliseconds(700);
                 }
@@ -6859,10 +7086,11 @@ namespace g_Hack {
         bool MovementDirectionControlsFacing = true;
         float MovementInputScale = 1.0f;
 
-        if (DistanceMeters > AttackDistance && g_Config::bAutoHarvestApproach) {
+        if (NeedsApproach && AutoApproachEnabled) {
             SDK::FVector MovementGoal = s_autoHarvestState.TargetLocation;
             const bool UseSafeNavigation = IsGroundCreature &&
-                (g_Config::bAutoHarvestSafeNavigation ||
+                (TekStriderTargetOccluded ||
+                    g_Config::bAutoHarvestSafeNavigation ||
                     g_Config::bAutoHarvestExperimentalNavigation);
             const bool MonitorGroundRecovery = IsGroundCreature &&
                 (UseSafeNavigation || g_Config::bAutoHarvestBreakObstacles);
@@ -6914,6 +7142,8 @@ namespace g_Hack {
                     if (ForceDetour && Now >= s_autoHarvestState.NextRecoveryAttempt) {
                         s_autoHarvestState.AvoidUntil = {};
                         ++s_autoHarvestState.RecoveryAttempts;
+                        s_autoHarvestState.NextPathRefresh = Harvest::BringForward(
+                            s_autoHarvestState.NextPathRefresh, Now);
                         s_autoHarvestState.NextRecoveryAttempt =
                             Now + std::chrono::milliseconds(1200);
                     }
@@ -6921,11 +7151,16 @@ namespace g_Hack {
             }
             if (UseSafeNavigation) {
                 if (Now >= s_autoHarvestState.NextPathRefresh) {
-                    RefreshAutoHarvestNavigationPath(World, Dino, DinoLocation,
-                        s_autoHarvestState.TargetLocation);
-                    s_autoHarvestState.NextPathRefresh =
-                        Now + std::chrono::milliseconds(
-                            g_Config::bAutoHarvestExperimentalNavigation ? 850 : 1400);
+                    RefreshAutoHarvestNavigationPath(World, Dino, ProbeFrame,
+                        DinoLocation, s_autoHarvestState.TargetLocation,
+                        AttackDistance, TekStriderTargetOccluded,
+                        TraceIgnoreActors);
+                    s_autoHarvestState.NextPathRefresh = Now + Harvest::ReplanDelay(
+                        s_autoHarvestState.NavigationPathAvailable && !s_autoHarvestState.NavigationPathPartial,
+                        s_autoHarvestState.LastApproachProgress != Clock::time_point{} &&
+                            Now - s_autoHarvestState.LastApproachProgress < std::chrono::seconds(3),
+                        ForceDetour || s_autoHarvestState.UnsafeSince != Clock::time_point{},
+                        g_Config::bAutoHarvestExperimentalNavigation);
                 }
                 if (s_autoHarvestState.NavigationPathAvailable &&
                     s_autoHarvestState.NavigationPathPartial &&
@@ -7023,9 +7258,10 @@ namespace g_Hack {
                     IsFiniteAutoHarvestVector(BaseDirection)) {
                     SDK::FHitResult BlockingHit{};
                     BreakableDirectObstacle =
-                        AutoHarvestDirectionIsBlocked(World, Dino, DinoLocation,
-                            BaseDirection, CapsuleRadius,
-                            s_autoHarvestState.TargetLocation, AttackDistance,
+                        AutoHarvestDirectionIsBlocked(World, Dino, ProbeFrame,
+                            BaseDirection,
+                            s_autoHarvestState.TargetLocation,
+                            TraceIgnoreActors,
                             &BlockingHit) &&
                         IsAutoHarvestBreakableObstacle(BlockingHit);
                 }
@@ -7076,9 +7312,10 @@ namespace g_Hack {
                 }
                 else if (UseSafeNavigation) {
                     const AutoHarvestSafeDirectionResult SafeDirection =
-                        FindAutoHarvestSafeDirection(World, Dino, DinoLocation, BaseDirection,
-                            CapsuleRadius, CapsuleHalfHeight, s_autoHarvestState.TargetLocation,
-                            AttackDistance, g_Config::AutoHarvestMaxSafeDropMeters, Now,
+                        FindAutoHarvestSafeDirection(World, Dino, ProbeFrame, BaseDirection,
+                            s_autoHarvestState.TargetLocation,
+                            g_Config::AutoHarvestMaxSafeDropMeters, Now,
+                            TraceIgnoreActors,
                             ForceDetour, (s_autoHarvestState.RecoveryAttempts % 2) == 0);
                     if (!SafeDirection.Found) {
                         ReleaseAutoHarvestAttack();
@@ -7086,9 +7323,9 @@ namespace g_Hack {
                         if (s_autoHarvestState.UnsafeSince == Clock::time_point{}) {
                             s_autoHarvestState.UnsafeSince = Now;
                         }
-                        s_autoHarvestState.NextPathRefresh =
-                            Now + std::chrono::milliseconds(
-                                g_Config::bAutoHarvestExperimentalNavigation ? 220 : 350);
+                        s_autoHarvestState.NextPathRefresh = Harvest::BringForward(
+                            s_autoHarvestState.NextPathRefresh, Now + std::chrono::milliseconds(
+                                g_Config::bAutoHarvestExperimentalNavigation ? 220 : 350));
 
                         if (Now - s_autoHarvestState.UnsafeSince > std::chrono::seconds(3)) {
                             AddAutoHarvestSkippedTarget(s_autoHarvestState.TargetLocation,
@@ -7125,7 +7362,7 @@ namespace g_Hack {
         // their current velocity to begin slowing before the attack radius,
         // counter-thrust after an overshoot, and only resume forward input once
         // the mount has settled. Facing remains on the resource while braking.
-        if (IsAquaticCreature && g_Config::bAutoHarvestApproach) {
+        if (IsAquaticCreature && AutoApproachEnabled) {
             SDK::FVector TargetDirection{};
             if (MakeThreeDimensionalAutoHarvestDirection(DinoLocation,
                 s_autoHarvestState.TargetLocation, &TargetDirection)) {
@@ -7217,28 +7454,42 @@ namespace g_Hack {
         }
 
         UpdateAutoHarvestSprint(Dino,
-            g_Config::bAutoHarvestSprint && g_Config::bAutoHarvestApproach &&
-                IsGroundCreature && DistanceMeters > AttackDistance &&
+            g_Config::bAutoHarvestSprint && AutoApproachEnabled &&
+                IsGroundCreature && NeedsApproach &&
                 HasMovementDirection && !ClearingObstacle,
             Now);
 
-        // Lock only yaw. During approach face the current safe waypoint/steering
-        // direction; once in range face the resource itself for the attack.
-        SDK::FVector HorizontalTarget = s_autoHarvestState.TargetLocation;
+        // Keep mount steering and camera aim separate. While the beam path is
+        // occluded, face the route instead of forcing the camera through the
+        // wall; restore the resource lock as soon as direct sight is available.
+        SDK::FVector MountFacingTarget = s_autoHarvestState.TargetLocation;
         if (HasMovementDirection && MovementDirectionControlsFacing) {
-            HorizontalTarget.X = DinoLocation.X + MovementDirection.X * 1000.0;
-            HorizontalTarget.Y = DinoLocation.Y + MovementDirection.Y * 1000.0;
+            MountFacingTarget.X = DinoLocation.X + MovementDirection.X * 1000.0;
+            MountFacingTarget.Y = DinoLocation.Y + MovementDirection.Y * 1000.0;
             if (UseThreeDimensionalMovement) {
-                HorizontalTarget.Z = DinoLocation.Z + MovementDirection.Z * 1000.0;
+                MountFacingTarget.Z = DinoLocation.Z + MovementDirection.Z * 1000.0;
             }
         }
-        if (!UseThreeDimensionalMovement && !TekStriderElementShardMode) {
-            HorizontalTarget.Z = DinoLocation.Z;
+        if (!UseThreeDimensionalMovement) {
+            MountFacingTarget.Z = DinoLocation.Z;
         }
-        SDK::FRotator TargetRotation = SDK::UKismetMathLibrary::FindLookAtRotation(
-            DinoLocation, HorizontalTarget);
-        if (!UseThreeDimensionalMovement && !TekStriderElementShardMode) {
-            TargetRotation.Pitch = 0.0;
+        SDK::FRotator MountFacingRotation =
+            SDK::UKismetMathLibrary::FindLookAtRotation(
+                DinoLocation, MountFacingTarget);
+        if (!UseThreeDimensionalMovement) MountFacingRotation.Pitch = 0.0;
+        MountFacingRotation.Roll = 0.0;
+
+        SDK::FRotator TargetRotation = MountFacingRotation;
+        if (TekStriderMode && TekStriderTargetVisible) {
+            SDK::FVector AimOrigin = DinoLocation;
+            SDK::FVector CameraLocation{};
+            SDK::FRotator CameraRotation{};
+            LocalPC->GetPlayerViewPoint(&CameraLocation, &CameraRotation);
+            if (IsFiniteAutoHarvestVector(CameraLocation)) {
+                AimOrigin = CameraLocation;
+            }
+            TargetRotation = SDK::UKismetMathLibrary::FindLookAtRotation(
+                AimOrigin, s_autoHarvestState.TargetLocation);
         }
         if (IsAquaticCreature) {
             const double AimDeltaX = s_autoHarvestState.TargetLocation.X - DinoLocation.X;
@@ -7258,6 +7509,15 @@ namespace g_Hack {
             TargetRotation.Pitch = std::clamp(TargetRotation.Pitch, -75.0, 75.0);
         }
         TargetRotation.Roll = 0.0;
+        s_autoHarvestState.DesiredMountFacingRotation = MountFacingRotation;
+        s_autoHarvestState.HasDesiredMountFacingRotation = true;
+        if (TekStriderMode && TekStriderTargetVisible) {
+            PublishAutoHarvestViewLock(Dino,
+                s_autoHarvestState.TargetLocation);
+        }
+        else {
+            ClearAutoHarvestViewLock();
+        }
         LocalPC->SetControlRotation(TargetRotation);
         if (IsAquaticCreature) {
             Dino->SetLastMovementDesiredRotation(TargetRotation);
@@ -7271,8 +7531,7 @@ namespace g_Hack {
             IsUsableObject(Dino->CharacterMovement) &&
             IsUsableObject(Dino->CharacterMovement->UpdatedComponent)) {
             const SDK::FVector SavedVelocity = Dino->CharacterMovement->Velocity;
-            SDK::FRotator DinoRotation = TargetRotation;
-            if (!UseThreeDimensionalMovement) DinoRotation.Pitch = 0.0;
+            const SDK::FRotator DinoRotation = MountFacingRotation;
             Dino->CharacterMovement->UpdatedComponent->K2_SetWorldRotation(
                 DinoRotation, false, nullptr, false);
             Dino->CharacterMovement->UpdatedComponent->RelativeRotation = DinoRotation;
@@ -7281,14 +7540,13 @@ namespace g_Hack {
         const SDK::FRotator AppliedDinoRotation = Dino->K2_GetActorRotation();
 
         bool AquaticMovementApplied = false;
-        if (IsAquaticCreature && g_Config::bAutoHarvestApproach &&
+        if (IsAquaticCreature && AutoApproachEnabled &&
             HasMovementDirection) {
             Dino->AddMovementInput(MovementDirection, MovementInputScale, true);
             AquaticMovementApplied = true;
         }
 
-        if (DistanceMeters > AttackDistance) {
-            if (TekStriderElementShardMode) StopAutoHarvestTekStriderBeam();
+        if (NeedsApproach) {
             if (ClearingObstacle) {
                 ReleaseAutoHarvestSprint();
                 if (s_autoHarvestState.ObstacleClearAttacksRemaining > 0 &&
@@ -7322,11 +7580,14 @@ namespace g_Hack {
             }
             ReleaseAutoHarvestAttack();
             std::ostringstream Status;
-            if (g_Config::bAutoHarvestApproach) {
+            if (AutoApproachEnabled) {
                 if (HasMovementDirection && !AquaticMovementApplied) {
                     Dino->AddMovementInput(MovementDirection, MovementInputScale, true);
                 }
-                if (AquaticBraking) {
+                if (TekStriderTargetOccluded) {
+                    Status << "光束路径被墙体或地形阻挡，正在寻找可见采集站位 ";
+                }
+                else if (AquaticBraking) {
                     Status << "正在水下反推减速并保持当前目标 ";
                 }
                 else if (AvoidingObstacle) {
@@ -7368,33 +7629,68 @@ namespace g_Hack {
             return;
         }
 
-        if (s_autoHarvestState.AttackStarted == Clock::time_point{}) {
-            s_autoHarvestState.AttackStarted = Now;
-        }
-
-        if (TekStriderElementShardMode) {
+        if (TekStriderMode) {
             ReleaseAutoHarvestSprint();
             ReleaseAutoHarvestAttack();
-            if (!s_autoHarvestState.TekStriderBeamActive &&
-                Now >= s_autoHarvestState.NextAttack) {
-                if (SendAutoHarvestTekStriderRigToggle()) {
-                    s_autoHarvestState.TekStriderBeamActive = true;
+            if (!s_autoHarvestState.TekStriderBeamStartRequested &&
+                Now >= s_autoHarvestState.NextTekStriderBeamToggle) {
+                int32_t DinoSerialNumber = -1;
+                if (TryGetLiveObjectSerial(Dino, Dino->Index,
+                    &DinoSerialNumber) && SendAutoHarvestTekStriderRigToggle()) {
+                    s_autoHarvestState.TekStriderBeamStartRequested = true;
+                    s_autoHarvestState.TekStriderBeamDino = Dino;
+                    s_autoHarvestState.TekStriderBeamDinoObjectIndex = Dino->Index;
+                    s_autoHarvestState.TekStriderBeamDinoSerialNumber =
+                        DinoSerialNumber;
+                    s_autoHarvestState.NextTekStriderBeamToggle =
+                        Now + std::chrono::milliseconds(750);
                 }
-                s_autoHarvestState.NextAttack = Now + std::chrono::milliseconds(750);
             }
 
+            SDK::FVector CameraLocation{};
+            SDK::FRotator CameraRotation{};
+            LocalPC->GetPlayerViewPoint(&CameraLocation, &CameraRotation);
+            SDK::FVector CameraToTarget{};
+            const bool HasCameraDirection =
+                IsFiniteAutoHarvestVector(CameraLocation) &&
+                MakeThreeDimensionalAutoHarvestDirection(CameraLocation,
+                    s_autoHarvestState.TargetLocation, &CameraToTarget);
+            const SDK::FVector CameraForward =
+                SDK::UKismetMathLibrary::GetForwardVector(CameraRotation);
+            const double AimDot = HasCameraDirection &&
+                IsFiniteAutoHarvestVector(CameraForward)
+                ? CameraToTarget.X * CameraForward.X +
+                    CameraToTarget.Y * CameraForward.Y +
+                    CameraToTarget.Z * CameraForward.Z
+                : -1.0;
+            // Start the idle attack timer only after the persistent beam request
+            // exists. Alignment is reported separately; a beam that never lines
+            // up must still expire after 14 seconds without inventory progress.
+            const bool AimAligned = AimDot >= 0.995;
+            if (s_autoHarvestState.TekStriderBeamStartRequested &&
+                s_autoHarvestState.AttackStarted == Clock::time_point{}) {
+                s_autoHarvestState.AttackStarted = Now;
+            }
+
+
             std::ostringstream Status;
-            Status << (s_autoHarvestState.TekStriderBeamActive
-                ? "跨步者采集钻头已开启，正在采集 "
-                : "正在瞄准并启动跨步者采集钻头 ")
+            Status << (s_autoHarvestState.TekStriderBeamStartRequested
+                ? (AimAligned
+                    ? "视角已锁定资源，跨步者采集光束持续开启 "
+                    : "跨步者采集光束保持开启，正在将视角对准 ")
+                : "正在将视角锁定资源并开启跨步者采集光束 ")
                 << s_autoHarvestState.TargetType << " ("
                 << std::fixed << std::setprecision(1) << DistanceMeters << "m)";
             SetAutoHarvestStatus(Status.str());
             return;
         }
 
-        const int AttackIntervalMs = static_cast<int>(std::clamp(
-            g_Config::AutoHarvestAttackIntervalMs, 200.0f, 2500.0f));
+        if (s_autoHarvestState.AttackStarted == Clock::time_point{}) {
+            s_autoHarvestState.AttackStarted = Now;
+        }
+
+        SampleAutoHarvestProgress(Dino, Now);
+        const int AttackIntervalMs = ConfiguredAttackIntervalMs;
         if (!s_autoHarvestState.AttackHeld && Now >= s_autoHarvestState.NextAttack) {
             if (SendAutoHarvestMouseButton(true)) {
                 s_autoHarvestState.AttackHeld = true;
@@ -7547,12 +7843,21 @@ namespace g_Hack {
         moveComp->bOrientRotationToMovement = false;
         moveComp->bUseControllerDesiredRotation = false;
 
-        // Auto harvesting writes the desired resource-facing rotation to the
-        // controller. Using the third-person camera rotation here can fight that
-        // target (especially while swimming) and make the mount circle in place.
-        SDK::FRotator rot = g_Config::bAutoHarvestResources
-            ? LocalPC->GetControlRotation()
-            : LocalPC->PlayerCameraManager->GetCameraRotation();
+        // Auto harvesting keeps camera aim and movement-facing independent.
+        // In particular, a Strider can follow a safe detour without dragging
+        // the excavation view away from the selected resource.
+        SDK::FRotator rot = g_Config::bAutoHarvestResources &&
+            s_autoHarvestState.HasDesiredMountFacingRotation
+            ? s_autoHarvestState.DesiredMountFacingRotation
+            : (g_Config::bAutoHarvestResources
+                ? LocalPC->GetControlRotation()
+                : LocalPC->PlayerCameraManager->GetCameraRotation());
+        if (g_Config::bAutoHarvestResources &&
+            g_Config::bAutoHarvestTekStrider &&
+            !s_autoHarvestState.HasDesiredMountFacingRotation) {
+            rot.Pitch = 0.0;
+            rot.Roll = 0.0;
+        }
 
         if (!moveComp->UpdatedComponent) return;
 
@@ -7633,6 +7938,40 @@ namespace g_Hack {
         );
     }
 
+    namespace {
+        // 副手盾牌与五个身体部位共用自动换甲入口，按部位开关筛选。
+        bool ArmorSwapSlotEnabled(int TypeIndex) {
+            switch (TypeIndex) {
+                case 0: return g_Config::bArmorSwapHead;
+                case 1: return g_Config::bArmorSwapShirt;
+                case 2: return g_Config::bArmorSwapPants;
+                case 3: return g_Config::bArmorSwapBoots;
+                case 4: return g_Config::bArmorSwapGloves;
+                case 8: return g_Config::bArmorSwapShield;
+                default: return false;
+            }
+        }
+        const char* ArmorSlotName(int TypeIndex) {
+            switch (TypeIndex) {
+                case 0: return "头盔";
+                case 1: return "胸甲";
+                case 2: return "护腿";
+                case 3: return "靴子";
+                case 4: return "手套";
+                case 8: return "盾牌";
+                default: return "未知部位";
+            }
+        }
+    }
+
+    static std::mutex g_ArmorSwapStatusMutex;
+    static std::string g_ArmorSwapStatus = "自动换甲未启用";
+
+    std::string GetArmorSwapStatus() {
+        std::scoped_lock Lock(g_ArmorSwapStatusMutex);
+        return LanguageManager::Get().TranslateCopy(g_ArmorSwapStatus);
+    }
+
     void AutoSwapBrokenEquipment()
     {
         static int globalTick = 0;
@@ -7640,31 +7979,62 @@ namespace g_Hack {
 
         if (globalTick % 3 != 0) return;
 
-        SDK::AShooterPlayerController* PC = (SDK::AShooterPlayerController*)g_Util::GetLocalPC();
-        if (!PC || !PC->Pawn) return;
+        if (!g_Config::bAutomatic) {
+            std::scoped_lock Lock(g_ArmorSwapStatusMutex);
+            g_ArmorSwapStatus = "自动换甲未启用";
+            return;
+        }
 
-        auto Character = (SDK::APrimalCharacter*)PC->Pawn;
-        if (!Character || !Character->MyInventoryComponent) return;
+        SDK::AShooterPlayerController* PC = static_cast<SDK::AShooterPlayerController*>(
+            g_Util::GetLocalPC());
+        if (!IsUsableObject(PC)) return;
+
+        SDK::APrimalCharacter* Character = GetPlayerInventoryOwner(PC);
+        if (!IsUsableObject(Character) ||
+            !Character->IsA(SDK::AShooterCharacter::StaticClass()) ||
+            Character->IsA(SDK::APrimalDinoCharacter::StaticClass()) ||
+            !IsUsableObject(Character->MyInventoryComponent)) return;
 
         auto Inv = Character->MyInventoryComponent;
         auto& EquippedItems = Inv->EquippedItems;
         auto& InventoryItems = Inv->InventoryItems;
 
-        if (InventoryItems.Num() == 0) return;
+        const int32_t EquippedItemCount = EquippedItems.Num();
+        const int32_t InventoryItemCount = InventoryItems.Num();
+        if (EquippedItemCount < 0 || EquippedItemCount > 100000 ||
+            InventoryItemCount <= 0 || InventoryItemCount > 100000) return;
 
         static int lastSwapTick[25] = { 0 };
+        struct ArmorSwapSlotRuntime {
+            int LastRequestTick = -100000;
+            SDK::FItemNetID LastRequestedID{};
+            int FailedAttempts = 0;
+            SDK::FItemNetID BlacklistedID{};
+            ULONGLONG BlacklistUntil = 0;
+            bool PendingFill = false;   // 摘除皮肤后允许补穿空槽
+            int PendingFillTick = -100000;
+        };
+        static ArmorSwapSlotRuntime SlotState[25];
+        static ULONGLONG NextSyncRequestAt = 0;
         const float ALERT_DURABILITY = g_Config::ArmorRange;
 
-        //获取当前穿着的装备
+        // 获取当前穿着的装备。皮肤（bIsItemSkin）与护甲可以同槽位同时
+        // 存在且皮肤没有耐久：若用皮肤覆盖护甲记录，底下的护甲碎了也
+        // 不会被替换（手臂手套最容易长期挂皮肤，导致“无法换手臂”）。
+        // 因此真实护甲与皮肤分开记录：有护甲看护甲，只剩皮肤按空槽处理。
         SDK::UPrimalItem* WornArmor[20] = { nullptr };
-        for (int i = 0; i < EquippedItems.Num(); i++)
+        SDK::UPrimalItem* WornSkin[20] = { nullptr };
+        for (int i = 0; i < EquippedItemCount; i++)
         {
             auto item = EquippedItems[i];
-            if (!item) continue;
+            if (!IsUsableObject(item)) continue;
 
             int typeIndex = (int)item->MyEquipmentType;
-            if (typeIndex >= 0 && typeIndex < 20)
-            {
+            if (typeIndex < 0 || typeIndex >= 20) continue;
+            if (item->bIsItemSkin) {
+                if (!WornSkin[typeIndex]) WornSkin[typeIndex] = item;
+            }
+            else {
                 WornArmor[typeIndex] = item;
             }
         }
@@ -7676,28 +8046,45 @@ namespace g_Hack {
         for (int i = 0; i < 6; i++)
         {
             int typeIndex = targetSlots[i];
+            if (!ArmorSwapSlotEnabled(typeIndex)) continue;
+
+            auto& State = SlotState[typeIndex];
+            auto CurrentEquippedItem = WornArmor[typeIndex];
+            // 只剩皮肤说明底层护甲已碎并被移除，需要补穿
+            const bool SkinOnly = CurrentEquippedItem == nullptr && WornSkin[typeIndex] != nullptr;
+
+            // 请求后槽位已出现护甲 → 本次替换生效，重置失败计数与待补穿标记
+            if (CurrentEquippedItem != nullptr && (State.FailedAttempts || State.PendingFill)) {
+                State.FailedAttempts = 0;
+                State.PendingFill = false;
+                State.LastRequestedID = {};
+            }
 
             // 如果在冷却中，直接跳过，本帧不处理它
             if (globalTick - lastSwapTick[typeIndex] < 60) continue;
 
-            auto CurrentEquippedItem = WornArmor[typeIndex];
-
             if (CurrentEquippedItem == nullptr)
             {
-                // 空槽位，需要穿
-                bSlotNeedsReplace[typeIndex] = true;
-                bAnyNeedsReplace = true;
+                // 空槽位：默认不自动穿戴，除非允许穿戴空槽、该槽只剩皮肤、
+                // 或刚摘除皮肤等待补穿。
+                if (!g_Config::bArmorSwapOnlyEquipped || SkinOnly || State.PendingFill)
+                {
+                    bSlotNeedsReplace[typeIndex] = true;
+                    bAnyNeedsReplace = true;
+                }
+                else if (State.PendingFill && globalTick - State.PendingFillTick > 300) {
+                    // 摘皮后长时间未穿上，放弃本次补穿
+                    State.PendingFill = false;
+                }
             }
             else
             {
                 // 有装备，判断是否快碎了
-                if (!CurrentEquippedItem->bIsItemSkin && CurrentEquippedItem->bUseItemDurability)
+                if (CurrentEquippedItem->bUseItemDurability &&
+                    CurrentEquippedItem->ItemDurability <= ALERT_DURABILITY)
                 {
-                    if (CurrentEquippedItem->ItemDurability <= ALERT_DURABILITY)
-                    {
-                        bSlotNeedsReplace[typeIndex] = true;
-                        bAnyNeedsReplace = true;
-                    }
+                    bSlotNeedsReplace[typeIndex] = true;
+                    bAnyNeedsReplace = true;
                 }
             }
         }
@@ -7705,14 +8092,38 @@ namespace g_Hack {
         //如果没有需要换的 跳过
         if (!bAnyNeedsReplace) return;
 
-        float bestDurabilityForSlot[25] = { -1.0f };         // 找到的最高耐久
-        SDK::FItemNetID* bestItemNetIdForSlot[25] = { nullptr }; // 记录最高耐久装备的ID
+        // 只剩皮肤的槽位先摘皮肤：服务器拒绝在有皮肤的槽位上穿护甲时
+        // 这一步能解除阻挡；下几帧皮肤消失后再补穿。
+        for (int i = 0; i < 6; i++)
+        {
+            int typeIndex = targetSlots[i];
+            if (!bSlotNeedsReplace[typeIndex] || WornArmor[typeIndex]) continue;
+            auto* Skin = WornSkin[typeIndex];
+            if (!Skin) continue;
+            auto& State = SlotState[typeIndex];
+            if (globalTick - lastSwapTick[typeIndex] < 60) continue;
+            PC->ServerRemovePawnItem(Skin->ItemID, false);
+            lastSwapTick[typeIndex] = globalTick;
+            State.PendingFill = true;
+            State.PendingFillTick = globalTick;
+            {
+                std::scoped_lock Lock(g_ArmorSwapStatusMutex);
+                g_ArmorSwapStatus = std::format("已请求摘除{}上的皮肤，随后补穿护甲", ArmorSlotName(typeIndex));
+            }
+            return; // 每帧只发一个请求
+        }
 
+        float bestDurabilityForSlot[25];
+        SDK::FItemNetID bestItemNetIdForSlot[25]{};
+        bool hasBestForSlot[25] = { false }; // 记录最高耐久装备
+        for (int i = 0; i < 25; i++) bestDurabilityForSlot[i] = -1.0f;
+
+        const ULONGLONG NowMs = GetTickCount64();
         // 只遍历一次大背包
-        for (int j = 0; j < InventoryItems.Num(); j++)
+        for (int j = 0; j < InventoryItemCount; j++)
         {
             auto CandItem = InventoryItems[j];
-            if (!CandItem) continue;
+            if (!IsUsableObject(CandItem)) continue;
 
             int typeIndex = (int)CandItem->MyEquipmentType;
 
@@ -7720,172 +8131,92 @@ namespace g_Hack {
             {
                 if (CandItem->bIsItemSkin || !CandItem->bUseItemDurability) continue;
                 if (CandItem->bIsBlueprint || CandItem->bIsEngram) continue;
+                if (CandItem->ItemQuantity <= 0 || CandItem->bIsRepairing) continue;
+                // 跳过当前正穿着的同一件（本地耐久视图滞后时避免重新穿回碎甲）
+                if (WornArmor[typeIndex] &&
+                    CandItem->ItemID.ItemID1 == WornArmor[typeIndex]->ItemID.ItemID1 &&
+                    CandItem->ItemID.ItemID2 == WornArmor[typeIndex]->ItemID.ItemID2) continue;
+                // 服务器连续拒绝过的备件先冷却，改试其它备件
+                auto& State = SlotState[typeIndex];
+                if (NowMs < State.BlacklistUntil &&
+                    CandItem->ItemID.ItemID1 == State.BlacklistedID.ItemID1 &&
+                    CandItem->ItemID.ItemID2 == State.BlacklistedID.ItemID2) continue;
 
                 float candDur = CandItem->ItemDurability;
                 if (candDur > ALERT_DURABILITY && candDur > bestDurabilityForSlot[typeIndex])
                 {
                     bestDurabilityForSlot[typeIndex] = candDur;
-                    bestItemNetIdForSlot[typeIndex] = &CandItem->ItemID;
+                    bestItemNetIdForSlot[typeIndex] = CandItem->ItemID;
+                    hasBestForSlot[typeIndex] = true;
                 }
             }
         }
 
+        // 每帧只发一个装备请求：同一帧内连续发送多个 ServerEquipPawnItem
+        // 会相互挤占背包同步，排在后面的槽位（常见于手套、盾牌）被丢弃，
+        // 表现为“其他部位能换、手臂换不了”。改为逐槽排队，下帧继续。
         for (int i = 0; i < 6; i++)
         {
             int typeIndex = targetSlots[i];
 
             if (bSlotNeedsReplace[typeIndex])
             {
-                if (bestItemNetIdForSlot[typeIndex] != nullptr)
+                auto& State = SlotState[typeIndex];
+                if (hasBestForSlot[typeIndex])
                 {
-                    PC->ServerEquipPawnItem(*bestItemNetIdForSlot[typeIndex]);
-                    lastSwapTick[typeIndex] = globalTick; 
+                    // 同一备件连续请求多次仍未生效：服务器多半拒绝了它
+                    // （本地耐久/状态视图可能滞后）。拉黑该备件、强制同步
+                    // 一次背包数据，改试其它备件。
+                    const bool SameAsLast = State.LastRequestedID.ItemID1 == bestItemNetIdForSlot[typeIndex].ItemID1 &&
+                        State.LastRequestedID.ItemID2 == bestItemNetIdForSlot[typeIndex].ItemID2;
+                    if (SameAsLast && State.FailedAttempts >= 3) {
+                        State.BlacklistedID = bestItemNetIdForSlot[typeIndex];
+                        State.BlacklistUntil = NowMs + 60000;
+                        State.FailedAttempts = 0;
+                        State.LastRequestedID = {};
+                        if (NowMs >= NextSyncRequestAt) {
+                            NextSyncRequestAt = NowMs + 30000;
+                            Inv->ServerRequestItems(PC, true, false);
+                        }
+                        std::scoped_lock Lock(g_ArmorSwapStatusMutex);
+                        g_ArmorSwapStatus = std::format("服务器未接受{}替换，已跳过该备件并同步背包", ArmorSlotName(typeIndex));
+                        lastSwapTick[typeIndex] = globalTick;
+                        break;
+                    }
+                    PC->ServerEquipPawnItem(bestItemNetIdForSlot[typeIndex]);
+                    State.FailedAttempts = SameAsLast ? State.FailedAttempts + 1 : 1;
+                    State.LastRequestedID = bestItemNetIdForSlot[typeIndex];
+                    State.LastRequestTick = globalTick;
+                    lastSwapTick[typeIndex] = globalTick;
+                    {
+                        std::scoped_lock Lock(g_ArmorSwapStatusMutex);
+                        g_ArmorSwapStatus = std::format("已请求替换{}", ArmorSlotName(typeIndex));
+                    }
+                    break; // 剩余槽位下一帧继续
                 }
                 else
                 {
-                    lastSwapTick[typeIndex] = globalTick;
+                    lastSwapTick[typeIndex] = globalTick; // 无可用备件，进入冷却
+                    std::scoped_lock Lock(g_ArmorSwapStatusMutex);
+                    g_ArmorSwapStatus = std::format("{}需要替换，但背包没有可用备件", ArmorSlotName(typeIndex));
                 }
             }
         }
     }
 
-    void OutBody()
-    {
-        struct OutBodyState {
-            SDK::AShooterCharacter* Character = nullptr;
-            int32_t CharacterObjectIndex = -1;
-            SDK::UCharacterMovementComponent* Movement = nullptr;
-            int32_t MovementObjectIndex = -1;
-            SDK::FVector SavedLocation{};
-            SDK::EMovementMode OriginalMovementMode = SDK::EMovementMode::MOVE_Walking;
-            uint8_t OriginalCustomMovementMode = 0;
-            float OriginalMaxFlySpeed = 0.0f;
-            float OriginalMaxAcceleration = 0.0f;
-            float OriginalBrakingDecelerationFlying = 0.0f;
-            bool OriginalCollisionEnabled = true;
-            bool Active = false;
-        };
+#include "GameplayExtensions.inl"
+#include "GachaOpen.inl"
+#include "InventoryDeposit.inl"
+#include "FeatureExpansion.inl"
+#include "TekEquipment.inl"
+#include "PlacementExperiment.inl"
+#include "WeaponWaterAccess.inl"
+#include "DinoHarvestRange.inl"
+#include "UnderwaterWeapons.inl"
+#include "BackpackTools.inl"
+#include "SessionSnapshot.inl"
+#include "GcmLocalFlight.inl"
+#include "WorldUtilities.inl"
+#include "InstantReload.inl"
 
-        static OutBodyState State;
-
-        auto ClearStateWithoutTouchingPawn = []() {
-            State = OutBodyState{};
-            g_MDX12::g_MenuState::g_isOutBodyActive = false;
-        };
-
-        auto RestoreState = [&ClearStateWithoutTouchingPawn](bool RestoreLocation) {
-            SDK::AShooterCharacter* ValidCharacter = State.Active
-                ? ResolveCachedObject(State.Character, State.CharacterObjectIndex)
-                : nullptr;
-            SDK::UCharacterMovementComponent* ValidMovement =
-                ResolveCachedObject(State.Movement, State.MovementObjectIndex);
-
-            if (ValidCharacter && ValidMovement) {
-                // Move back while collision is still disabled, then restore
-                // every value captured on entry. ReplicateMovement is no
-                // longer changed by this feature.
-                if (RestoreLocation) {
-                    ValidCharacter->K2_SetActorLocation(State.SavedLocation, false, nullptr, true);
-                }
-                WriteReflectedTimeValue(ValidMovement, "MaxFlySpeed", State.OriginalMaxFlySpeed);
-                WriteReflectedTimeValue(ValidMovement, "MaxAcceleration", State.OriginalMaxAcceleration);
-                WriteReflectedTimeValue(ValidMovement, "BrakingDecelerationFlying",
-                    State.OriginalBrakingDecelerationFlying);
-                ValidMovement->SetMovementMode(State.OriginalMovementMode,
-                    State.OriginalCustomMovementMode);
-                ValidCharacter->SetActorEnableCollision(State.OriginalCollisionEnabled);
-            }
-
-            ClearStateWithoutTouchingPawn();
-        };
-
-        SDK::APlayerController* LocalPC = g_Util::GetLocalPC();
-        SDK::AShooterCharacter* CurrentCharacter = nullptr;
-        SDK::UCharacterMovementComponent* CurrentMovement = nullptr;
-        if (LocalPC && LocalPC->Pawn &&
-            LocalPC->Pawn->IsA(SDK::AShooterCharacter::StaticClass()) &&
-            !LocalPC->Pawn->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
-            CurrentCharacter = static_cast<SDK::AShooterCharacter*>(LocalPC->Pawn);
-            SDK::UPawnMovementComponent* PawnMovement = LocalPC->Pawn->GetMovementComponent();
-            if (PawnMovement && PawnMovement->IsA(SDK::UCharacterMovementComponent::StaticClass())) {
-                CurrentMovement = static_cast<SDK::UCharacterMovementComponent*>(PawnMovement);
-            }
-        }
-
-        const bool Requested = g_Config::bOutBodyChecked &&
-            g_MDX12::g_MenuState::g_isOutBodyActive;
-
-        if (State.Active) {
-            const bool SamePawn = CurrentCharacter == State.Character &&
-                CurrentCharacter && CurrentCharacter->Index == State.CharacterObjectIndex &&
-                CurrentMovement == State.Movement && CurrentMovement &&
-                CurrentMovement->Index == State.MovementObjectIndex;
-
-            if (!SamePawn) {
-                // Disconnect, respawn, spectator transition, mounting, or a
-                // server change: restore the old pawn if it is still registered,
-                // but never apply its saved location to the new pawn.
-                RestoreState(false);
-                return;
-            }
-            if (!CurrentCharacter->HasAuthority()) {
-                // Client-side movement/collision changes are corrected by the
-                // server and can also break interaction traces. This mode is
-                // therefore limited to single-player/listen-server authority.
-                RestoreState(false);
-                return;
-            }
-            if (!Requested) {
-                RestoreState(true);
-                return;
-            }
-
-            uint8_t CurrentMode = 0;
-            if (!ReadReflectedByteValue(State.Movement, "MovementMode", &CurrentMode) ||
-                CurrentMode != static_cast<uint8_t>(SDK::EMovementMode::MOVE_Flying)) {
-                State.Movement->SetMovementMode(SDK::EMovementMode::MOVE_Flying, 0);
-            }
-            return;
-        }
-
-        if (!Requested) return;
-        if (!CurrentCharacter || !CurrentMovement || !CurrentCharacter->HasAuthority()) {
-            g_MDX12::g_MenuState::g_isOutBodyActive = false;
-            return;
-        }
-
-        uint8_t OriginalMovementMode = 0;
-        uint8_t OriginalCustomMovementMode = 0;
-        float OriginalMaxFlySpeed = 0.0f;
-        float OriginalMaxAcceleration = 0.0f;
-        float OriginalBrakingDecelerationFlying = 0.0f;
-        if (!ReadReflectedByteValue(CurrentMovement, "MovementMode", &OriginalMovementMode) ||
-            !ReadReflectedByteValue(CurrentMovement, "CustomMovementMode", &OriginalCustomMovementMode) ||
-            !ReadReflectedFloatValue(CurrentMovement, "MaxFlySpeed", &OriginalMaxFlySpeed) ||
-            !ReadReflectedFloatValue(CurrentMovement, "MaxAcceleration", &OriginalMaxAcceleration) ||
-            !ReadReflectedFloatValue(CurrentMovement, "BrakingDecelerationFlying",
-                &OriginalBrakingDecelerationFlying)) {
-            g_MDX12::g_MenuState::g_isOutBodyActive = false;
-            return;
-        }
-
-        State.Character = CurrentCharacter;
-        State.CharacterObjectIndex = CurrentCharacter->Index;
-        State.Movement = CurrentMovement;
-        State.MovementObjectIndex = CurrentMovement->Index;
-        State.SavedLocation = CurrentCharacter->K2_GetActorLocation();
-        State.OriginalMovementMode = static_cast<SDK::EMovementMode>(OriginalMovementMode);
-        State.OriginalCustomMovementMode = OriginalCustomMovementMode;
-        State.OriginalMaxFlySpeed = OriginalMaxFlySpeed;
-        State.OriginalMaxAcceleration = OriginalMaxAcceleration;
-        State.OriginalBrakingDecelerationFlying = OriginalBrakingDecelerationFlying;
-        State.OriginalCollisionEnabled = CurrentCharacter->GetActorEnableCollision();
-        State.Active = true;
-
-        CurrentCharacter->SetActorEnableCollision(false);
-        WriteReflectedTimeValue(CurrentMovement, "MaxFlySpeed", 10000.0);
-        WriteReflectedTimeValue(CurrentMovement, "MaxAcceleration", 5000.0);
-        WriteReflectedTimeValue(CurrentMovement, "BrakingDecelerationFlying", 9999.0);
-        CurrentMovement->SetMovementMode(SDK::EMovementMode::MOVE_Flying, 0);
-    }
 }

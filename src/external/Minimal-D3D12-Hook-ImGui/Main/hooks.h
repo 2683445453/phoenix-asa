@@ -16,15 +16,33 @@ namespace g_Hook {
         CallbackScope& operator=(const CallbackScope&) = delete;
     };
 
+    bool SupportsWeaponAim(SDK::AShooterWeapon* Weapon);
     void StartAllHooks();
-    void StopAllHooks();
+    bool IsUnloadRequested();
+    bool StopAllHooks();
     void SetModuleHandle(HMODULE module);
+    void SetInitializationThread(HANDLE thread);
+    void SetRuntimeReady(bool ready);
+    bool IsStopping();
+    void LogLifecycle(const char* message);
+    void CloseLifecycleLog();
     void RequestUnload();
 
     inline bool ActorTickOK = false;
 	inline bool HandleDisconnectOK = false;
 	inline bool OutputTextLineOK = false;
 	inline bool PostRenderOK = false;
+	inline bool UpdateCameraOK = false;
+	inline bool WeaponAimOK = false;
+    inline bool ProjectileShotEventsOK = false;
+    inline bool DinoActionEventsOK = false;
+    inline void* DinoActionEventTarget = nullptr;
+    inline bool ProjectileModifiersOK = false;
+	inline bool TekBowInstantAimOK = false;
+	inline bool ShotgunSpreadOK = false;
+	inline bool InstantThrowOK = false;
+	// 弓满蓄力直接出箭（StartFire 包装拦截，见 hooks.cpp::initBowFullChargeShot）
+	inline bool BowFullChargeOK = false;
 	inline bool PhysicsRotationOK = false;
 	inline bool TakeDamageOK = false;
 	inline bool ClientAddFloatingDamageTextOK = false;

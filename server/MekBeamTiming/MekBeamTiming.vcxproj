@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations"><ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration></ItemGroup>
+  <PropertyGroup Label="Globals"><ProjectGuid>{B53E4812-5298-4ED0-B16A-D16CD0290DBA}</ProjectGuid><RootNamespace>MekBeamTiming</RootNamespace><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration"><ConfigurationType>DynamicLibrary</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v145</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup><SdkHost Condition="'$(SdkHost)'==''">D:\Programs\ASA-CustomRecipeStack-ServerPlugin</SdkHost><OutDir>$(MSBuildProjectDirectory)\dist\MekBeamTiming\</OutDir><IntDir>$(MSBuildProjectDirectory)\build\obj\</IntDir><TargetName>MekBeamTiming</TargetName><VcpkgEnabled>false</VcpkgEnabled></PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile><WarningLevel>Level4</WarningLevel><LanguageStandard>stdcpp20</LanguageStandard><RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><Optimization>MaxSpeed</Optimization><ExceptionHandling>Sync</ExceptionHandling><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><PreprocessorDefinitions>PROJECT_NAME="MekBeamTiming";NDEBUG;_WINDOWS;_USRDLL;_SILENCE_ALL_CXX20_DEPRECATION_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions><AdditionalIncludeDirectories>$(SdkHost)\extern\AsaApi\AsaApi\Core\Public;$(SdkHost)\extern\AsaApi\AsaApi\Core\Public\API\UE;$(SdkHost)\extern\dependencies\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
+    <Link><SubSystem>Windows</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation><AdditionalDependencies>$(SdkHost)\extern\lib\AsaApi.lib;$(SdkHost)\extern\dependencies\lib\fmt.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="src\Main.cpp" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="PackagePlugin" AfterTargets="Build"><Copy SourceFiles="$(MSBuildProjectDirectory)\PluginInfo.json;$(MSBuildProjectDirectory)\config.json" DestinationFolder="$(OutDir)" /></Target>
+</Project>

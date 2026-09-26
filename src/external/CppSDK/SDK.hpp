@@ -7,7 +7,8 @@
 */
 
 // ShooterGame
-// 5.5.4-828350+++ARK1+Rel-1.93
+// Compatible target: 5.5.4-830859+++ARK1+Rel-1.93
+// Generated SDK base: 5.5.4-829680+++ARK1+Rel-1.93; core layouts revalidated at runtime.
 
 // Includes the entire SDK. Include files directly for faster compilation!
 
@@ -81,6 +82,7 @@
 #include "SDK/OnlineSubsystem_structs.hpp"
 #include "SDK/OnlineSubsystemUtils_structs.hpp"
 #include "SDK/OnlineSubsystemUtils_classes.hpp"
+#include "SDK/RedpointEOSUtils_classes.hpp"
 #include "SDK/ShooterGame_classes.hpp"
 #include "SDK/PrimalItem_Base_classes.hpp"
 #include "SDK/PrimalItemArmorGeneric_classes.hpp"

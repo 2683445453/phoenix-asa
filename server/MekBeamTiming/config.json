@@ -1,0 +1,6 @@
+{
+  "enabled": false,
+  "attack_interval_seconds": 0.5,
+  "heat_reduction_cooldown_seconds": 4.0,
+  "beam_hit_reset_interval_seconds": 0.05
+}

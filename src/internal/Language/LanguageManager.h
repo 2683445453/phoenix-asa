@@ -40,6 +40,12 @@ public:
 
     bool CreateLanguage(const std::string& name);
     bool LoadLanguage(const std::string& filename);
+    // Translate source text in the new interface. Translate() is render-thread
+    // only; game-thread status producers use the owning TranslateCopy() result.
+    const char* Translate(const char* source) const;
+    std::string TranslateCopy(const std::string& source) const;
+    static std::string TextKey(const char* source);
+    bool IsEnglish() const { return m_english.load(); }
 
     std::vector<LanguageFile>& GetLanguages() { return m_languages; }
     const std::string& GetLanguageDir() const { return m_languageDir; }
@@ -127,13 +133,20 @@ public:
         static const char* Suicide;
         static const char* Unload;
         static const char* DumpServerInfo;
-        static const char* UnlockExplorerNotes;
+        static const char* UnlockNoteXPBuff;
         static const char* AutoFeed;
         static const char* AutoFeedRange;
         static const char* AutoFeedInterval;
         static const char* AutoFeedFilter;
         static const char* AutoFeedFilterHint;
         static const char* AutoFeedStatus;
+        static const char* AutoPickupDroppedItems;
+        static const char* AutoPickupRange;
+        static const char* AutoPickupInterval;
+        static const char* AutoPickupMaxWeight;
+        static const char* AutoPickupUseDroppedFilter;
+        static const char* AutoPickupHint;
+        static const char* AutoPickupStatus;
         static const char* EnableNearbyDaeodonHealing;
         static const char* DaeodonHealingHint;
         static const char* DaeodonHealingStatus;
@@ -157,6 +170,12 @@ public:
         static const char* AutoRecoverFishingBait;
         static const char* FishingRodMaintenanceStatus;
 		static const char* PumpShotgunNoReload;
+        static const char* AutoRepairItems;
+        static const char* AutoRepairThreshold;
+        static const char* AutoRepairInterval;
+        static const char* AutoRepairIncludeBackpack;
+        static const char* AutoRepairHint;
+        static const char* AutoRepairStatus;
         static const char* AutoCraft;
         static const char* AutoCraftRange;
         static const char* AutoCraftInterval;
@@ -167,22 +186,12 @@ public:
         static const char* AutoCraftNoStation;
         static const char* AutoCraftNoRecipe;
         static const char* AutoCraftStatus;
-        static const char* AutoImprint;
-        static const char* AutoImprintRange;
-        static const char* AutoImprintStatus;
-		static const char* AutoGrindHelicoprion;
-		static const char* AutoGrindHelicoprionStatus;
-		static const char* ExpandPlayerInventory;
-		static const char* PlayerInventorySlotLimit;
-		static const char* ShowLostColonyCooldowns;
-		static const char* LostColonyCooldownHeader;
-		static const char* LostColonyCooldownEmpty;
         static const char* SuperFlyer;
         static const char* ForceTurn;
         static const char* LogDamage;
         static const char* ArmorRange;
         static const char* AutomaticChecked;
-        static const char* OutBodyChecked;
+        static const char* FreeCameraEnabled;
         static const char* FastReconnected;
         static const char* FastRespawned;
         static const char* PotatoGraphics;
@@ -333,6 +342,7 @@ public:
     };
 
 private:
+    std::atomic<bool> m_english{false};
     LanguageManager() = default;
     ~LanguageManager() { Shutdown(); }
 
@@ -344,6 +354,8 @@ private:
 
     std::unordered_map<std::string, std::string> m_data;
     std::unordered_map<std::string, std::string> m_storage;
+    mutable std::mutex m_textMutex;
+    std::unordered_map<std::string, std::string> m_text;
 
     void RegisterDefaults(std::unordered_map<std::string, std::string>& defaults) const;
     void ApplyToStaticMembers();

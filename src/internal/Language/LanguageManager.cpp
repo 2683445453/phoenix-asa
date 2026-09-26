@@ -10,6 +10,8 @@
 #include <shellapi.h>
 #include <thread>
 #include <chrono>
+#include <cstdio>
+#include <cstdint>
 
 // =============================================================================
 // 静态成员默认值定义（GBK 源文件 + U8 宏 = 运行时 UTF-8 指针）
@@ -86,18 +88,25 @@ const char* LanguageManager::Misc_Menu::SectionMisc = U8("其他功能");
 const char* LanguageManager::Misc_Menu::Suicide = U8("自杀");
 const char* LanguageManager::Misc_Menu::Unload = U8("卸载");
 const char* LanguageManager::Misc_Menu::DumpServerInfo = U8("获取服务器信息");
-const char* LanguageManager::Misc_Menu::UnlockExplorerNotes = U8("一键满级");
+const char* LanguageManager::Misc_Menu::UnlockNoteXPBuff = U8("解锁笔记经验 Buff");
 const char* LanguageManager::Misc_Menu::AutoFeed = U8("范围自动喂肉");
 const char* LanguageManager::Misc_Menu::AutoFeedRange = U8("恐龙喂食范围");
 const char* LanguageManager::Misc_Menu::AutoFeedInterval = U8("每只恐龙喂食间隔");
 const char* LanguageManager::Misc_Menu::AutoFeedFilter = U8("恐龙筛选");
 const char* LanguageManager::Misc_Menu::AutoFeedFilterHint = U8("输入恐龙名称，多个用逗号分隔（留空=全部）");
 const char* LanguageManager::Misc_Menu::AutoFeedStatus = U8("自动喂食状态");
+const char* LanguageManager::Misc_Menu::AutoPickupDroppedItems = U8("自动拾取附近掉落物");
+const char* LanguageManager::Misc_Menu::AutoPickupRange = U8("自动拾取范围");
+const char* LanguageManager::Misc_Menu::AutoPickupInterval = U8("拾取请求间隔");
+const char* LanguageManager::Misc_Menu::AutoPickupMaxWeight = U8("停止拾取负重");
+const char* LanguageManager::Misc_Menu::AutoPickupUseDroppedFilter = U8("应用掉落物分类筛选（普通装备默认允许）");
+const char* LanguageManager::Misc_Menu::AutoPickupHint = U8("仅步行且游戏在前台时工作；使用普通拾取交互，服务器仍会校验距离和权限");
+const char* LanguageManager::Misc_Menu::AutoPickupStatus = U8("自动拾取状态");
 const char* LanguageManager::Misc_Menu::EnableNearbyDaeodonHealing = U8("批量开启附近凶齿豨被动治疗");
 const char* LanguageManager::Misc_Menu::DaeodonHealingHint = U8("只开启，不会关闭；专服仅对正常交互距离内的凶齿豨生效");
 const char* LanguageManager::Misc_Menu::DaeodonHealingStatus = U8("凶齿豨治疗状态");
 const char* LanguageManager::Misc_Menu::AutoOpenGachaCrystals = U8("自动打开嘎查水晶");
-const char* LanguageManager::Misc_Menu::AutoOpenGachaInterval = U8("嘎查水晶开启间隔");
+const char* LanguageManager::Misc_Menu::AutoOpenGachaInterval = U8("嘎查水晶批次间隔");
 const char* LanguageManager::Misc_Menu::AutoPullGachaCrystals = U8("自动从附近保险箱取嘎查水晶");
 const char* LanguageManager::Misc_Menu::AutoPullGachaRange = U8("保险箱搜索范围");
 const char* LanguageManager::Misc_Menu::AutoPullGachaStatus = U8("保险箱取水晶状态");
@@ -116,6 +125,12 @@ const char* LanguageManager::Misc_Menu::AutoSwitchFishingRod = U8("鱼竿损坏�
 const char* LanguageManager::Misc_Menu::AutoRecoverFishingBait = U8("鱼饵异常自动重拿鱼竿");
 const char* LanguageManager::Misc_Menu::FishingRodMaintenanceStatus = U8("鱼竿维护状态");
 const char* LanguageManager::Misc_Menu::PumpShotgunNoReload = U8("泵动式霰弹枪免换弹（服务器自动换弹）");
+const char* LanguageManager::Misc_Menu::AutoRepairItems = U8("智能自动修理");
+const char* LanguageManager::Misc_Menu::AutoRepairThreshold = U8("修理触发耐久");
+const char* LanguageManager::Misc_Menu::AutoRepairInterval = U8("修理请求间隔");
+const char* LanguageManager::Misc_Menu::AutoRepairIncludeBackpack = U8("同时修理背包内工具和装备");
+const char* LanguageManager::Misc_Menu::AutoRepairHint = U8("每次只请求修理一件；材料、工作台与权限由服务器正常校验");
+const char* LanguageManager::Misc_Menu::AutoRepairStatus = U8("自动修理状态");
 const char* LanguageManager::Misc_Menu::AutoCraft = U8("自动制作");
 const char* LanguageManager::Misc_Menu::AutoCraftRange = U8("工作台搜索范围");
 const char* LanguageManager::Misc_Menu::AutoCraftInterval = U8("制作请求间隔");
@@ -126,22 +141,12 @@ const char* LanguageManager::Misc_Menu::AutoCraftRecipe = U8("选择印痕/图�
 const char* LanguageManager::Misc_Menu::AutoCraftNoStation = U8("附近没有可制作的工作台");
 const char* LanguageManager::Misc_Menu::AutoCraftNoRecipe = U8("该工作台没有可用印痕或图纸");
 const char* LanguageManager::Misc_Menu::AutoCraftStatus = U8("自动制作状态");
-const char* LanguageManager::Misc_Menu::AutoImprint = U8("自动留痕（正常服务器交互）");
-const char* LanguageManager::Misc_Menu::AutoImprintRange = U8("幼龙搜索范围");
-const char* LanguageManager::Misc_Menu::AutoImprintStatus = U8("自动留痕状态");
-const char* LanguageManager::Misc_Menu::AutoGrindHelicoprion = U8("自动逐件研磨旋齿鲨背包（打开一次锁定）");
-const char* LanguageManager::Misc_Menu::AutoGrindHelicoprionStatus = U8("旋齿鲨自动研磨状态");
-const char* LanguageManager::Misc_Menu::ExpandPlayerInventory = U8("扩展人物背包格子");
-const char* LanguageManager::Misc_Menu::PlayerInventorySlotLimit = U8("人物背包格子上限");
-const char* LanguageManager::Misc_Menu::ShowLostColonyCooldowns = U8("查看失落之地技能冷却");
-const char* LanguageManager::Misc_Menu::LostColonyCooldownHeader = U8("人物当前技能冷却（失落之地候选）");
-const char* LanguageManager::Misc_Menu::LostColonyCooldownEmpty = U8("当前没有正在冷却的技能");
 const char* LanguageManager::Misc_Menu::SuperFlyer = U8("飞行龙加强（仅飞行生物）");
 const char* LanguageManager::Misc_Menu::ForceTurn = U8("秒转头");
 const char* LanguageManager::Misc_Menu::LogDamage = U8("伤害日志");
 const char* LanguageManager::Misc_Menu::ArmorRange = U8("换甲阈值");
 const char* LanguageManager::Misc_Menu::AutomaticChecked = U8("自动换甲");
-const char* LanguageManager::Misc_Menu::OutBodyChecked = U8("灵魂出窍");
+const char* LanguageManager::Misc_Menu::FreeCameraEnabled = U8("灵魂出窍（本地飞行，默认 Z）");
 const char* LanguageManager::Misc_Menu::FastReconnected = U8("跳过进服动画");
 const char* LanguageManager::Misc_Menu::FastRespawned = U8("跳过重生动画");
 const char* LanguageManager::Misc_Menu::PotatoGraphics = U8("战斗画质");
@@ -163,7 +168,7 @@ const char* LanguageManager::Visuals_Menu::SectionWorld = U8("世界信息");
 const char* LanguageManager::Visuals_Menu::SectionTeam = U8("队友设置");
 const char* LanguageManager::Visuals_Menu::SectionTeamExtra = U8("额外信息");
 
-const char* LanguageManager::Visuals_Menu::ESPEnabled = U8("启用透视");
+const char* LanguageManager::Visuals_Menu::ESPEnabled = U8("显示原生模型");
 
 const char* LanguageManager::Visuals_Menu::Box = U8("方框");
 const char* LanguageManager::Visuals_Menu::Name = U8("名称");
@@ -251,6 +256,9 @@ const char* LanguageManager::ConfigImGui_Menu::Paste = U8("粘贴");
 // RegisterDefaults —— 生成模板 ini 使用，值为 UTF-8 字符串
 // =============================================================================
 void LanguageManager::RegisterDefaults(std::unordered_map<std::string, std::string>& d) const {
+#define PHOENIX_TEXT(Source) d[TextKey(Source)] = Source;
+#include "InterfaceText.inc"
+#undef PHOENIX_TEXT
     // Configs_Menu
     d["Configs_Menu.TabLabel"] = U8("配置");
     d["Configs_Menu.SectionTitle"] = U8("配置管理系统");
@@ -322,18 +330,25 @@ void LanguageManager::RegisterDefaults(std::unordered_map<std::string, std::stri
     d["Misc_Menu.Suicide"] = U8("自杀");
     d["Misc_Menu.Unload"] = U8("卸载");
     d["Misc_Menu.DumpServerInfo"] = U8("获取服务器信息");
-    d["Misc_Menu.UnlockExplorerNotes"] = U8("一键满级");
+    d["Misc_Menu.UnlockNoteXPBuff"] = U8("解锁笔记经验 Buff");
     d["Misc_Menu.AutoFeed"] = U8("范围自动喂肉");
     d["Misc_Menu.AutoFeedRange"] = U8("恐龙喂食范围");
     d["Misc_Menu.AutoFeedInterval"] = U8("每只恐龙喂食间隔");
     d["Misc_Menu.AutoFeedFilter"] = U8("恐龙筛选");
     d["Misc_Menu.AutoFeedFilterHint"] = U8("输入恐龙名称，多个用逗号分隔（留空=全部）");
     d["Misc_Menu.AutoFeedStatus"] = U8("自动喂食状态");
+    d["Misc_Menu.AutoPickupDroppedItems"] = U8("自动拾取附近掉落物");
+    d["Misc_Menu.AutoPickupRange"] = U8("自动拾取范围");
+    d["Misc_Menu.AutoPickupInterval"] = U8("拾取请求间隔");
+    d["Misc_Menu.AutoPickupMaxWeight"] = U8("停止拾取负重");
+    d["Misc_Menu.AutoPickupUseDroppedFilter"] = U8("应用掉落物分类筛选（普通装备默认允许）");
+    d["Misc_Menu.AutoPickupHint"] = U8("仅步行且游戏在前台时工作；使用普通拾取交互，服务器仍会校验距离和权限");
+    d["Misc_Menu.AutoPickupStatus"] = U8("自动拾取状态");
     d["Misc_Menu.EnableNearbyDaeodonHealing"] = U8("批量开启附近凶齿豨被动治疗");
     d["Misc_Menu.DaeodonHealingHint"] = U8("只开启，不会关闭；专服仅对正常交互距离内的凶齿豨生效");
     d["Misc_Menu.DaeodonHealingStatus"] = U8("凶齿豨治疗状态");
     d["Misc_Menu.AutoOpenGachaCrystals"] = U8("自动打开嘎查水晶");
-    d["Misc_Menu.AutoOpenGachaInterval"] = U8("嘎查水晶开启间隔");
+    d["Misc_Menu.AutoOpenGachaInterval"] = U8("嘎查水晶批次间隔");
     d["Misc_Menu.AutoPullGachaCrystals"] = U8("自动从附近保险箱取嘎查水晶");
     d["Misc_Menu.AutoPullGachaRange"] = U8("保险箱搜索范围");
     d["Misc_Menu.AutoPullGachaStatus"] = U8("保险箱取水晶状态");
@@ -352,6 +367,12 @@ void LanguageManager::RegisterDefaults(std::unordered_map<std::string, std::stri
     d["Misc_Menu.AutoRecoverFishingBait"] = U8("鱼饵异常自动重拿鱼竿");
     d["Misc_Menu.FishingRodMaintenanceStatus"] = U8("鱼竿维护状态");
     d["Misc_Menu.PumpShotgunNoReload"] = U8("泵动式霰弹枪免换弹（服务器自动换弹）");
+    d["Misc_Menu.AutoRepairItems"] = U8("智能自动修理");
+    d["Misc_Menu.AutoRepairThreshold"] = U8("修理触发耐久");
+    d["Misc_Menu.AutoRepairInterval"] = U8("修理请求间隔");
+    d["Misc_Menu.AutoRepairIncludeBackpack"] = U8("同时修理背包内工具和装备");
+    d["Misc_Menu.AutoRepairHint"] = U8("每次只请求修理一件；材料、工作台与权限由服务器正常校验");
+    d["Misc_Menu.AutoRepairStatus"] = U8("自动修理状态");
     d["Misc_Menu.AutoCraft"] = U8("自动制作");
     d["Misc_Menu.AutoCraftRange"] = U8("工作台搜索范围");
     d["Misc_Menu.AutoCraftInterval"] = U8("制作请求间隔");
@@ -362,22 +383,12 @@ void LanguageManager::RegisterDefaults(std::unordered_map<std::string, std::stri
     d["Misc_Menu.AutoCraftNoStation"] = U8("附近没有可制作的工作台");
     d["Misc_Menu.AutoCraftNoRecipe"] = U8("该工作台没有可用印痕或图纸");
     d["Misc_Menu.AutoCraftStatus"] = U8("自动制作状态");
-    d["Misc_Menu.AutoImprint"] = U8("自动留痕（正常服务器交互）");
-    d["Misc_Menu.AutoImprintRange"] = U8("幼龙搜索范围");
-    d["Misc_Menu.AutoImprintStatus"] = U8("自动留痕状态");
-    d["Misc_Menu.AutoGrindHelicoprion"] = U8("自动逐件研磨旋齿鲨背包（打开一次锁定）");
-    d["Misc_Menu.AutoGrindHelicoprionStatus"] = U8("旋齿鲨自动研磨状态");
-    d["Misc_Menu.ExpandPlayerInventory"] = U8("扩展人物背包格子");
-    d["Misc_Menu.PlayerInventorySlotLimit"] = U8("人物背包格子上限");
-    d["Misc_Menu.ShowLostColonyCooldowns"] = U8("查看失落之地技能冷却");
-    d["Misc_Menu.LostColonyCooldownHeader"] = U8("人物当前技能冷却（失落之地候选）");
-    d["Misc_Menu.LostColonyCooldownEmpty"] = U8("当前没有正在冷却的技能");
     d["Misc_Menu.SuperFlyer"] = U8("飞行龙加强（仅飞行生物）");
     d["Misc_Menu.ForceTurn"] = U8("秒转头");
     d["Misc_Menu.LogDamage"] = U8("伤害日志");
     d["Misc_Menu.ArmorRange"] = U8("换甲阈值");
     d["Misc_Menu.AutomaticChecked"] = U8("自动换甲");
-    d["Misc_Menu.OutBodyChecked"] = U8("灵魂出窍");
+    d["Misc_Menu.FreeCameraEnabled"] = U8("灵魂出窍（本地飞行，默认 Z）");
     d["Misc_Menu.FastReconnected"] = U8("跳过进服动画");
     d["Misc_Menu.FastRespawned"] = U8("跳过重生动画");
     d["Misc_Menu.PotatoGraphics"] = U8("战斗画质");
@@ -398,7 +409,7 @@ void LanguageManager::RegisterDefaults(std::unordered_map<std::string, std::stri
     d["Visuals_Menu.SectionWorld"] = U8("世界信息");
     d["Visuals_Menu.SectionTeam"] = U8("队友设置");
     d["Visuals_Menu.SectionTeamExtra"] = U8("额外信息");
-    d["Visuals_Menu.ESPEnabled"] = U8("启用透视");
+    d["Visuals_Menu.ESPEnabled"] = U8("显示原生模型");
     d["Visuals_Menu.Box"] = U8("方框");
     d["Visuals_Menu.Name"] = U8("名称");
     d["Visuals_Menu.HealthBar"] = U8("血量");
@@ -561,13 +572,20 @@ void LanguageManager::ApplyToStaticMembers() {
     apply("Misc_Menu.Suicide", Misc_Menu::Suicide);
     apply("Misc_Menu.Unload", Misc_Menu::Unload);
     apply("Misc_Menu.DumpServerInfo", Misc_Menu::DumpServerInfo);
-    apply("Misc_Menu.UnlockExplorerNotes", Misc_Menu::UnlockExplorerNotes);
+    apply("Misc_Menu.UnlockNoteXPBuff", Misc_Menu::UnlockNoteXPBuff);
     apply("Misc_Menu.AutoFeed", Misc_Menu::AutoFeed);
     apply("Misc_Menu.AutoFeedRange", Misc_Menu::AutoFeedRange);
     apply("Misc_Menu.AutoFeedInterval", Misc_Menu::AutoFeedInterval);
     apply("Misc_Menu.AutoFeedFilter", Misc_Menu::AutoFeedFilter);
     apply("Misc_Menu.AutoFeedFilterHint", Misc_Menu::AutoFeedFilterHint);
     apply("Misc_Menu.AutoFeedStatus", Misc_Menu::AutoFeedStatus);
+    apply("Misc_Menu.AutoPickupDroppedItems", Misc_Menu::AutoPickupDroppedItems);
+    apply("Misc_Menu.AutoPickupRange", Misc_Menu::AutoPickupRange);
+    apply("Misc_Menu.AutoPickupInterval", Misc_Menu::AutoPickupInterval);
+    apply("Misc_Menu.AutoPickupMaxWeight", Misc_Menu::AutoPickupMaxWeight);
+    apply("Misc_Menu.AutoPickupUseDroppedFilter", Misc_Menu::AutoPickupUseDroppedFilter);
+    apply("Misc_Menu.AutoPickupHint", Misc_Menu::AutoPickupHint);
+    apply("Misc_Menu.AutoPickupStatus", Misc_Menu::AutoPickupStatus);
     apply("Misc_Menu.EnableNearbyDaeodonHealing", Misc_Menu::EnableNearbyDaeodonHealing);
     apply("Misc_Menu.DaeodonHealingHint", Misc_Menu::DaeodonHealingHint);
     apply("Misc_Menu.DaeodonHealingStatus", Misc_Menu::DaeodonHealingStatus);
@@ -591,6 +609,12 @@ void LanguageManager::ApplyToStaticMembers() {
     apply("Misc_Menu.AutoRecoverFishingBait", Misc_Menu::AutoRecoverFishingBait);
     apply("Misc_Menu.FishingRodMaintenanceStatus", Misc_Menu::FishingRodMaintenanceStatus);
     apply("Misc_Menu.PumpShotgunNoReload", Misc_Menu::PumpShotgunNoReload);
+    apply("Misc_Menu.AutoRepairItems", Misc_Menu::AutoRepairItems);
+    apply("Misc_Menu.AutoRepairThreshold", Misc_Menu::AutoRepairThreshold);
+    apply("Misc_Menu.AutoRepairInterval", Misc_Menu::AutoRepairInterval);
+    apply("Misc_Menu.AutoRepairIncludeBackpack", Misc_Menu::AutoRepairIncludeBackpack);
+    apply("Misc_Menu.AutoRepairHint", Misc_Menu::AutoRepairHint);
+    apply("Misc_Menu.AutoRepairStatus", Misc_Menu::AutoRepairStatus);
     apply("Misc_Menu.AutoCraft", Misc_Menu::AutoCraft);
     apply("Misc_Menu.AutoCraftRange", Misc_Menu::AutoCraftRange);
     apply("Misc_Menu.AutoCraftInterval", Misc_Menu::AutoCraftInterval);
@@ -601,22 +625,12 @@ void LanguageManager::ApplyToStaticMembers() {
     apply("Misc_Menu.AutoCraftNoStation", Misc_Menu::AutoCraftNoStation);
     apply("Misc_Menu.AutoCraftNoRecipe", Misc_Menu::AutoCraftNoRecipe);
     apply("Misc_Menu.AutoCraftStatus", Misc_Menu::AutoCraftStatus);
-    apply("Misc_Menu.AutoImprint", Misc_Menu::AutoImprint);
-    apply("Misc_Menu.AutoImprintRange", Misc_Menu::AutoImprintRange);
-    apply("Misc_Menu.AutoImprintStatus", Misc_Menu::AutoImprintStatus);
-    apply("Misc_Menu.AutoGrindHelicoprion", Misc_Menu::AutoGrindHelicoprion);
-    apply("Misc_Menu.AutoGrindHelicoprionStatus", Misc_Menu::AutoGrindHelicoprionStatus);
-    apply("Misc_Menu.ExpandPlayerInventory", Misc_Menu::ExpandPlayerInventory);
-    apply("Misc_Menu.PlayerInventorySlotLimit", Misc_Menu::PlayerInventorySlotLimit);
-    apply("Misc_Menu.ShowLostColonyCooldowns", Misc_Menu::ShowLostColonyCooldowns);
-    apply("Misc_Menu.LostColonyCooldownHeader", Misc_Menu::LostColonyCooldownHeader);
-    apply("Misc_Menu.LostColonyCooldownEmpty", Misc_Menu::LostColonyCooldownEmpty);
     apply("Misc_Menu.SuperFlyer", Misc_Menu::SuperFlyer);
     apply("Misc_Menu.ForceTurn", Misc_Menu::ForceTurn);
     apply("Misc_Menu.LogDamage", Misc_Menu::LogDamage);
     apply("Misc_Menu.ArmorRange", Misc_Menu::ArmorRange);
     apply("Misc_Menu.AutomaticChecked", Misc_Menu::AutomaticChecked);
-    apply("Misc_Menu.OutBodyChecked", Misc_Menu::OutBodyChecked);
+    apply("Misc_Menu.FreeCameraEnabled", Misc_Menu::FreeCameraEnabled);
     apply("Misc_Menu.FastReconnected", Misc_Menu::FastReconnected);
     apply("Misc_Menu.FastRespawned", Misc_Menu::FastRespawned);
     apply("Misc_Menu.PotatoGraphics", Misc_Menu::PotatoGraphics);
@@ -857,6 +871,7 @@ bool LanguageManager::LoadLanguage(const std::string& filename) {
 
     // --- 关键修复：清理旧数据 ---
     m_data.clear();
+    RegisterDefaults(m_data); // Missing fields consistently fall back to Chinese.
 
     std::stringstream ss(rawData);
     std::string line, currentSection;
@@ -877,7 +892,47 @@ bool LanguageManager::LoadLanguage(const std::string& filename) {
     }
 
     ApplyToStaticMembers();
+    m_english.store(m_data["Language.Locale"] == "en" || filename == "EN.ini");
+    {
+        std::lock_guard<std::mutex> lock(m_textMutex);
+        m_text.clear();
+        for (const auto& [Key, Value] : m_data) if (Key.starts_with("Text.")) {
+            std::string Decoded;
+            if (Value.size() >= 2 && Value.front() == '"' && Value.back() == '"') {
+                for (size_t I = 1; I + 1 < Value.size(); ++I) {
+                    char C = Value[I];
+                    if (C == '\\' && I + 2 < Value.size()) {
+                        C = Value[++I];
+                        if (C == 'n') C = '\n'; else if (C == 'r') C = '\r'; else if (C == 't') C = '\t';
+                    }
+                    Decoded += C;
+                }
+            } else Decoded = Value;
+            m_text[Key] = std::move(Decoded);
+        }
+    }
     return true;
+}
+
+std::string LanguageManager::TextKey(const char* Source) {
+    uint64_t Hash = 14695981039346656037ull;
+    for (const unsigned char* C = reinterpret_cast<const unsigned char*>(Source); *C; ++C) {
+        Hash ^= *C; Hash *= 1099511628211ull;
+    }
+    char Key[22]{};
+    std::snprintf(Key, sizeof(Key), "Text.%016llx", static_cast<unsigned long long>(Hash));
+    return Key;
+}
+const char* LanguageManager::Translate(const char* Source) const {
+    if (!Source) return "";
+    std::lock_guard<std::mutex> Lock(m_textMutex);
+    const auto It = m_text.find(TextKey(Source));
+    return It == m_text.end() ? Source : It->second.c_str();
+}
+std::string LanguageManager::TranslateCopy(const std::string& Source) const {
+    std::lock_guard<std::mutex> Lock(m_textMutex);
+    const auto It = m_text.find(TextKey(Source.c_str()));
+    return It == m_text.end() ? Source : It->second;
 }
 
 // =============================================================================

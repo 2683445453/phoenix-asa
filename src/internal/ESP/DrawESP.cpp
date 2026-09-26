@@ -1,9 +1,16 @@
 // DrawESP.cpp
 #include "../../external/CppSDK/SDK.hpp"
+#include "../../external/Minimal-D3D12-Hook-ImGui/Main/hooks.h"
+#include "../../external/Minimal-D3D12-Hook-ImGui/MinHook/include/MinHook.h"
+#include "../../external/AOBScan/AOBScan.hpp"
 #include "../../external/Shadow-Gui/include/Shadow.h"
 #include "../CheatData/DynamicData.hpp"
 #include "ESP.h"
+#include "StructureESP.h"
+#include "../Legit/Aimbot/Aimbot.h"
 #include "../Config/Configs.h"
+#include "../Config/InterfaceRules.h"
+#include "../Hack/FeatureExpansionRules.h"
 #include "DrawESP.h"
 #include "../Util/Util.h"
 #include "../Language/LanguageManager.h"
@@ -13,11 +20,14 @@
 #include <unordered_set>
 #include <cmath>
 #include <memory>
+#include <mutex>
 #include <cstdio>
 #include <chrono>
 #include <cctype>
 #include <cstring>
 #include <array>
+#include <algorithm>
+#include <limits>
 
 namespace {
     // 将 g_Util 中的 ImU32 等价格式转换为 FLinearColor
@@ -161,36 +171,74 @@ namespace g_DrawESP {
         PrimalStructure,
     };
 
+	struct CachedActorType {
+		int32_t ClassObjectIndex = -1;
+		ActorType Type = ActorType::Unknown;
+	};
+
+	static std::unordered_map<SDK::UClass*, CachedActorType> s_actorTypeCache;
+
     ActorType ClassifyESPActor(SDK::AActor* Actor) {
         if (!Actor || !Actor->Class) return ActorType::Unknown;
+		SDK::UClass* ActorClass = Actor->Class;
+		const auto Cached = s_actorTypeCache.find(ActorClass);
+		if (Cached != s_actorTypeCache.end() &&
+			Cached->second.ClassObjectIndex == ActorClass->Index) {
+			return Cached->second.Type;
+		}
+
+		ActorType Result = ActorType::Unknown;
         if (Actor->IsA(SDK::AShooterCharacter::StaticClass())) {
-            return ActorType::ShooterCharacter;
+			Result = ActorType::ShooterCharacter;
         }
-        if (Actor->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
-            return ActorType::PrimalDinoCharacter;
+		else if (Actor->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
+			Result = ActorType::PrimalDinoCharacter;
         }
-        if (Actor->IsA(SDK::APrimalCharacter::StaticClass())) {
-            return ActorType::PrimalCharacter;
+		else if (Actor->IsA(SDK::APrimalCharacter::StaticClass())) {
+			Result = ActorType::PrimalCharacter;
         }
-        if (Actor->IsA(SDK::APhysicsVolume::StaticClass())) {
-            return ActorType::PhysicsVolume;
+		else if (Actor->IsA(SDK::APhysicsVolume::StaticClass())) {
+			Result = ActorType::PhysicsVolume;
         }
-        if (Actor->IsA(SDK::ADroppedItem::StaticClass())) {
-            return ActorType::DroppedItem;
+		else if (Actor->IsA(SDK::ADroppedItem::StaticClass())) {
+			Result = ActorType::DroppedItem;
         }
-        if (Actor->IsA(SDK::APrimalStructure::StaticClass())) {
-            return ActorType::PrimalStructure;
+		else if (Actor->IsA(SDK::APrimalStructure::StaticClass())) {
+			Result = ActorType::PrimalStructure;
         }
-        return ActorType::Unknown;
+
+		s_actorTypeCache[ActorClass] = { ActorClass->Index, Result };
+		return Result;
     }
+
+    struct CachedItemTexture {
+        SDK::UTexture2D* texture = nullptr;
+        int32_t index = -1;
+        int32_t serial = -1;
+    };
 
     struct ESPEntry {
         uintptr_t      actorKey = 0;
         int32_t        objectIndex = -1;
         ActorType      actorType = ActorType::Unknown;
         SDK::FVector   lastWorldLoc{};
+        SDK::FVector   indicatorWorldLoc{};
+        g_ESP::RelationType relation = g_ESP::RelationType::Enemy;
         g_ESP::BoxRect cachedRect;
         std::string    name;
+        std::string    owner;
+        std::string armor, weapon, ammo;
+        std::array<CachedItemTexture, 5> armorIcons{};
+        CachedItemTexture weaponIcon{};
+        std::array<Shadow::Color, 5> armorQualityColors{};
+        Shadow::Color weaponQualityColor{};
+        std::vector<std::string> lootContents;
+        std::chrono::steady_clock::time_point nextEquipmentRefresh{};
+        g_ESP::Structures::Type structureType = g_ESP::Structures::Type::Other;
+        bool structureTypeKnown = false;
+        uint8_t localAggro = 0; // 0: no confirmed target, 1: player, 2: mount
+        uint8_t creatureAggroStencil = 0;
+        std::chrono::steady_clock::time_point nextAggroRefresh{};
 
         std::vector<CachedFlag> flags;
         std::vector<CachedBar>  bars;
@@ -202,22 +250,247 @@ namespace g_DrawESP {
         float  targetAlpha = 0.0f;
         float  alpha = 0.0f;
         float  lastSeenTime = 0.0f;
+        float  distanceMeters = 0.0f;
+        float  labelScale = 1.0f;
         bool   aliveThisFrame = false;
         bool   isOOF = false;
+        float  oofScale = 1.0f;
         bool   isItem = false;
+        SDK::UTexture2D* itemIcon = nullptr;
+        int32_t itemIconIndex = -1;
+        int32_t itemIconSerial = -1;
+        SDK::UPrimalItem* iconSourceItem = nullptr;
+        Shadow::Color itemQualityColor{};
+        std::chrono::steady_clock::time_point nextItemIconRefresh{};
         float  cachedHP = 0.0f;
         float  cachedMaxHP = 0.0f;
         float  cachedTorpor = 0.0f;
         float  cachedMaxTorpor = 0.0f;
 
+        int infoSlot = -1;
+        bool characterAlive = false;
+        bool selectedTarget = false;
         bool shouldDrawBox = false;
         bool shouldDrawHealthBar = false;
         bool shouldDrawName = false;
         bool shouldDrawDistance = false;
         bool shouldDrawTorpor = false;
+
+        SDK::FVector visualBoundsOrigin{};
+        SDK::FVector visualBoundsExtent{};
+        SDK::FVector visualBoundsActorLocation{};
+        bool hasVisualBounds = false;
+        std::chrono::steady_clock::time_point nextVisualBoundsRefresh =
+            std::chrono::steady_clock::time_point::min();
     };
 
+    float GetDinoLabelScale(float DistanceMeters) {
+        if (!g_Config::bDinoDistanceTextScale || !std::isfinite(DistanceMeters)) {
+            return 1.0f;
+        }
+        const float MaximumDistance = std::clamp(
+            g_Config::DinoTextScaleDistance, 25.0f, 2000.0f);
+        float T = std::clamp(DistanceMeters / MaximumDistance, 0.0f, 1.0f);
+        T = T * T * (3.0f - 2.0f * T);
+        const float NearScale = std::clamp(g_Config::DinoNearTextScale, 0.75f, 2.0f);
+        const float FarScale = std::clamp(g_Config::DinoFarTextScale, 0.45f, 1.25f);
+        return NearScale + (FarScale - NearScale) * T;
+    }
+
+    bool ResolveCharacterVisualBounds(SDK::APrimalCharacter* Character,
+        ESPEntry&, const SDK::FVector&, const std::chrono::steady_clock::time_point,
+        SDK::FVector* OutOrigin, SDK::FVector* OutExtent) {
+        if (!Character || !Character->Mesh || !OutOrigin || !OutExtent) return false;
+        float Radius = 0;
+        SDK::UKismetSystemLibrary::GetComponentBounds(Character->Mesh, OutOrigin, OutExtent, &Radius);
+        // Current rendered bounds include rotation, animation and mesh offsets.
+        // Invalid streamed bounds fall back to the current capsule in GetBox.
+        return std::isfinite(OutOrigin->X) && std::isfinite(OutOrigin->Y) && std::isfinite(OutOrigin->Z) &&
+            std::isfinite(OutExtent->X) && std::isfinite(OutExtent->Y) && std::isfinite(OutExtent->Z) &&
+            std::isfinite(Radius) && Radius > 0 && OutExtent->X > 0 && OutExtent->Y > 0 && OutExtent->Z > 0 &&
+            OutExtent->X < 250000 && OutExtent->Y < 250000 && OutExtent->Z < 250000;
+    }
+
+	bool DrawOffscreenThreatIndicator(ESPEntry& Entry,
+		const SDK::FVector& CameraLocation, const SDK::FRotator& CameraRotation,
+		float ScreenWidth, float ScreenHeight, double TimeSeconds,
+		std::vector<Shadow::Vec2>& OccupiedTips) {
+		Shadow::ShadowDrawList* DrawList = Shadow::GetBackgroundDrawList();
+		if (!DrawList || ScreenWidth <= 1.0f || ScreenHeight <= 1.0f) return false;
+
+		const SDK::FVector Offset{
+			Entry.indicatorWorldLoc.X - CameraLocation.X,
+			Entry.indicatorWorldLoc.Y - CameraLocation.Y,
+			Entry.indicatorWorldLoc.Z - CameraLocation.Z
+		};
+		const double Length = std::sqrt(
+			Offset.X * Offset.X + Offset.Y * Offset.Y + Offset.Z * Offset.Z);
+		if (!std::isfinite(Length) || Length < 1.0) return false;
+
+		const SDK::FVector Forward =
+			SDK::UKismetMathLibrary::GetForwardVector(CameraRotation);
+		const SDK::FVector Right =
+			SDK::UKismetMathLibrary::GetRightVector(CameraRotation);
+		const SDK::FVector Up =
+			SDK::UKismetMathLibrary::GetUpVector(CameraRotation);
+		auto Dot = [&Offset](const SDK::FVector& Axis) {
+			return Offset.X * Axis.X + Offset.Y * Axis.Y + Offset.Z * Axis.Z;
+		};
+
+		const double LocalForward = Dot(Forward);
+		const double LocalRight = Dot(Right);
+		const double LocalUp = Dot(Up);
+		constexpr double Pi = 3.14159265358979323846;
+		double Yaw = std::atan2(LocalRight, LocalForward);
+		if (LocalForward < 0.0 && std::abs(LocalRight) < 0.001) {
+			// Preserve a deterministic side for a target exactly behind the
+			// camera; a parity choice avoids every such target piling up at right.
+			Yaw = (Entry.actorKey & 1u) != 0 ? Pi : -Pi;
+		}
+		const double Pitch = std::atan2(LocalUp,
+			std::max(0.001, std::hypot(LocalForward, LocalRight)));
+		double DirectionX = Yaw / Pi;
+		double DirectionY = -Pitch / (Pi * 0.5);
+		const double DirectionLength = std::sqrt(
+			DirectionX * DirectionX + DirectionY * DirectionY);
+		if (!std::isfinite(DirectionLength) || DirectionLength < 0.001) return false;
+		DirectionX /= DirectionLength;
+		DirectionY /= DirectionLength;
+
+		const float MaximumDistance = std::clamp(
+			g_Config::OOFMaxDistance, 25.0f, 2000.0f);
+		const float DistanceRatio = std::clamp(
+			(Entry.distanceMeters - 10.0f) / std::max(1.0f, MaximumDistance - 10.0f),
+			0.0f, 1.0f);
+		const float SmoothDistance = DistanceRatio * DistanceRatio *
+			(3.0f - 2.0f * DistanceRatio);
+		const float TargetScale = 1.42f + (0.68f - 1.42f) * SmoothDistance;
+		const float ScaleBlend = std::clamp(Shadow::GetIO().DeltaTime * 10.0f,
+			0.0f, 1.0f);
+		Entry.oofScale += (TargetScale - Entry.oofScale) * ScaleBlend;
+		const float Size = std::clamp(g_Config::OOFSize, 5.0f, 30.0f) *
+			std::clamp(Entry.oofScale, 0.65f, 1.45f);
+		const float RadiusScale = std::clamp(g_Config::OOFRadius, 0.50f, 1.0f);
+		const float RadiusX = std::max(20.0f,
+			ScreenWidth * 0.5f * RadiusScale - Size - 8.0f);
+		const float RadiusY = std::max(20.0f,
+			ScreenHeight * 0.5f * RadiusScale - Size - 8.0f);
+		const double EllipseScale = 1.0 / std::sqrt(
+			DirectionX * DirectionX / (RadiusX * RadiusX) +
+			DirectionY * DirectionY / (RadiusY * RadiusY));
+		const Shadow::Vec2 Center{ ScreenWidth * 0.5f, ScreenHeight * 0.5f };
+		const Shadow::Vec2 Tip{
+			Center.x + static_cast<float>(DirectionX * EllipseScale),
+			Center.y + static_cast<float>(DirectionY * EllipseScale)
+		};
+		const float CollisionRadius = std::max(26.0f, Size * 1.9f);
+		for (const Shadow::Vec2& Occupied : OccupiedTips) {
+			const float DeltaX = Tip.x - Occupied.x;
+			const float DeltaY = Tip.y - Occupied.y;
+			if (DeltaX * DeltaX + DeltaY * DeltaY <
+				CollisionRadius * CollisionRadius) {
+				return false;
+			}
+		}
+		OccupiedTips.push_back(Tip);
+		const Shadow::Vec2 Base{
+			Tip.x - static_cast<float>(DirectionX) * Size * 1.35f,
+			Tip.y - static_cast<float>(DirectionY) * Size * 1.35f
+		};
+		const Shadow::Vec2 Perpendicular{
+			-static_cast<float>(DirectionY), static_cast<float>(DirectionX)
+		};
+		const Shadow::Vec2 Left{
+			Base.x + Perpendicular.x * Size * 0.65f,
+			Base.y + Perpendicular.y * Size * 0.65f
+		};
+		const Shadow::Vec2 RightPoint{
+			Base.x - Perpendicular.x * Size * 0.65f,
+			Base.y - Perpendicular.y * Size * 0.65f
+		};
+
+		const float MinimumAlpha = std::clamp(g_Config::OOFMinAlpha, 0.10f, 0.90f);
+		const float MaximumAlpha = std::clamp(g_Config::OOFMaxAlpha,
+			MinimumAlpha, 1.0f);
+		const float BreathSpeed = std::clamp(g_Config::OOFBreathSpeed, 0.10f, 5.0f);
+		const double Phase = static_cast<double>(Entry.actorKey % 997u) /
+			997.0 * (Pi * 2.0);
+		const float Breath = g_Config::bStaticThreatIndicators ? 1.0f : 0.72f + 0.28f * static_cast<float>(
+			std::sin(TimeSeconds * BreathSpeed * Pi * 2.0 + Phase));
+		const float Alpha = std::clamp(
+			(MinimumAlpha + (MaximumAlpha - MinimumAlpha) * Breath) *
+			Entry.alpha * g_Config::OOFColor[3], 0.0f, 1.0f);
+		const float IndicatorVisibility = std::clamp(
+			Entry.alpha * g_Config::OOFColor[3], 0.0f, 1.0f);
+		const Shadow::Color Outline{ 0.0f, 0.0f, 0.0f,
+			std::max(0.72f * IndicatorVisibility, Alpha) };
+		const float EntryTintWeight = 0.72f;
+		const Shadow::Color Color{
+			std::clamp(Entry.boxColor.r * EntryTintWeight +
+				g_Config::OOFColor[0] * (1.0f - EntryTintWeight), 0.0f, 1.0f),
+			std::clamp(Entry.boxColor.g * EntryTintWeight +
+				g_Config::OOFColor[1] * (1.0f - EntryTintWeight), 0.0f, 1.0f),
+			std::clamp(Entry.boxColor.b * EntryTintWeight +
+				g_Config::OOFColor[2] * (1.0f - EntryTintWeight), 0.0f, 1.0f),
+			Alpha
+		};
+
+		DrawList->AddTriangle(Tip, Left, RightPoint, Outline, 4.0f);
+		DrawList->AddTriangleFilled(Tip, Left, RightPoint, Color);
+		std::string DistanceText;
+		if (Entry.distanceMeters >= 1000.0f) {
+			char Buffer[24]{};
+			std::snprintf(Buffer, sizeof(Buffer), "%.1fkm",
+				Entry.distanceMeters / 1000.0f);
+			DistanceText = Buffer;
+		}
+		else {
+			DistanceText = std::to_string(
+				static_cast<int>(std::round(Entry.distanceMeters))) + "m";
+		}
+		const float TextScale = 1.08f + (0.82f - 1.08f) * SmoothDistance;
+		Shadow::Vec2 TextSize{};
+		if (Shadow::DefaultFont) {
+			Shadow::PushFont(Shadow::DefaultFont, TextScale);
+			TextSize = Shadow::MeasureTextSize(DistanceText);
+			Shadow::PopFont();
+		}
+		const Shadow::Vec2 LabelCenter{
+			Base.x - static_cast<float>(DirectionX) * (Size + 12.0f),
+			Base.y - static_cast<float>(DirectionY) * (Size + 12.0f)
+		};
+		Shadow::Vec2 LabelPosition{
+			LabelCenter.x - TextSize.x * 0.5f,
+			LabelCenter.y - TextSize.y * 0.5f
+		};
+		LabelPosition.x = std::clamp(LabelPosition.x, 4.0f,
+			std::max(4.0f, ScreenWidth - TextSize.x - 4.0f));
+		LabelPosition.y = std::clamp(LabelPosition.y, 4.0f,
+			std::max(4.0f, ScreenHeight - TextSize.y - 4.0f));
+		const Shadow::Color LabelBackground{ 0.0f, 0.0f, 0.0f,
+			0.58f * IndicatorVisibility };
+		DrawList->AddRectFilled(
+			{ LabelPosition.x - 3.0f, LabelPosition.y - 1.0f },
+			{ TextSize.x + 6.0f, TextSize.y + 2.0f }, LabelBackground);
+		Shadow::Color TextColor = Color;
+		TextColor.a = std::max(0.82f * IndicatorVisibility, Alpha);
+		DrawList->AddText(Shadow::DefaultFont, TextScale, Outline, Outline,
+			LabelPosition, TextColor, DistanceText);
+		return true;
+	}
+
     static std::unordered_map<uintptr_t, ESPEntry> s_entries;
+
+	struct CachedESPActorRef {
+		SDK::AActor* Actor = nullptr;
+		int32_t ObjectIndex = -1;
+		ActorType Type = ActorType::Unknown;
+	};
+
+	static std::vector<CachedESPActorRef> s_cachedESPActors;
+	static SDK::UWorld* s_cachedESPWorld = nullptr;
+	static std::chrono::steady_clock::time_point s_nextESPActorRefresh =
+		std::chrono::steady_clock::time_point::min();
 
     struct WaterCandidate {
         SDK::AActor* actor;
@@ -240,51 +513,101 @@ namespace g_DrawESP {
         Count,
     };
 
+    constexpr uint8_t EncodeFullHealthStencil(SDK::EStencilAlliance Alliance) {
+        return static_cast<uint8_t>((31u << 3) |
+            (static_cast<uint8_t>(Alliance) & 0x07u));
+    }
+
+    static_assert(EncodeFullHealthStencil(SDK::EStencilAlliance::Friendly) == 0xF9);
+    static_assert(EncodeFullHealthStencil(SDK::EStencilAlliance::NPC) == 0xFA);
+    static_assert(EncodeFullHealthStencil(SDK::EStencilAlliance::NPCFleeing) == 0xFB);
+    static_assert(EncodeFullHealthStencil(SDK::EStencilAlliance::Hostile) == 0xFC);
+    static_assert(EncodeFullHealthStencil(SDK::EStencilAlliance::Element) == 0xFE);
+
+    struct HighlightObjectRef {
+        SDK::UPrimitiveComponent* Component = nullptr;
+        int32_t ObjectIndex = -1;
+        int32_t SerialNumber = -1;
+    };
+
+    struct DesiredModelHighlight {
+        int32_t ObjectIndex = -1;
+        int32_t SerialNumber = -1;
+        uint8_t StencilValue = 0;
+        bool SolidFill = false;
+    };
+
     struct ResourceMarker {
         SDK::FVector Location{};
         ResourceType Type = ResourceType::None;
         float DistanceSquared = 0.0f;
-        std::vector<SDK::UPrimitiveComponent*> HighlightComponents;
+        std::vector<HighlightObjectRef> HighlightComponents;
     };
 
-    struct ResourceHighlightState {
+    struct ModelHighlightState {
         int32_t ObjectIndex = -1;
-        bool RenderCustomDepth = false;
-        int32_t StencilValue = 0;
-        SDK::ERendererStencilMask StencilWriteMask = SDK::ERendererStencilMask::ERSM_Default;
+        int32_t SerialNumber = -1;
+        SDK::UMaterialInterface* OriginalOverlay = nullptr;
+        int32_t OriginalOverlayIndex = -1;
+        int32_t OriginalOverlaySerial = -1;
+        SDK::UMaterialInterface* AppliedOverlay = nullptr;
+        float OriginalOverlayDistance = 0.0f;
+        bool AppliedOverlayDistance = false;
+        bool OriginalRenderCustomDepth = false;
+        int32_t OriginalStencilValue = 0;
+        SDK::ERendererStencilMask OriginalStencilWriteMask =
+            SDK::ERendererStencilMask::ERSM_Default;
+        bool LastAppliedRenderCustomDepth = false;
+        int32_t LastAppliedStencilValue = 0;
+        SDK::ERendererStencilMask LastAppliedStencilWriteMask =
+            SDK::ERendererStencilMask::ERSM_Default;
+    };
+
+    struct OwnedCameraBool {
+        bool Baseline = false;
+        bool LastApplied = false;
+        bool DidWrite = false;
+    };
+
+    struct CameraEffectSlot {
+        SDK::UMaterialInterface* Material = nullptr;
+        bool Added = false;
+        float OriginalWeight = 0.0f;
+        bool HadBlendWeight = false;
+        float OriginalBlendWeight = 0.0f;
     };
 
     struct ResourceCameraHighlightState {
         SDK::AShooterPlayerCameraManager* CameraManager = nullptr;
         int32_t ObjectIndex = -1;
+        int32_t SerialNumber = -1;
         SDK::UMaterialInterface* OutlineMaterial = nullptr;
+        int32_t OutlineMaterialIndex = -1;
+        int32_t OutlineMaterialSerialNumber = -1;
         bool OutlineLoadAttempted = false;
-        bool BlendableAdded = false;
-        bool BlendableReplaced = false;
-        int ReplacedBlendableIndex = -1;
-        SDK::FWeightedBlendable ReplacedBlendable{};
-        bool ExistingWeightChanged = false;
-        int ExistingBlendableIndex = -1;
-        float ExistingBlendableWeight = 0.0f;
-    };
-
-    struct TekNightVisionState {
-        SDK::AShooterPlayerCameraManager* CameraManager = nullptr;
-        int32_t ObjectIndex = -1;
-        SDK::UMaterialInterface* Material = nullptr;
-        std::chrono::steady_clock::time_point NextLoadAttempt =
+        std::chrono::steady_clock::time_point NextMaterialSearch =
             std::chrono::steady_clock::time_point::min();
-        uint32_t LoadAttempts = 0;
         bool BlendableAdded = false;
+        int AddedBlendableIndex = -1;
         bool BlendableReplaced = false;
         int ReplacedBlendableIndex = -1;
         SDK::FWeightedBlendable ReplacedBlendable{};
         bool ExistingWeightChanged = false;
         int ExistingBlendableIndex = -1;
         float ExistingBlendableWeight = 0.0f;
+        float ExistingBlendableLastAppliedWeight = 0.0f;
+        bool BlendablePreparedForCameraUpdate = false;
+        OwnedCameraBool HasCustomDepthStencilOverride{};
+        OwnedCameraBool CompleteStencilOverride{};
+        OwnedCameraBool IgnoreHealthOverride{};
+        CameraEffectSlot FinalCameraSlot{};
+        float AppliedIntensity = -1.0f;
+        float AppliedOpacity = -1.0f;
     };
 
     struct ResourceRenderPipelineState {
+        SDK::UWorld* World = nullptr;
+        int32_t WorldObjectIndex = -1;
         SDK::UGameViewportClient* ViewportClient = nullptr;
         int32_t ViewportObjectIndex = -1;
         bool PostProcessingEnabled = false;
@@ -296,16 +619,95 @@ namespace g_DrawESP {
     };
 
     static std::vector<ResourceMarker> s_resourceMarkers;
-    static std::unordered_map<SDK::UPrimitiveComponent*, ResourceHighlightState>
-        s_resourceHighlightStates;
+    static std::unordered_map<SDK::UPrimitiveComponent*, ModelHighlightState>
+        s_modelHighlightStates;
+    static std::unordered_map<SDK::UPrimitiveComponent*, DesiredModelHighlight>
+        s_resourceDesiredHighlights;
+    static std::unordered_map<SDK::UPrimitiveComponent*, DesiredModelHighlight>
+        s_actorDesiredHighlights;
     static ResourceCameraHighlightState s_resourceCameraHighlightState{};
-    static TekNightVisionState s_tekNightVisionState{};
-    static std::string s_tekNightVisionStatus = "已关闭";
     static ResourceRenderPipelineState s_resourceRenderPipelineState{};
     static SDK::UWorld* s_resourceWorld = nullptr;
     static std::chrono::steady_clock::time_point s_nextResourceScan =
         std::chrono::steady_clock::time_point::min();
     static ResourceESPDiagnostics s_resourceDiagnostics{};
+
+    using FMemoryReallocFunction = void* (__fastcall*)(
+        void* Original, uint64_t Size, uint32_t Alignment);
+
+    enum class FMemoryReallocResolveState : uint8_t {
+        Unresolved,
+        Ready,
+        Unavailable,
+    };
+
+    static FMemoryReallocFunction s_fMemoryRealloc = nullptr;
+    static FMemoryReallocResolveState s_fMemoryReallocResolveState =
+        FMemoryReallocResolveState::Unresolved;
+
+    FMemoryReallocFunction ResolveFMemoryRealloc() {
+        if (s_fMemoryReallocResolveState == FMemoryReallocResolveState::Ready) {
+            return s_fMemoryRealloc;
+        }
+        if (s_fMemoryReallocResolveState == FMemoryReallocResolveState::Unavailable) {
+            return nullptr;
+        }
+
+        // UE's FMemory::Realloc wrapper. This signature is unique in the
+        // current ASA client and matches the local server implementation. The
+        // relative operands are intentionally wildcarded across builds.
+        constexpr const char* ReallocPattern =
+            "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 "
+            "48 8B F1 41 8B D8 48 8B 0D ? ? ? ? 48 8B FA "
+            "48 85 C9 75 0C E8 ? ? ? ? 48 8B 0D ? ? ? ? "
+            "48 8B 01 44 8B CB 4C 8B C7 48 8B D6 "
+            "48 8B 5C 24 30 48 8B 74 24 38 48 83 C4 20 5F 48 FF 60 38";
+        const AOB::Result Matches = AOB::Scan(ReallocPattern);
+        if (Matches.size() != 1) {
+            s_fMemoryReallocResolveState = FMemoryReallocResolveState::Unavailable;
+            return nullptr;
+        }
+
+        s_fMemoryRealloc = reinterpret_cast<FMemoryReallocFunction>(Matches[0]);
+        s_fMemoryReallocResolveState = FMemoryReallocResolveState::Ready;
+        return s_fMemoryRealloc;
+    }
+
+    bool GrowWeightedBlendableArray(
+        SDK::TArray<SDK::FWeightedBlendable>& Blendables) {
+        static_assert(sizeof(SDK::FWeightedBlendable) == 0x10);
+        static_assert(sizeof(SDK::TArray<SDK::FWeightedBlendable>) == 0x10);
+
+        const int32_t Count = Blendables.Num();
+        const int32_t Capacity = Blendables.Max();
+        if (Count < 0 || Count > 4096 || Capacity < Count || Capacity > 4096 ||
+            (Count > 0 && !Blendables.GetDataPtr())) {
+            return false;
+        }
+        if (Capacity > Count) return true;
+        if (Count >= 4096) return false;
+
+        FMemoryReallocFunction Realloc = ResolveFMemoryRealloc();
+        if (!Realloc) return false;
+
+        const int32_t Growth = std::max(1, Count / 2);
+        const int32_t NewCapacity = std::min(4096,
+            std::max(4, Count + Growth));
+        const uint64_t AllocationSize =
+            static_cast<uint64_t>(NewCapacity) * sizeof(SDK::FWeightedBlendable);
+        void* NewAllocation = Realloc(
+            const_cast<SDK::FWeightedBlendable*>(Blendables.GetDataPtr()),
+            AllocationSize,
+            static_cast<uint32_t>(alignof(SDK::FWeightedBlendable)));
+        if (!NewAllocation) return false;
+
+        // Rebuild only the array header. The allocation remains owned by UE,
+        // so later native growth/destruction uses the same allocator family.
+        Blendables = SDK::TArray<SDK::FWeightedBlendable>(
+            static_cast<SDK::FWeightedBlendable*>(NewAllocation),
+            Count, NewCapacity);
+        return true;
+    }
 
     bool IsResourceTypeEnabled(ResourceType Type);
 
@@ -474,9 +876,7 @@ namespace g_DrawESP {
     }
 
     bool IsResourceTypeNeeded(ResourceType Type) {
-        return IsResourceTypeEnabled(Type) ||
-            (g_Config::bAutoHarvestTekStriderElementShard &&
-                Type == ResourceType::ElementShard);
+        return IsResourceTypeEnabled(Type);
     }
 
     const char* GetResourceTypeLabel(ResourceType Type) {
@@ -554,104 +954,630 @@ namespace g_DrawESP {
         };
     }
 
-    bool IsLiveResourcePrimitive(SDK::UPrimitiveComponent* Component, int32_t ObjectIndex) {
-        if (!Component || ObjectIndex < 0 ||
-            SDK::UObject::GObjects->GetByIndex(ObjectIndex) != Component) {
+    bool TryGetLiveObjectSerial(const SDK::UObject* ExpectedObject,
+        int32_t ObjectIndex, int32_t* OutSerialNumber) {
+        if (!ExpectedObject || !OutSerialNumber) return false;
+
+        SDK::TUObjectArray* ObjectArray = SDK::UObject::GObjects.GetTypedPtr();
+        if (!ObjectArray || ObjectIndex < 0 || ObjectIndex >= ObjectArray->NumElements) {
+            return false;
+        }
+
+        const int32_t ChunkIndex = ObjectIndex / SDK::TUObjectArray::ElementsPerChunk;
+        const int32_t IndexWithinChunk = ObjectIndex % SDK::TUObjectArray::ElementsPerChunk;
+        if (ChunkIndex < 0 || ChunkIndex >= ObjectArray->NumChunks) return false;
+
+        SDK::FUObjectItem** ObjectChunks = ObjectArray->GetDecrytedObjPtr();
+        if (!ObjectChunks || !ObjectChunks[ChunkIndex]) return false;
+        const SDK::FUObjectItem* Item = &ObjectChunks[ChunkIndex][IndexWithinChunk];
+        if (Item->Object != ExpectedObject) return false;
+
+        // UE's FUObjectItem serial number occupies offset 0x10 in the verified
+        // 0x18-byte ASA object item. Keep this read local so the generated SDK
+        // layout remains untouched.
+        std::memcpy(OutSerialNumber,
+            reinterpret_cast<const uint8_t*>(Item) + 0x10,
+            sizeof(*OutSerialNumber));
+        return true;
+    }
+
+    struct SpyglassLootSnapshot {
+        int32_t ObjectIndex = -1;
+        std::chrono::steady_clock::time_point Received{};
+        std::vector<std::string> Items;
+    };
+    struct SpyglassPendingRequest {
+        SDK::UObject* Actor = nullptr;
+        int32_t ActorIndex = -1;
+        int32_t BuffIndex = -1;
+        std::chrono::steady_clock::time_point Sent{};
+    };
+    static std::unordered_map<uintptr_t, SpyglassLootSnapshot> s_spyglassLoot;
+    static std::unordered_map<uintptr_t, SpyglassPendingRequest> s_spyglassPending;
+    static std::mutex s_spyglassLootMutex;
+    using SpyglassProcessEventFn = void(__fastcall*)(SDK::UObject*, SDK::UFunction*, void*);
+    static SpyglassProcessEventFn s_spyglassProcessEvent = nullptr;
+    static SDK::UFunction* s_spyglassPushFunction = nullptr;
+    static SDK::UFunction* s_spyglassRequestFunction = nullptr;
+    static std::chrono::steady_clock::time_point s_nextSpyglassSearch{};
+
+    struct SpyglassArrayView { const uint8_t* Data; int32_t Num; int32_t Max; };
+    static_assert(sizeof(SpyglassArrayView) == 16);
+
+    void CaptureSpyglassRequest(SDK::UObject* Buff, SDK::UFunction* Function, void* Parameters) {
+        if (!g_Config::bStructureShowLootContents || !Buff || !Parameters ||
+            Function != s_spyglassRequestFunction || !Buff->Class ||
+            Buff->Class->GetName() != "AwesomeSpyGlass_Buff_C") return;
+        auto* ActorProperty = FindResourceProperty(Function, "Actor");
+        if (!ActorProperty || !ActorProperty->ClassPrivate || ActorProperty->Offset < 0 ||
+            ActorProperty->Offset + sizeof(SDK::UObject*) > static_cast<size_t>(Function->Size) ||
+            !EqualsResourceFieldName(ActorProperty->ClassPrivate->Name.ToString(), "ObjectProperty")) return;
+        SDK::UObject* Actor = nullptr;
+        std::memcpy(&Actor, static_cast<const uint8_t*>(Parameters) + ActorProperty->Offset, sizeof(Actor));
+        int32_t Serial = -1;
+        if (!Actor || !TryGetLiveObjectSerial(Actor, Actor->Index, &Serial) ||
+            !Actor->IsA(SDK::APrimalStructure::StaticClass())) return;
+        std::lock_guard<std::mutex> Guard(s_spyglassLootMutex);
+        if (s_spyglassPending.size() > 16) s_spyglassPending.clear();
+        s_spyglassPending[reinterpret_cast<uintptr_t>(Buff)] =
+            {Actor, Actor->Index, Buff->Index, std::chrono::steady_clock::now()};
+    }
+
+    void CaptureSpyglassInventory(SDK::UObject* Buff, SDK::UFunction* Function, void* Parameters) {
+        if (!g_Config::bStructureShowLootContents || !Buff || !Parameters ||
+            Function != s_spyglassPushFunction || !Buff->Class ||
+            Buff->Class->GetName() != "AwesomeSpyGlass_Buff_C") return;
+        SpyglassPendingRequest Pending{};
+        {
+            std::lock_guard<std::mutex> Guard(s_spyglassLootMutex);
+            auto Found = s_spyglassPending.find(reinterpret_cast<uintptr_t>(Buff));
+            if (Found == s_spyglassPending.end()) return;
+            Pending = Found->second;
+            s_spyglassPending.erase(Found);
+        }
+        if (Pending.BuffIndex != Buff->Index ||
+            std::chrono::steady_clock::now() - Pending.Sent > std::chrono::seconds(5)) return;
+        auto* Target = Pending.Actor;
+        int32_t Serial = -1;
+        if (!Target || !TryGetLiveObjectSerial(Target, Pending.ActorIndex, &Serial) ||
+            !Target->IsA(SDK::APrimalStructure::StaticClass())) return;
+
+        auto* ListProperty = FindResourceProperty(Function, "Item List");
+        if (!ListProperty || !ListProperty->ClassPrivate || ListProperty->Offset < 0 ||
+            ListProperty->Offset + sizeof(SpyglassArrayView) > static_cast<size_t>(Function->Size) ||
+            !EqualsResourceFieldName(ListProperty->ClassPrivate->Name.ToString(), "ArrayProperty")) return;
+        auto* ArrayProperty = static_cast<SDK::FArrayProperty*>(ListProperty);
+        auto* Inner = ArrayProperty->InnerProperty;
+        if (!Inner || !Inner->ClassPrivate ||
+            !EqualsResourceFieldName(Inner->ClassPrivate->Name.ToString(), "StructProperty")) return;
+        auto* ItemStruct = static_cast<SDK::FStructProperty*>(Inner)->Struct;
+        if (!ItemStruct || ItemStruct->Size < 24 || ItemStruct->Size > 256) return;
+        auto* NameProperty = FindResourceProperty(ItemStruct, "Name_2_B86A1342493C11DFFB207D81A00642B1");
+        auto* QuantityProperty = FindResourceProperty(ItemStruct, "Quantity_15_1DA939714CEAA099B213BD83A79F5E52");
+        if (!NameProperty || !QuantityProperty || !NameProperty->ClassPrivate ||
+            !QuantityProperty->ClassPrivate || NameProperty->Offset < 0 ||
+            QuantityProperty->Offset < 0 ||
+            NameProperty->Offset + sizeof(SDK::FString) > static_cast<size_t>(ItemStruct->Size) ||
+            QuantityProperty->Offset + sizeof(int32_t) > static_cast<size_t>(ItemStruct->Size) ||
+            !EqualsResourceFieldName(NameProperty->ClassPrivate->Name.ToString(), "StrProperty") ||
+            !EqualsResourceFieldName(QuantityProperty->ClassPrivate->Name.ToString(), "IntProperty")) return;
+
+        SpyglassArrayView Array{};
+        std::memcpy(&Array, static_cast<const uint8_t*>(Parameters) + ListProperty->Offset, sizeof(Array));
+        if (Array.Num < 0 || Array.Num > 128 || Array.Max < Array.Num ||
+            Array.Max > 10000 || (Array.Num && !Array.Data)) return;
+        SpyglassLootSnapshot Snapshot{};
+        Snapshot.ObjectIndex = Target->Index;
+        Snapshot.Received = std::chrono::steady_clock::now();
+        for (int32_t I = 0; I < Array.Num && Snapshot.Items.size() < 4; ++I) {
+            const uint8_t* Item = Array.Data + static_cast<size_t>(I) * ItemStruct->Size;
+            const auto& ItemName = *reinterpret_cast<const SDK::FString*>(Item + NameProperty->Offset);
+            int32_t Quantity = 0;
+            std::memcpy(&Quantity, Item + QuantityProperty->Offset, sizeof(Quantity));
+            if (Quantity <= 0 || Quantity > 1000000 || !ItemName.IsValid()) continue;
+            std::string Name = ItemName.ToString();
+            if (!Name.empty() && Name.size() <= 256)
+                Snapshot.Items.push_back(Name + " x" + std::to_string(Quantity));
+        }
+        if (Array.Num > static_cast<int32_t>(Snapshot.Items.size()) && !Snapshot.Items.empty())
+            Snapshot.Items.push_back(LanguageManager::Get().TranslateCopy("…更多物品"));
+        {
+            std::lock_guard<std::mutex> Guard(s_spyglassLootMutex);
+            if (s_spyglassLoot.size() > 512) s_spyglassLoot.clear();
+            s_spyglassLoot[reinterpret_cast<uintptr_t>(Target)] = std::move(Snapshot);
+        }
+    }
+
+    void __fastcall HookedSpyglassProcessEvent(SDK::UObject* Object,
+        SDK::UFunction* Function, void* Parameters) {
+        g_Hook::CallbackScope Guard;
+        if (!g_Hook::IsStopping()) {
+            if (Function == s_spyglassRequestFunction)
+                CaptureSpyglassRequest(Object, Function, Parameters);
+            else if (Function == s_spyglassPushFunction)
+                CaptureSpyglassInventory(Object, Function, Parameters);
+        }
+        s_spyglassProcessEvent(Object, Function, Parameters);
+    }
+
+    void TryAttachSpyglassInventory(SDK::APrimalCharacter* LocalChar) {
+        if (!g_Config::bStructureShowLootContents || !LocalChar || s_spyglassProcessEvent ||
+            g_Hook::IsStopping()) return;
+        const auto Now = std::chrono::steady_clock::now();
+        if (Now < s_nextSpyglassSearch) return;
+        s_nextSpyglassSearch = Now + std::chrono::seconds(3);
+        SDK::APrimalCharacter* Owners[2]{LocalChar, nullptr};
+        if (LocalChar->IsA(SDK::AShooterCharacter::StaticClass()))
+            Owners[1] = static_cast<SDK::AShooterCharacter*>(LocalChar)->MountedDino.Get();
+        for (auto* Owner : Owners) {
+          if (!Owner) continue;
+          SDK::TArray<SDK::APrimalBuff*> Buffs{};
+          Owner->GetAllBuffs(&Buffs);
+          if (Buffs.Num() < 0 || Buffs.Num() > 4096) continue;
+          for (auto* Buff : Buffs) {
+            int32_t Serial = -1;
+            if (!Buff || !TryGetLiveObjectSerial(Buff, Buff->Index, &Serial) ||
+                !Buff->Class || Buff->Class->GetName() != "AwesomeSpyGlass_Buff_C") continue;
+            auto* Function = Buff->Class->GetFunction(
+                "AwesomeSpyGlass_Buff_C", "Push Inventory Items To Client");
+            auto* Request = Buff->Class->GetFunction(
+                "AwesomeSpyGlass_Buff_C", "Get Inventory Items");
+            if (!Function || !Function->ChildProperties || !Request ||
+                !Request->ChildProperties) continue;
+            void* Target = (*reinterpret_cast<void***>(Buff))[SDK::Offsets::ProcessEventIdx];
+            if (!Target) continue;
+            SpyglassProcessEventFn Original = nullptr;
+            if (MH_CreateHook(Target, reinterpret_cast<void*>(HookedSpyglassProcessEvent),
+                reinterpret_cast<void**>(&Original)) != MH_OK) continue;
+            s_spyglassPushFunction = Function;
+            s_spyglassRequestFunction = Request;
+            s_spyglassProcessEvent = Original;
+            if (MH_EnableHook(Target) == MH_OK) return;
+            MH_RemoveHook(Target);
+            s_spyglassPushFunction = nullptr;
+            s_spyglassRequestFunction = nullptr;
+            s_spyglassProcessEvent = nullptr;
+          }
+        }
+    }
+
+    // Names below are texture objects listed in the supplied UTexture.cpp.
+    // FindObjectFast only uses assets already loaded by the game.
+    const char* ItemTextureFallback(const std::string& ClassName) {
+        std::string Name = ClassName;
+        std::transform(Name.begin(), Name.end(), Name.begin(), [](unsigned char C) { return static_cast<char>(std::tolower(C)); });
+        const auto Has = [&](const char* Part) { return Name.find(Part) != std::string::npos; };
+        if (Has("burlap") || Has("cloth")) {
+            if (Has("hat") || Has("helmet")) return "HUD_BurlapHat_Colorize_d";
+            if (Has("shirt")) return "HUD_BurlapShirt_Colorize_d";
+            if (Has("pants") || Has("legs")) return "HUD_BurlapLegs_Colorize_d";
+            if (Has("boots")) return "HUD_BurlapBoots_Colorize_d";
+            if (Has("gloves")) return "HUD_BurlapGloves_colorize_d";
+        }
+        if (Has("fabricatedcrossbow")) return "HUD_FabricatedCrossbow_Icon_D";
+        if (Has("crossbow")) return "HUD_ForgedCrossbow_Colorize_d";
+        if (Has("machinedshotgun")) return "HUD_MachinedShotgun_Colorize_d";
+        if (Has("machinedpistol")) return "HUD_MachinedPistol_Colorize_d";
+        if (Has("sniper")) return "HUD_MachinedSniper_Colorize_d";
+        if (Has("rifle")) return "HUD_Rifle_colorize_d";
+        if (Has("pistol")) return "HUD_Pistol_colorize_d";
+        if (Has("sword")) return "HUD_Sword_Colorize_d";
+        if (Has("rocketlauncher")) return "HUD_RocketLauncher_Colorize_d";
+        if (Has("bow")) return "HUD_Bow_colorize_d";
+        if (Has("primalitemresource_wood")) return "Wood_Icon";
+        if (Has("sparkpowder")) return "Sparkpowder_Icon";
+        if (Has("primalitemresource_element")) return "TEKElement_Icon";
+        if (Has("primalitemresource_gem")) return "Gem2_Icon";
+        if (Has("primalitemconsumable_egg")) return "HUD_Egg_Colorize_d";
+        return nullptr;
+    }
+
+    CachedItemTexture CaptureItemTexture(SDK::UPrimalItem* Item) {
+        CachedItemTexture Result{};
+        if (!Item) return Result;
+        SDK::UTexture2D* Icon = Item->GetItemIconJIT();
+        if (!Icon) Icon = Item->ItemIcon;
+        if (!Icon && Item->Class) {
+            if (const char* Name = ItemTextureFallback(Item->Class->GetName()))
+                Icon = SDK::UObject::FindObjectFast<SDK::UTexture2D>(Name);
+        }
+        if (!Icon) return Result;
+        const int32_t Index = Icon->Index;
+        if (TryGetLiveObjectSerial(Icon, Index, &Result.serial) &&
+            !(Icon->Flags & SDK::EObjectFlags::BeginDestroyed) &&
+            !(Icon->Flags & SDK::EObjectFlags::FinishDestroyed) &&
+            Icon->IsA(SDK::UTexture2D::StaticClass())) {
+            Result.texture = Icon;
+            Result.index = Index;
+        }
+        return Result;
+    }
+
+    SDK::UTexture2D* LiveItemTexture(const CachedItemTexture& Ref) {
+        int32_t Serial = -1;
+        return TryGetLiveObjectSerial(Ref.texture, Ref.index, &Serial) &&
+            Serial == Ref.serial &&
+            !(Ref.texture->Flags & SDK::EObjectFlags::BeginDestroyed) &&
+            !(Ref.texture->Flags & SDK::EObjectFlags::FinishDestroyed)
+            ? Ref.texture : nullptr;
+    }
+
+    struct ItemQualityVisual {
+        std::string name;
+        Shadow::Color color{};
+    };
+
+    ItemQualityVisual ResolveItemQuality(const SDK::UPrimalItem* Item, SDK::UPrimalGameData* Data) {
+        ItemQualityVisual Result{};
+        if (!Item) return Result;
+        int32_t Serial = -1;
+        if (!Data || !TryGetLiveObjectSerial(Data, Data->Index, &Serial) ||
+            (Data->Flags & SDK::EObjectFlags::BeginDestroyed) ||
+            (Data->Flags & SDK::EObjectFlags::FinishDestroyed)) return Result;
+        const auto& Definitions = Data->ItemQualityDefinitions;
+        const int Index = Item->ItemQualityIndex;
+        if (Definitions.Num() <= 0 || Definitions.Num() > 32 || !Definitions.IsValid() ||
+            Index >= Definitions.Num()) return Result;
+        const auto& Quality = Definitions[Index];
+        if (Quality.QualityName.IsValid()) Result.name = Quality.QualityName.ToString();
+        if (Index > 0 && std::isfinite(Quality.QualityColor.R) &&
+            std::isfinite(Quality.QualityColor.G) && std::isfinite(Quality.QualityColor.B)) {
+            Result.color = {
+                std::clamp(Quality.QualityColor.R, 0.0f, 1.0f),
+                std::clamp(Quality.QualityColor.G, 0.0f, 1.0f),
+                std::clamp(Quality.QualityColor.B, 0.0f, 1.0f), 1.0f};
+        }
+        return Result;
+    }
+
+    bool IsLiveResourcePrimitive(SDK::UPrimitiveComponent* Component,
+        int32_t ObjectIndex, int32_t SerialNumber = -1) {
+        int32_t LiveSerialNumber = -1;
+        if (!TryGetLiveObjectSerial(Component, ObjectIndex, &LiveSerialNumber) ||
+            (SerialNumber >= 0 && LiveSerialNumber != SerialNumber)) {
+            return false;
+        }
+        if ((Component->Flags & SDK::EObjectFlags::BeginDestroyed) ||
+            (Component->Flags & SDK::EObjectFlags::FinishDestroyed)) {
             return false;
         }
         SDK::UClass* PrimitiveClass = SDK::UPrimitiveComponent::StaticClass();
         return PrimitiveClass && Component->Class && Component->IsA(PrimitiveClass);
     }
 
-    void RestoreResourceHighlight(SDK::UPrimitiveComponent* Component,
-        const ResourceHighlightState& State) {
-        if (!IsLiveResourcePrimitive(Component, State.ObjectIndex)) return;
-        Component->SetCustomDepthStencilValue(State.StencilValue);
-        Component->SetCustomDepthStencilWriteMask(State.StencilWriteMask);
-        Component->SetRenderCustomDepth(State.RenderCustomDepth);
+    HighlightObjectRef CaptureHighlightObjectRef(SDK::UPrimitiveComponent* Component) {
+        HighlightObjectRef Result{};
+        if (!Component) return Result;
+
+        const int32_t ObjectIndex = Component->Index;
+        int32_t SerialNumber = -1;
+        if (!TryGetLiveObjectSerial(Component, ObjectIndex, &SerialNumber) ||
+            !IsLiveResourcePrimitive(Component, ObjectIndex, SerialNumber)) {
+            return Result;
+        }
+
+        Result.Component = Component;
+        Result.ObjectIndex = ObjectIndex;
+        Result.SerialNumber = SerialNumber;
+        return Result;
+    }
+
+    g_ESP::Structures::Type ClassifyStructure(SDK::APrimalStructure* Structure,
+        const std::string& DisplayName) {
+        using namespace g_ESP::Structures;
+        // Resolve the concrete blueprint before its generic SupplyCrate parent.
+        if (Structure->Class) {
+            const std::string Concrete = Structure->Class->GetName();
+            if (Concrete.find("BeaverDam") != std::string::npos ||
+                Concrete.find("DenLogs") != std::string::npos) return Type::Other;
+            if (Classify(Concrete) != Type::Other) return Classify(Concrete);
+        }
+        // Pickup item identities survive renames and game-language changes.
+        SDK::UClass* ItemClass = Structure->PickupGivesItem;
+        for (SDK::UClass* Root : {ItemClass, Structure->Class}) {
+            auto* Class = Root;
+            for (int Depth = 0; Class && Depth < 64; ++Depth, Class = static_cast<SDK::UClass*>(Class->SuperStruct)) {
+                const Type Kind = Classify(Class->GetName());
+                if (Kind != Type::Other) return Kind;
+            }
+        }
+        return Classify(DisplayName);
+    }
+
+    void CollectStructureMeshes(SDK::APrimalStructure* Structure,
+        std::vector<HighlightObjectRef>& Meshes) {
+        Meshes.clear();
+        std::vector<SDK::USceneComponent*> Pending;
+        std::unordered_set<SDK::USceneComponent*> Seen;
+        const auto Append = [&](SDK::USceneComponent* Component) {
+            if (Component && Pending.size() < 256 && Seen.insert(Component).second)
+                Pending.push_back(Component);
+        };
+        Append(Structure->RootComponent);
+        Append(Structure->MyStaticMesh);
+        Append(Structure->CosmeticVariantStaticMesh);
+        const auto AppendOwned = [&](const SDK::TArray<SDK::UActorComponent*>& Components) {
+            if (!Components.IsValid() || Components.Num() < 0 || Components.Num() > 256) return;
+            for (auto* Component : Components) {
+                if (Component && Component->Class && Component->IsA(SDK::USceneComponent::StaticClass()))
+                    Append(static_cast<SDK::USceneComponent*>(Component));
+            }
+        };
+        AppendOwned(Structure->BlueprintCreatedComponents);
+        AppendOwned(Structure->InstanceComponents);
+        for (size_t I = 0; I < Pending.size(); ++I) {
+            auto* Component = Pending[I];
+            // Snapped structures can be attached here; each owns its own filter.
+            if (!Component->Class || Component->Outer != Structure ||
+                (Component->Flags & SDK::EObjectFlags::BeginDestroyed) ||
+                (Component->Flags & SDK::EObjectFlags::FinishDestroyed)) continue;
+            if ((Component->IsA(SDK::UStaticMeshComponent::StaticClass()) ||
+                 Component->IsA(SDK::USkeletalMeshComponent::StaticClass())) &&
+                Component->bVisible && !Component->bHiddenInGame) {
+                const auto Ref = CaptureHighlightObjectRef(static_cast<SDK::UPrimitiveComponent*>(Component));
+                if (Ref.Component) Meshes.push_back(Ref);
+            }
+            const auto& Children = Component->AttachChildren;
+            if (Children.IsValid() && Children.Num() > 0 && Children.Num() <= 256)
+                for (auto* Child : Children) Append(Child);
+        }
+    }
+
+    void RestoreSolidHighlight(SDK::UPrimitiveComponent* Component,
+        const ModelHighlightState& State) {
+        if (State.AppliedOverlay && Component->IsA(SDK::UMeshComponent::StaticClass())) {
+            auto* Mesh = static_cast<SDK::UMeshComponent*>(Component);
+            if (Mesh->OverlayMaterial == State.AppliedOverlay) {
+                int32_t Serial = -1;
+                auto* Previous = TryGetLiveObjectSerial(State.OriginalOverlay, State.OriginalOverlayIndex, &Serial) &&
+                    Serial == State.OriginalOverlaySerial ? State.OriginalOverlay : nullptr;
+                Mesh->SetOverlayMaterial(Previous);
+            }
+            if (State.AppliedOverlayDistance && Mesh->OverlayMaterialMaxDrawDistance == 0.0f)
+                Mesh->SetOverlayMaterialMaxDrawDistance(State.OriginalOverlayDistance);
+        }
+    }
+
+    void RestoreModelHighlight(SDK::UPrimitiveComponent* Component,
+        const ModelHighlightState& State) {
+        if (!IsLiveResourcePrimitive(Component, State.ObjectIndex,
+            State.SerialNumber)) return;
+        RestoreSolidHighlight(Component, State);
+        if (Component->CustomDepthStencilValue == State.LastAppliedStencilValue) {
+            Component->SetCustomDepthStencilValue(State.OriginalStencilValue);
+        }
+        if (Component->CustomDepthStencilWriteMask ==
+            State.LastAppliedStencilWriteMask) {
+            Component->SetCustomDepthStencilWriteMask(
+                State.OriginalStencilWriteMask);
+        }
+        if ((Component->bRenderCustomDepth != 0) ==
+            State.LastAppliedRenderCustomDepth) {
+            Component->SetRenderCustomDepth(State.OriginalRenderCustomDepth);
+        }
+    }
+
+    bool HasActiveModelHighlights() {
+        return !s_modelHighlightStates.empty();
     }
 
     bool IsLiveResourceCamera(SDK::AShooterPlayerCameraManager* CameraManager,
-        int32_t ObjectIndex) {
-        if (!CameraManager || ObjectIndex < 0 ||
-            SDK::UObject::GObjects->GetByIndex(ObjectIndex) != CameraManager) {
+        int32_t ObjectIndex, int32_t SerialNumber = -1) {
+        int32_t LiveSerialNumber = -1;
+        if (!TryGetLiveObjectSerial(CameraManager, ObjectIndex,
+            &LiveSerialNumber) ||
+            (SerialNumber >= 0 && LiveSerialNumber != SerialNumber)) {
             return false;
         }
+        if ((CameraManager->Flags & SDK::EObjectFlags::BeginDestroyed) ||
+            (CameraManager->Flags & SDK::EObjectFlags::FinishDestroyed)) return false;
         SDK::UClass* CameraManagerClass = SDK::AShooterPlayerCameraManager::StaticClass();
         return CameraManagerClass && CameraManager->Class && CameraManager->IsA(CameraManagerClass);
     }
 
+    void RestoreFinalCameraEffect(SDK::AShooterPlayerCameraManager* Camera,
+        CameraEffectSlot& Slot) {
+        if (!Camera || !Slot.Material) { Slot = {}; return; }
+        auto& View = Camera->CameraCachePrivate.POV;
+        auto& Array = View.PostProcessSettings.WeightedBlendables.Array;
+        if (Array.Num() >= 0 && Array.Num() <= 4096 && Array.Max() >= Array.Num()) {
+            for (int Index = Array.Num() - 1; Index >= 0; --Index) {
+                if (Array[Index].Object != Slot.Material || Array[Index].Weight != 1.0f) continue;
+                if (Slot.Added) Array.Remove(Index);
+                else Array[Index].Weight = Slot.OriginalWeight;
+                break;
+            }
+        }
+        if (Slot.HadBlendWeight && View.PostProcessBlendWeight == 1.0f)
+            View.PostProcessBlendWeight = Slot.OriginalBlendWeight;
+        Slot = {};
+    }
+
+    void ApplyFinalCameraEffect(SDK::AShooterPlayerCameraManager* Camera,
+        SDK::UMaterialInterface* Material, CameraEffectSlot& Slot) {
+        if (!Camera || !Material || Slot.Material) return;
+        auto& View = Camera->CameraCachePrivate.POV;
+        auto& Array = View.PostProcessSettings.WeightedBlendables.Array;
+        if (Array.Num() < 0 || Array.Num() > 4096 || Array.Max() < Array.Num()) return;
+        for (int Index = 0; Index < Array.Num(); ++Index) {
+            if (Array[Index].Object != Material) continue;
+            Slot.Material = Material;
+            Slot.OriginalWeight = Array[Index].Weight;
+            Array[Index].Weight = 1.0f;
+            break;
+        }
+        if (!Slot.Material) {
+            SDK::FWeightedBlendable Entry{};
+            Entry.Object = Material;
+            Entry.Weight = 1.0f;
+            if (!Array.Add(Entry) && !(GrowWeightedBlendableArray(Array) && Array.Add(Entry))) return;
+            Slot.Material = Material;
+            Slot.Added = true;
+        }
+        Slot.HadBlendWeight = View.PostProcessBlendWeight != 1.0f;
+        Slot.OriginalBlendWeight = View.PostProcessBlendWeight;
+        View.PostProcessBlendWeight = 1.0f;
+    }
+
+    std::string LowerMaterialName(std::string Name) {
+        for (char& C : Name) C = static_cast<char>(std::tolower(static_cast<unsigned char>(C)));
+        return Name;
+    }
+
+    SDK::UMaterialInterface* CreateOutlineInstance(SDK::UMaterialInterface* Parent) {
+        auto* Dynamic = SDK::UKismetMaterialLibrary::CreateDynamicMaterialInstance(
+            s_resourceCameraHighlightState.CameraManager, Parent, {}, SDK::EMIDCreationFlags::None);
+        return Dynamic ? static_cast<SDK::UMaterialInterface*>(Dynamic) : Parent;
+    }
+
+    void TuneOutlineInstance(SDK::UMaterialInterface* Material) {
+        auto& State = s_resourceCameraHighlightState;
+        const float Intensity = std::clamp(g_Config::ModelHighlightIntensity, 1.0f, 8.0f);
+        const float Opacity = std::clamp(g_Config::ModelHighlightOpacity, 0.25f, 1.0f);
+        if (!Material || !Material->IsA(SDK::UMaterialInstanceDynamic::StaticClass()) ||
+            (State.AppliedIntensity == Intensity && State.AppliedOpacity == Opacity)) return;
+        auto* Dynamic = static_cast<SDK::UMaterialInstanceDynamic*>(Material);
+        std::unordered_set<std::string> SeenVectors, SeenScalars;
+        auto* Parent = Dynamic->Parent;
+        for (int Depth = 0; Parent && Depth < 16 && Parent->IsA(SDK::UMaterialInstance::StaticClass()); ++Depth) {
+            auto* Instance = static_cast<SDK::UMaterialInstance*>(Parent);
+            if (Instance->VectorParameterValues.Num() >= 0 && Instance->VectorParameterValues.Num() < 2048) {
+                for (const auto& Parameter : Instance->VectorParameterValues) {
+                    const auto Name = LowerMaterialName(Parameter.ParameterInfo.Name.ToString());
+                    if (!SeenVectors.insert(Name).second || Name.find("color") == std::string::npos) continue;
+                    auto Color = Parameter.ParameterValue;
+                    const float Peak = std::max({Color.R, Color.G, Color.B});
+                    if (!std::isfinite(Peak) || Peak <= 0.0f) continue;
+                    // Boost saturation as well as brightness to avoid pale
+                    // alliance colors. Keep each native alliance hue distinct.
+                    Color.R = std::pow(std::max(0.0f, Color.R / Peak), 1.6f) * Intensity;
+                    Color.G = std::pow(std::max(0.0f, Color.G / Peak), 1.6f) * Intensity;
+                    Color.B = std::pow(std::max(0.0f, Color.B / Peak), 1.6f) * Intensity;
+                    Color.A = Opacity;
+                    Dynamic->SetVectorParameterValueByInfo(Parameter.ParameterInfo, Color);
+                }
+            }
+            if (Instance->ScalarParameterValues.Num() >= 0 && Instance->ScalarParameterValues.Num() < 2048) {
+                for (const auto& Parameter : Instance->ScalarParameterValues) {
+                    const auto Name = LowerMaterialName(Parameter.ParameterInfo.Name.ToString());
+                    if (!SeenScalars.insert(Name).second) continue;
+                    float Value = Parameter.ParameterValue;
+                    if (Name.find("opacity") != std::string::npos || Name == "alpha") Value = Opacity;
+                    else if (Name.find("intensity") != std::string::npos || Name.find("brightness") != std::string::npos)
+                        Value = std::max(Value, 1.0f) * Intensity;
+                    else if (Name == "maxdistance" || Name == "fadedistance" || Name == "max distance") Value = 1000000.0f;
+                    else continue;
+                    Dynamic->SetScalarParameterValueByInfo(Parameter.ParameterInfo, Value);
+                }
+            }
+            Parent = Instance->Parent;
+        }
+        // These are the actual parameters on ASA's cooked ESP parent. In
+        // particular ESPDepth was missed by the generic distance-name search.
+        Dynamic->SetScalarParameterValue(SDK::BasicFilesImplUtils::StringToName(L"ESPDepth"), 1000000.0f);
+        Dynamic->SetScalarParameterValue(SDK::BasicFilesImplUtils::StringToName(L"ESPFillIntensity"), Intensity * Opacity);
+        State.AppliedIntensity = Intensity;
+        State.AppliedOpacity = Opacity;
+    }
+
     SDK::UMaterialInterface* FindResourceOutlineMaterial() {
-        constexpr const char* CandidateNames[] = {
-            "PP_ASA_CustomDepthOutline_MIC",
-            "ESPMaterialOutline_MIC",
-            "PP_HuntTargetOutline_MIC",
-            "PP_StriderRadarOutlines_MIC",
-            "MI_HuntingOutlinePPV"
-        };
+        constexpr const char* AllianceOutlineName = "ESPMaterialOutline_MIC";
+        constexpr const wchar_t* AllianceOutlinePath =
+            L"/Game/PrimalEarth/Effects/PostProcess/ESPMaterialOutline_MIC.ESPMaterialOutline_MIC";
         SDK::UClass* MaterialClass = SDK::UMaterialInterface::StaticClass();
         if (!MaterialClass) return nullptr;
 
-        for (const char* CandidateName : CandidateNames) {
-            SDK::UObject* Object = SDK::UObject::FindObjectFast<>(CandidateName);
-            if (Object && Object->Class && Object->IsA(MaterialClass)) {
-                return static_cast<SDK::UMaterialInterface*>(Object);
-            }
+		const auto Now = std::chrono::steady_clock::now();
+		if (Now < s_resourceCameraHighlightState.NextMaterialSearch) return nullptr;
+		s_resourceCameraHighlightState.NextMaterialSearch =
+			Now + std::chrono::seconds(2);
+
+        // This is ASA's alliance-aware CustomDepth material. The generic
+        // PP_ASA_CustomDepthOutline material has a single outline color, which
+        // is why hostile targets appeared red while Friendly stencil 0xF9 had
+        // no corresponding green result.
+        SDK::UObject* Object = SDK::UObject::FindObjectFast<>(AllianceOutlineName);
+        if (Object && Object->Class && Object->IsA(MaterialClass)) {
+            return CreateOutlineInstance(static_cast<SDK::UMaterialInterface*>(Object));
         }
 
-        if (!s_resourceCameraHighlightState.OutlineLoadAttempted) {
-            s_resourceCameraHighlightState.OutlineLoadAttempted = true;
-            constexpr const wchar_t* CandidatePaths[] = {
-                L"/Game/PrimalEarth/Effects/PostProcess/PP_ASA_CustomDepthOutline_MIC.PP_ASA_CustomDepthOutline_MIC",
-                L"/Game/PrimalEarth/Effects/PostProcess/ESPMaterialOutline_MIC.ESPMaterialOutline_MIC",
-                L"/Game/Genesis/Missions/Hunt/PP_HuntTargetOutline_MIC.PP_HuntTargetOutline_MIC",
-                L"/Game/Genesis2/Effects/PostProcess/PP_StriderRadarOutlines_MIC.PP_StriderRadarOutlines_MIC"
-            };
-            for (const wchar_t* CandidatePath : CandidatePaths) {
-                SDK::UObject* Object = SDK::UVictoryCore::BPLoadObject(
-                    SDK::FString(CandidatePath));
-                if (Object && Object->Class && Object->IsA(MaterialClass)) {
-                    return static_cast<SDK::UMaterialInterface*>(Object);
-                }
-            }
+        // Asset streaming order varies between maps. Retry at the rate limited
+        // interval instead of permanently giving up after an early load miss.
+        s_resourceCameraHighlightState.OutlineLoadAttempted = true;
+        Object = SDK::UVictoryCore::BPLoadObject(SDK::FString(AllianceOutlinePath));
+        if (Object && Object->Class && Object->IsA(MaterialClass)) {
+            return CreateOutlineInstance(static_cast<SDK::UMaterialInterface*>(Object));
         }
         return nullptr;
     }
 
-    void EnsureResourceOutlineBlendable(SDK::AShooterPlayerCameraManager* CameraManager) {
-        if (!CameraManager || CameraManager != s_resourceCameraHighlightState.CameraManager) return;
+    bool EnsureResourceOutlineBlendable(SDK::AShooterPlayerCameraManager* CameraManager,
+        bool UpdateDiagnostics = true) {
+        if (!CameraManager || CameraManager != s_resourceCameraHighlightState.CameraManager) {
+            return false;
+        }
 
         SDK::UMaterialInterface*& OutlineMaterial =
             s_resourceCameraHighlightState.OutlineMaterial;
-        if (!OutlineMaterial || OutlineMaterial->Index < 0 ||
-            SDK::UObject::GObjects->GetByIndex(OutlineMaterial->Index) != OutlineMaterial) {
+        int32_t LiveMaterialSerial = -1;
+        if (!TryGetLiveObjectSerial(OutlineMaterial,
+            s_resourceCameraHighlightState.OutlineMaterialIndex,
+            &LiveMaterialSerial) ||
+            LiveMaterialSerial !=
+                s_resourceCameraHighlightState.OutlineMaterialSerialNumber) {
             OutlineMaterial = FindResourceOutlineMaterial();
+            s_resourceCameraHighlightState.AppliedIntensity = -1.0f;
+            s_resourceCameraHighlightState.OutlineMaterialIndex = -1;
+            s_resourceCameraHighlightState.OutlineMaterialSerialNumber = -1;
+            if (OutlineMaterial) {
+                const int32_t MaterialIndex = OutlineMaterial->Index;
+                if (TryGetLiveObjectSerial(OutlineMaterial, MaterialIndex,
+                    &LiveMaterialSerial)) {
+                    s_resourceCameraHighlightState.OutlineMaterialIndex = MaterialIndex;
+                    s_resourceCameraHighlightState.OutlineMaterialSerialNumber =
+                        LiveMaterialSerial;
+                }
+                else {
+                    OutlineMaterial = nullptr;
+                }
+            }
         }
         if (!OutlineMaterial) {
-            s_resourceDiagnostics.OutlineMaterialStatus = "not loaded";
-            return;
+            if (UpdateDiagnostics) {
+                s_resourceDiagnostics.OutlineMaterialStatus = "alliance outline not loaded";
+            }
+            return false;
         }
 
-        s_resourceDiagnostics.OutlineMaterialStatus = OutlineMaterial->GetFullName();
+        TuneOutlineInstance(OutlineMaterial);
+        if (UpdateDiagnostics) {
+            s_resourceDiagnostics.OutlineMaterialStatus = OutlineMaterial->GetFullName();
+        }
         auto& Blendables = CameraManager->PPMaterials.WeightedBlendables.Array;
         const int Count = Blendables.Num();
         if (Count < 0 || Count > 4096 || Blendables.Max() < Count || Blendables.Max() > 4096) {
-            s_resourceDiagnostics.OutlineMaterialStatus += " (invalid PP array)";
-            return;
+            if (UpdateDiagnostics) {
+                s_resourceDiagnostics.OutlineMaterialStatus += " (invalid PP array)";
+            }
+            return false;
         }
 
         for (int Index = 0; Index < Count; ++Index) {
             if (Blendables[Index].Object != OutlineMaterial) continue;
             if (!s_resourceCameraHighlightState.BlendableAdded &&
                 !s_resourceCameraHighlightState.BlendableReplaced &&
-                !s_resourceCameraHighlightState.ExistingWeightChanged) {
+                !s_resourceCameraHighlightState.ExistingWeightChanged &&
+                Blendables[Index].Weight != 1.0f) {
                 s_resourceCameraHighlightState.ExistingWeightChanged = true;
                 s_resourceCameraHighlightState.ExistingBlendableIndex = Index;
                 s_resourceCameraHighlightState.ExistingBlendableWeight = Blendables[Index].Weight;
+                s_resourceCameraHighlightState.ExistingBlendableLastAppliedWeight = 1.0f;
             }
             Blendables[Index].Weight = 1.0f;
-            s_resourceDiagnostics.OutlineMaterialStatus += " (active)";
-            return;
+            if (UpdateDiagnostics) {
+                s_resourceDiagnostics.OutlineMaterialStatus += " (active)";
+            }
+            return true;
         }
 
         SDK::FWeightedBlendable OutlineBlendable{};
@@ -659,64 +1585,179 @@ namespace g_DrawESP {
         OutlineBlendable.Object = OutlineMaterial;
         if (Blendables.Add(OutlineBlendable)) {
             s_resourceCameraHighlightState.BlendableAdded = true;
-            s_resourceDiagnostics.OutlineMaterialStatus += " (added)";
-            return;
+            s_resourceCameraHighlightState.AddedBlendableIndex = Count;
+            if (UpdateDiagnostics) {
+                s_resourceDiagnostics.OutlineMaterialStatus += " (added)";
+            }
+            return true;
+        }
+
+        if (GrowWeightedBlendableArray(Blendables) &&
+            Blendables.Add(OutlineBlendable)) {
+            s_resourceCameraHighlightState.BlendableAdded = true;
+            s_resourceCameraHighlightState.AddedBlendableIndex = Count;
+            if (UpdateDiagnostics) {
+                s_resourceDiagnostics.OutlineMaterialStatus +=
+                    " (added after UE array growth)";
+            }
+            return true;
         }
 
         if (Count > 0 && !s_resourceCameraHighlightState.BlendableReplaced) {
             int ReplacementIndex = -1;
             for (int Index = Count - 1; Index >= 0; --Index) {
-                if (Blendables[Index].Object == s_tekNightVisionState.Material) continue;
-                ReplacementIndex = Index;
-                break;
+                if (!Blendables[Index].Object || Blendables[Index].Weight <= 0.0001f) {
+                    ReplacementIndex = Index;
+                    break;
+                }
             }
             if (ReplacementIndex >= 0) {
                 s_resourceCameraHighlightState.BlendableReplaced = true;
                 s_resourceCameraHighlightState.ReplacedBlendableIndex = ReplacementIndex;
                 s_resourceCameraHighlightState.ReplacedBlendable = Blendables[ReplacementIndex];
                 Blendables[ReplacementIndex] = OutlineBlendable;
-                s_resourceDiagnostics.OutlineMaterialStatus += " (replaced free effect slot)";
-                return;
+                if (UpdateDiagnostics) {
+                    s_resourceDiagnostics.OutlineMaterialStatus += " (reused inactive slot)";
+                }
+                return true;
             }
         }
 
-        s_resourceDiagnostics.OutlineMaterialStatus += " (no PP slot)";
+        if (UpdateDiagnostics) {
+            s_resourceDiagnostics.OutlineMaterialStatus +=
+                s_fMemoryReallocResolveState ==
+                    FMemoryReallocResolveState::Unavailable
+                ? " (UE allocator signature unavailable)"
+                : " (UE array growth failed)";
+        }
+        return false;
+    }
+
+    void ClearResourceOutlineBlendableMutationState() {
+        s_resourceCameraHighlightState.BlendableAdded = false;
+        s_resourceCameraHighlightState.AddedBlendableIndex = -1;
+        s_resourceCameraHighlightState.BlendableReplaced = false;
+        s_resourceCameraHighlightState.ReplacedBlendableIndex = -1;
+        s_resourceCameraHighlightState.ReplacedBlendable = {};
+        s_resourceCameraHighlightState.ExistingWeightChanged = false;
+        s_resourceCameraHighlightState.ExistingBlendableIndex = -1;
+        s_resourceCameraHighlightState.ExistingBlendableWeight = 0.0f;
+        s_resourceCameraHighlightState.ExistingBlendableLastAppliedWeight = 0.0f;
     }
 
     void RestoreResourceOutlineBlendable(SDK::AShooterPlayerCameraManager* CameraManager) {
-        if (!CameraManager || !s_resourceCameraHighlightState.OutlineMaterial) return;
+        RestoreFinalCameraEffect(CameraManager, s_resourceCameraHighlightState.FinalCameraSlot);
+        if (!CameraManager || !s_resourceCameraHighlightState.OutlineMaterial) {
+            ClearResourceOutlineBlendableMutationState();
+            return;
+        }
         auto& Blendables = CameraManager->PPMaterials.WeightedBlendables.Array;
         const int Count = Blendables.Num();
-        if (Count < 0 || Count > 4096) return;
+        if (Count < 0 || Count > 4096) {
+            ClearResourceOutlineBlendableMutationState();
+            return;
+        }
+
+        const auto FindOwnedOutlineIndex = [&](int PreferredIndex,
+            float ExpectedWeight) {
+                if (PreferredIndex >= 0 && PreferredIndex < Blendables.Num() &&
+                    Blendables[PreferredIndex].Object ==
+                        s_resourceCameraHighlightState.OutlineMaterial &&
+                    Blendables[PreferredIndex].Weight == ExpectedWeight) {
+                    return PreferredIndex;
+                }
+                int UniqueMatch = -1;
+                int MatchCount = 0;
+                for (int SearchIndex = 0; SearchIndex < Blendables.Num();
+                    ++SearchIndex) {
+                    if (Blendables[SearchIndex].Object ==
+                            s_resourceCameraHighlightState.OutlineMaterial &&
+                        Blendables[SearchIndex].Weight == ExpectedWeight) {
+                        UniqueMatch = SearchIndex;
+                        ++MatchCount;
+                    }
+                }
+                return MatchCount == 1 ? UniqueMatch : -1;
+            };
 
         if (s_resourceCameraHighlightState.BlendableReplaced) {
-            const int Index = s_resourceCameraHighlightState.ReplacedBlendableIndex;
-            if (Index >= 0 && Index < Count &&
-                Blendables[Index].Object == s_resourceCameraHighlightState.OutlineMaterial) {
+            const int Index = FindOwnedOutlineIndex(
+                s_resourceCameraHighlightState.ReplacedBlendableIndex, 1.0f);
+            if (Index >= 0) {
                 Blendables[Index] = s_resourceCameraHighlightState.ReplacedBlendable;
             }
         }
-        else if (s_resourceCameraHighlightState.BlendableAdded) {
-            for (int Index = Blendables.Num() - 1; Index >= 0; --Index) {
-                if (Blendables[Index].Object == s_resourceCameraHighlightState.OutlineMaterial) {
-                    Blendables.Remove(Index);
-                }
-            }
-        }
-        else if (s_resourceCameraHighlightState.ExistingWeightChanged) {
-            const int Index = s_resourceCameraHighlightState.ExistingBlendableIndex;
-            if (Index >= 0 && Index < Count &&
-                Blendables[Index].Object == s_resourceCameraHighlightState.OutlineMaterial) {
+        if (s_resourceCameraHighlightState.ExistingWeightChanged) {
+            const int Index = FindOwnedOutlineIndex(
+                s_resourceCameraHighlightState.ExistingBlendableIndex,
+                s_resourceCameraHighlightState.ExistingBlendableLastAppliedWeight);
+            if (Index >= 0) {
                 Blendables[Index].Weight =
                     s_resourceCameraHighlightState.ExistingBlendableWeight;
             }
         }
+        if (s_resourceCameraHighlightState.BlendableAdded) {
+            // Native UpdateCamera may rebuild/reorder PPMaterials. The exact
+            // material was absent immediately before our Add, so a single
+            // match remains owned by us even if its index moved.
+            const int RemovalIndex = FindOwnedOutlineIndex(
+                s_resourceCameraHighlightState.AddedBlendableIndex, 1.0f);
+            if (RemovalIndex >= 0) Blendables.Remove(RemovalIndex);
+        }
+
+        ClearResourceOutlineBlendableMutationState();
+    }
+
+    void PrepareOwnedCameraBool(bool& Field, OwnedCameraBool& State) {
+        // Remove only the value still owned by the previous frame, then let
+        // native UpdateCamera rebuild the natural Tek/buff state from scratch.
+        if (State.DidWrite && Field == State.LastApplied) {
+            Field = State.Baseline;
+        }
+        State = {};
+    }
+
+    void ApplyOwnedCameraBool(bool& Field, OwnedCameraBool& State,
+        bool DesiredValue) {
+        if (State.DidWrite && Field == State.LastApplied) {
+            Field = DesiredValue;
+            State.LastApplied = DesiredValue;
+            return;
+        }
+        State.Baseline = Field;
+        State.LastApplied = Field;
+        State.DidWrite = false;
+
+        // If ASA produced the desired value by itself during this camera
+        // update, do not claim it as one of our writes.
+        if (Field == DesiredValue) {
+            return;
+        }
+        Field = DesiredValue;
+        State.LastApplied = DesiredValue;
+        State.DidWrite = true;
+    }
+
+    void RestoreOwnedCameraBool(bool& Field, OwnedCameraBool& State) {
+        if (State.DidWrite && Field == State.LastApplied) {
+            Field = State.Baseline;
+        }
+        State = {};
     }
 
     void RestoreResourceCameraHighlight() {
         if (IsLiveResourceCamera(s_resourceCameraHighlightState.CameraManager,
-            s_resourceCameraHighlightState.ObjectIndex)) {
-            RestoreResourceOutlineBlendable(s_resourceCameraHighlightState.CameraManager);
+            s_resourceCameraHighlightState.ObjectIndex,
+            s_resourceCameraHighlightState.SerialNumber)) {
+            SDK::AShooterPlayerCameraManager* CameraManager =
+                s_resourceCameraHighlightState.CameraManager;
+            RestoreOwnedCameraBool(CameraManager->bHasCustomDepthStencil,
+                s_resourceCameraHighlightState.HasCustomDepthStencilOverride);
+            RestoreOwnedCameraBool(CameraManager->bCompleteCustomDepthStencilOverride,
+                s_resourceCameraHighlightState.CompleteStencilOverride);
+            RestoreOwnedCameraBool(CameraManager->bCustomDepthStencilIgnoreHealth,
+                s_resourceCameraHighlightState.IgnoreHealthOverride);
+            RestoreResourceOutlineBlendable(CameraManager);
         }
         s_resourceCameraHighlightState = {};
         s_resourceDiagnostics.CameraStencilEnabled = false;
@@ -767,199 +1808,25 @@ namespace g_DrawESP {
         return false;
     }
 
-    SDK::UMaterialInterface* FindTekNightVisionMaterial() {
-        SDK::UClass* MaterialClass = SDK::UMaterialInterface::StaticClass();
-        if (!MaterialClass) return nullptr;
-
-        constexpr const char* CandidateNames[] = {
-            "TEKNightVision_PP_MIC",
-            "TEKNightVision_PP_MAT"
-        };
-        for (const char* CandidateName : CandidateNames) {
-            SDK::UObject* Object = SDK::UObject::FindObjectFast<>(CandidateName);
-            if (Object && Object->Class && Object->IsA(MaterialClass)) {
-                return static_cast<SDK::UMaterialInterface*>(Object);
-            }
-        }
-
-        const auto Now = std::chrono::steady_clock::now();
-        if (Now < s_tekNightVisionState.NextLoadAttempt) return nullptr;
-        s_tekNightVisionState.NextLoadAttempt = Now + std::chrono::seconds(2);
-        ++s_tekNightVisionState.LoadAttempts;
-
-        // Asset loading can fail while a map or DLC package is still being
-        // mounted. Retry instead of permanently latching the first failure.
-        constexpr const wchar_t* CandidatePaths[] = {
-            L"/Game/PrimalEarth/Effects/PostProcess/TEKNightVision_PP_MIC.TEKNightVision_PP_MIC",
-            L"/Game/PrimalEarth/Effects/PostProcess/TEKNightVision_PP_MAT.TEKNightVision_PP_MAT",
-            L"/Game/PrimalEarth/Effects/PostProcess/TEKNightVision_PP_MIC",
-            L"/Game/PrimalEarth/Effects/PostProcess/TEKNightVision_PP_MAT"
-        };
-        for (const wchar_t* CandidatePath : CandidatePaths) {
-            SDK::UObject* Object = SDK::UVictoryCore::BPLoadObject(
-                SDK::FString(CandidatePath));
-            if (Object && Object->Class && Object->IsA(MaterialClass)) {
-                return static_cast<SDK::UMaterialInterface*>(Object);
-            }
-        }
-        return nullptr;
-    }
-
-    void RestoreTekNightVisionBlendable(SDK::AShooterPlayerCameraManager* CameraManager) {
-        if (!CameraManager || !s_tekNightVisionState.Material) return;
-        auto& Blendables = CameraManager->PPMaterials.WeightedBlendables.Array;
-        const int Count = Blendables.Num();
-        if (Count < 0 || Count > 4096) return;
-
-        if (s_tekNightVisionState.BlendableReplaced) {
-            const int Index = s_tekNightVisionState.ReplacedBlendableIndex;
-            if (Index >= 0 && Index < Count &&
-                Blendables[Index].Object == s_tekNightVisionState.Material) {
-                Blendables[Index] = s_tekNightVisionState.ReplacedBlendable;
-            }
-        }
-        else if (s_tekNightVisionState.BlendableAdded) {
-            for (int Index = Blendables.Num() - 1; Index >= 0; --Index) {
-                if (Blendables[Index].Object == s_tekNightVisionState.Material) {
-                    Blendables.Remove(Index);
-                }
-            }
-        }
-        else if (s_tekNightVisionState.ExistingWeightChanged) {
-            const int Index = s_tekNightVisionState.ExistingBlendableIndex;
-            if (Index >= 0 && Index < Count &&
-                Blendables[Index].Object == s_tekNightVisionState.Material) {
-                Blendables[Index].Weight = s_tekNightVisionState.ExistingBlendableWeight;
-            }
-        }
-    }
-
-    void RestoreTekNightVision() {
-        if (IsLiveResourceCamera(s_tekNightVisionState.CameraManager,
-            s_tekNightVisionState.ObjectIndex)) {
-            RestoreTekNightVisionBlendable(s_tekNightVisionState.CameraManager);
-        }
-        s_tekNightVisionState = {};
-    }
-
-    bool EnsureTekNightVisionBlendable(SDK::AShooterPlayerCameraManager* CameraManager) {
-        if (!CameraManager || CameraManager != s_tekNightVisionState.CameraManager) return false;
-
-        SDK::UMaterialInterface*& Material = s_tekNightVisionState.Material;
-        if (!Material || Material->Index < 0 ||
-            SDK::UObject::GObjects->GetByIndex(Material->Index) != Material) {
-            Material = FindTekNightVisionMaterial();
-        }
-        if (!Material) {
-            s_tekNightVisionStatus = std::format(
-                "夜视材质暂未加载，2秒后重试（第{}次）",
-                s_tekNightVisionState.LoadAttempts);
-            return false;
-        }
-
-        auto& Blendables = CameraManager->PPMaterials.WeightedBlendables.Array;
-        const int Count = Blendables.Num();
-        if (Count < 0 || Count > 4096 || Blendables.Max() < Count ||
-            Blendables.Max() > 4096) {
-            s_tekNightVisionStatus = "镜头后处理数组无效";
-            return false;
-        }
-
-        for (int Index = 0; Index < Count; ++Index) {
-            if (Blendables[Index].Object != Material) continue;
-            if (!s_tekNightVisionState.BlendableAdded &&
-                !s_tekNightVisionState.BlendableReplaced &&
-                !s_tekNightVisionState.ExistingWeightChanged) {
-                s_tekNightVisionState.ExistingWeightChanged = true;
-                s_tekNightVisionState.ExistingBlendableIndex = Index;
-                s_tekNightVisionState.ExistingBlendableWeight = Blendables[Index].Weight;
-            }
-            Blendables[Index].Weight = 1.0f;
-            s_tekNightVisionStatus = "已启用：" + Material->GetName();
-            return true;
-        }
-
-        SDK::FWeightedBlendable NightVisionBlendable{};
-        NightVisionBlendable.Weight = 1.0f;
-        NightVisionBlendable.Object = Material;
-        if (Blendables.Add(NightVisionBlendable)) {
-            s_tekNightVisionState.BlendableAdded = true;
-            s_tekNightVisionStatus = "已启用：" + Material->GetName();
-            return true;
-        }
-
-        // The generated SDK cannot grow a live TArray. When the two camera PP
-        // slots are already occupied, night vision deliberately replaces the
-        // Tek helmet overlay slot first. Resource outlining uses a different
-        // slot, so the two effects remain independent and the scanner overlay
-        // cannot be accidentally reactivated.
-        if (Count > 0 && !s_tekNightVisionState.BlendableReplaced) {
-            int ReplacementIndex = -1;
-            for (int Index = 0; Index < Count; ++Index) {
-                SDK::UObject* Object = Blendables[Index].Object;
-                if (Object == s_resourceCameraHighlightState.OutlineMaterial) continue;
-                std::string Identity = Object && Object->Class
-                    ? NormalizeResourceIdentity(Object->GetFullName() + Object->GetName())
-                    : std::string{};
-                if (Identity.find("tekhelmet") != std::string::npos &&
-                    Identity.find("overlay") != std::string::npos) {
-                    ReplacementIndex = Index;
-                    break;
-                }
-                if (ReplacementIndex < 0) ReplacementIndex = Index;
-            }
-            if (ReplacementIndex >= 0) {
-                s_tekNightVisionState.BlendableReplaced = true;
-                s_tekNightVisionState.ReplacedBlendableIndex = ReplacementIndex;
-                s_tekNightVisionState.ReplacedBlendable = Blendables[ReplacementIndex];
-                Blendables[ReplacementIndex] = NightVisionBlendable;
-                s_tekNightVisionStatus = "已启用（替换头盔扫描覆盖层）：" +
-                    Material->GetName();
-                return true;
-            }
-        }
-
-        s_tekNightVisionStatus = "镜头后处理槽位不足";
-        return false;
-    }
-
-    void MaintainTekNightVision(SDK::APlayerController* LocalPC) {
-        if (!g_Config::bTekHelmetNightVision) {
-            RestoreTekNightVision();
-            s_tekNightVisionStatus = "已关闭";
-            return;
-        }
-        if (!LocalPC || !LocalPC->PlayerCameraManager) {
-            RestoreTekNightVision();
-            s_tekNightVisionStatus = "等待游戏镜头";
-            return;
-        }
-        SDK::APlayerCameraManager* BaseCameraManager = LocalPC->PlayerCameraManager;
-        SDK::UClass* ShooterCameraManagerClass = SDK::AShooterPlayerCameraManager::StaticClass();
-        if (!ShooterCameraManagerClass || !BaseCameraManager->Class ||
-            !BaseCameraManager->IsA(ShooterCameraManagerClass)) {
-            RestoreTekNightVision();
-            s_tekNightVisionStatus = "当前镜头不兼容";
-            return;
-        }
-
-        auto* CameraManager = static_cast<SDK::AShooterPlayerCameraManager*>(BaseCameraManager);
-        if (s_tekNightVisionState.CameraManager != CameraManager) {
-            RestoreTekNightVision();
-            s_tekNightVisionState.CameraManager = CameraManager;
-            s_tekNightVisionState.ObjectIndex = CameraManager->Index;
-        }
-        EnsureTekNightVisionBlendable(CameraManager);
-    }
-
     bool IsLiveResourceViewport(SDK::UGameViewportClient* ViewportClient,
         int32_t ObjectIndex) {
         if (!ViewportClient || ObjectIndex < 0 ||
+            ObjectIndex >= SDK::UObject::GObjects->Num() ||
             SDK::UObject::GObjects->GetByIndex(ObjectIndex) != ViewportClient) {
             return false;
         }
         SDK::UClass* ViewportClass = SDK::UGameViewportClient::StaticClass();
         return ViewportClass && ViewportClient->Class && ViewportClient->IsA(ViewportClass);
+    }
+
+    bool IsLiveModelHighlightWorld(SDK::UWorld* World, int32_t ObjectIndex) {
+        if (!World || ObjectIndex < 0 ||
+            ObjectIndex >= SDK::UObject::GObjects->Num() ||
+            SDK::UObject::GObjects->GetByIndex(ObjectIndex) != World) {
+            return false;
+        }
+        SDK::UClass* WorldClass = SDK::UWorld::StaticClass();
+        return WorldClass && World->Class && World->IsA(WorldClass);
     }
 
     void RestoreResourceRenderPipeline() {
@@ -977,17 +1844,25 @@ namespace g_DrawESP {
             }
         }
 
-        if (s_resourceRenderPipelineState.HasCustomDepthMode && s_resourceWorld) {
+        SDK::UWorld* CommandWorld =
+            IsLiveModelHighlightWorld(s_resourceRenderPipelineState.World,
+                s_resourceRenderPipelineState.WorldObjectIndex)
+            ? s_resourceRenderPipelineState.World : nullptr;
+        if (s_resourceRenderPipelineState.HasCustomDepthMode && CommandWorld &&
+            SDK::UKismetSystemLibrary::GetConsoleVariableIntValue(
+                SDK::FString(L"r.CustomDepth")) == 3) {
             const std::wstring Command = L"r.CustomDepth " +
                 std::to_wstring(s_resourceRenderPipelineState.CustomDepthMode);
             SDK::UKismetSystemLibrary::ExecuteConsoleCommand(
-                s_resourceWorld, SDK::FString(Command.c_str()), nullptr);
+                CommandWorld, SDK::FString(Command.c_str()), nullptr);
         }
-        if (s_resourceRenderPipelineState.HasNaniteCustomDepthMode && s_resourceWorld) {
+        if (s_resourceRenderPipelineState.HasNaniteCustomDepthMode && CommandWorld &&
+            SDK::UKismetSystemLibrary::GetConsoleVariableIntValue(
+                SDK::FString(L"r.Nanite.CustomDepth")) == 1) {
             const std::wstring Command = L"r.Nanite.CustomDepth " +
                 std::to_wstring(s_resourceRenderPipelineState.NaniteCustomDepthMode);
             SDK::UKismetSystemLibrary::ExecuteConsoleCommand(
-                s_resourceWorld, SDK::FString(Command.c_str()), nullptr);
+                CommandWorld, SDK::FString(Command.c_str()), nullptr);
         }
 
         s_resourceRenderPipelineState = {};
@@ -998,11 +1873,13 @@ namespace g_DrawESP {
     }
 
     void ApplyResourceRenderPipeline(SDK::UWorld* World) {
-        if (!World || !g_Config::bResourceModelHighlight ||
-            s_resourceHighlightStates.empty()) {
+        if (!World || !HasActiveModelHighlights()) {
             RestoreResourceRenderPipeline();
             return;
         }
+
+        s_resourceRenderPipelineState.World = World;
+        s_resourceRenderPipelineState.WorldObjectIndex = World->Index;
 
         if (!s_resourceRenderPipelineState.HasCustomDepthMode) {
             s_resourceRenderPipelineState.CustomDepthMode =
@@ -1061,7 +1938,7 @@ namespace g_DrawESP {
     }
 
     void ApplyResourceCameraHighlight(SDK::APlayerController* LocalPC) {
-        if (!g_Config::bResourceModelHighlight || s_resourceHighlightStates.empty() ||
+        if (!HasActiveModelHighlights() ||
             !LocalPC || !LocalPC->PlayerCameraManager) {
             RestoreResourceCameraHighlight();
             return;
@@ -1078,17 +1955,17 @@ namespace g_DrawESP {
         auto* CameraManager = static_cast<SDK::AShooterPlayerCameraManager*>(BaseCameraManager);
         if (s_resourceCameraHighlightState.CameraManager != CameraManager) {
             RestoreResourceCameraHighlight();
-            s_resourceCameraHighlightState = {
-                CameraManager,
-                CameraManager->Index
-            };
+            s_resourceCameraHighlightState.CameraManager = CameraManager;
+            s_resourceCameraHighlightState.ObjectIndex = CameraManager->Index;
+            TryGetLiveObjectSerial(CameraManager, CameraManager->Index,
+                &s_resourceCameraHighlightState.SerialNumber);
         }
 
-        // These ShooterPlayerCameraManager flags belong to ARK's Tek helmet
-        // scanner pipeline. CustomDepth plus our own outline material is enough
-        // for resource highlighting; forcing these flags also activates the
-        // helmet overlay and couples two otherwise unrelated features.
+        // Keep the material resident and expose diagnostics here. The actual
+        // per-frame injection is repeated before UpdateCamera so it participates
+        // in the scene render rather than arriving one PostRender too late.
         EnsureResourceOutlineBlendable(CameraManager);
+        RestoreResourceOutlineBlendable(CameraManager);
         s_resourceDiagnostics.CameraStencilEnabled = CameraManager->bHasCustomDepthStencil;
 
         const auto SafeCount = [](int Count) {
@@ -1126,77 +2003,226 @@ namespace g_DrawESP {
         }
     }
 
-    void RestoreAllResourceHighlights() {
-        for (const auto& [Component, State] : s_resourceHighlightStates) {
-            RestoreResourceHighlight(Component, State);
+    SDK::UMaterialInstanceDynamic* GetSolidHighlightMaterial(uint8_t Stencil) {
+        struct CachedFill {
+            SDK::UMaterialInstanceDynamic* Material = nullptr;
+            int32_t Index = -1, Serial = -1;
+            float Intensity = -1.0f, Opacity = -1.0f;
+            std::chrono::steady_clock::time_point Retry{};
+        };
+        static std::array<CachedFill, 5> Materials{};
+        // Match the game's alliance stencil palette: friendly green, NPC
+        // white, fleeing yellow, hostile red, and element blue.
+        const int ColorIndex = Stencil == 0xF9 ? 0 : Stencil == 0xFA ? 1 :
+            Stencil == 0xFB ? 2 : Stencil == 0xFE ? 4 : 3;
+        auto& Cache = Materials[ColorIndex];
+        int32_t Serial = -1;
+        if (!TryGetLiveObjectSerial(Cache.Material, Cache.Index, &Serial) || Serial != Cache.Serial) {
+            Cache.Material = nullptr;
+            const auto Now = std::chrono::steady_clock::now();
+            if (Now < Cache.Retry) return nullptr;
+            Cache.Retry = Now + std::chrono::seconds(5);
+            auto* Object = SDK::UObject::FindObjectFast<>("StructurePreviewMat");
+            if (!Object) Object = SDK::UVictoryCore::BPLoadObject(
+                SDK::FString(L"/Game/PrimalEarth/Structures/StructurePreviewMat.StructurePreviewMat"));
+            if (!Object || !Object->IsA(SDK::UMaterial::StaticClass())) return nullptr;
+            auto* Parent = static_cast<SDK::UMaterial*>(Object);
+            if (Parent->MaterialDomain != SDK::EMaterialDomain::MD_Surface ||
+                (!Parent->bUsedAsSpecialEngineMaterial && !Parent->bUsedWithSkeletalMesh)) return nullptr;
+            // StructurePreviewMat is a cooked translucent material with the
+            // skeletal usage permutation. Its ColorParam name is also exposed
+            // by PrimalStructure::PreviewMaterialColorParamName on the CDO.
+            // Never manufacture missing shader permutations by changing flags.
+            Cache.Material = SDK::UKismetMaterialLibrary::CreateDynamicMaterialInstance(
+                s_resourceCameraHighlightState.CameraManager, Parent, {}, SDK::EMIDCreationFlags::None);
+            if (!Cache.Material) return nullptr;
+            Cache.Index = Cache.Material->Index;
+            TryGetLiveObjectSerial(Cache.Material, Cache.Index, &Cache.Serial);
+            Cache.Intensity = Cache.Opacity = -1.0f;
         }
-        s_resourceHighlightStates.clear();
-        RestoreResourceCameraHighlight();
-        RestoreResourceRenderPipeline();
-        s_resourceDiagnostics.HighlightedComponents = 0;
-        s_resourceDiagnostics.StencilValue = 0;
+        const float Intensity = std::clamp(g_Config::ModelHighlightIntensity, 1.0f, 8.0f);
+        const float Opacity = std::clamp(g_Config::ModelHighlightOpacity, 0.25f, 1.0f);
+        if (Cache.Intensity != Intensity || Cache.Opacity != Opacity) {
+            SDK::FLinearColor Color{};
+            // Limit exposure so tonemapping does not wash a bright red to pink.
+            const float Brightness = std::min(Intensity, 2.0f);
+            Color.R = (ColorIndex == 1 || ColorIndex == 2 || ColorIndex == 3) ? Brightness : 0.0f;
+            Color.G = (ColorIndex == 0 || ColorIndex == 1 || ColorIndex == 2) ? Brightness : 0.0f;
+            Color.B = (ColorIndex == 1 || ColorIndex == 4) ? Brightness : 0.0f;
+            Color.A = Opacity;
+            Cache.Material->SetVectorParameterValue(SDK::BasicFilesImplUtils::StringToName(L"ColorParam"), Color);
+            Cache.Intensity = Intensity;
+            Cache.Opacity = Opacity;
+        }
+        return Cache.Material;
     }
 
-    void ApplyResourceHighlights(const std::vector<ResourceMarker>& Markers) {
-        std::unordered_set<SDK::UPrimitiveComponent*> DesiredComponents;
-        if (g_Config::bResourceModelHighlight) {
-            for (const ResourceMarker& Marker : Markers) {
-                for (SDK::UPrimitiveComponent* Component : Marker.HighlightComponents) {
-                    if (Component) DesiredComponents.insert(Component);
-                }
-            }
+    void ApplySolidHighlight(SDK::UPrimitiveComponent* Component, uint8_t Stencil, ModelHighlightState& State) {
+        if (!Component->IsA(SDK::UMeshComponent::StaticClass())) return;
+        auto* Material = GetSolidHighlightMaterial(Stencil);
+        if (!Material) return;
+        auto* Mesh = static_cast<SDK::UMeshComponent*>(Component);
+        if (!State.AppliedOverlay || Mesh->OverlayMaterial != State.AppliedOverlay) {
+            State.OriginalOverlay = Mesh->OverlayMaterial;
+            State.OriginalOverlayIndex = State.OriginalOverlay ? State.OriginalOverlay->Index : -1;
+            TryGetLiveObjectSerial(State.OriginalOverlay, State.OriginalOverlayIndex, &State.OriginalOverlaySerial);
+        }
+        if (!State.AppliedOverlayDistance || Mesh->OverlayMaterialMaxDrawDistance != 0.0f) {
+            State.OriginalOverlayDistance = Mesh->OverlayMaterialMaxDrawDistance;
+            State.AppliedOverlayDistance = true;
+        }
+        if (Mesh->OverlayMaterial != Material) Mesh->SetOverlayMaterial(Material);
+        if (Mesh->OverlayMaterialMaxDrawDistance != 0.0f) Mesh->SetOverlayMaterialMaxDrawDistance(0.0f);
+        State.AppliedOverlay = Material;
+    }
+
+    void ApplyCombinedModelHighlights() {
+        static std::unordered_map<SDK::UPrimitiveComponent*, DesiredModelHighlight>
+            DesiredHighlights;
+        DesiredHighlights.clear();
+        DesiredHighlights.reserve(
+            s_resourceDesiredHighlights.size() + s_actorDesiredHighlights.size());
+        for (const auto& [Component, Highlight] : s_resourceDesiredHighlights) {
+            DesiredHighlights[Component] = Highlight;
+        }
+        for (const auto& [Component, Highlight] : s_actorDesiredHighlights) {
+            DesiredHighlights[Component] = Highlight;
         }
 
-        for (auto Iterator = s_resourceHighlightStates.begin();
-            Iterator != s_resourceHighlightStates.end();) {
-            if (!DesiredComponents.contains(Iterator->first)) {
-                RestoreResourceHighlight(Iterator->first, Iterator->second);
-                Iterator = s_resourceHighlightStates.erase(Iterator);
+        for (auto Iterator = s_modelHighlightStates.begin();
+            Iterator != s_modelHighlightStates.end();) {
+            const auto DesiredIterator = DesiredHighlights.find(Iterator->first);
+            const bool SameObject = DesiredIterator != DesiredHighlights.end() &&
+                DesiredIterator->second.ObjectIndex == Iterator->second.ObjectIndex &&
+                DesiredIterator->second.SerialNumber == Iterator->second.SerialNumber;
+            if (!SameObject || !IsLiveResourcePrimitive(Iterator->first,
+                Iterator->second.ObjectIndex, Iterator->second.SerialNumber)) {
+                RestoreModelHighlight(Iterator->first, Iterator->second);
+                Iterator = s_modelHighlightStates.erase(Iterator);
             }
             else {
                 ++Iterator;
             }
         }
 
-        if (DesiredComponents.empty()) {
-            s_resourceDiagnostics.HighlightedComponents = 0;
-            s_resourceDiagnostics.StencilValue = 0;
-            return;
-        }
+        for (const auto& [Component, DesiredHighlight] : DesiredHighlights) {
+            if (!IsLiveResourcePrimitive(Component, DesiredHighlight.ObjectIndex,
+                DesiredHighlight.SerialNumber)) continue;
 
-        uint8_t ElementStencil = SDK::AShooterPlayerCameraManager::GetColorCodedStencil(
-            SDK::EStencilAlliance::Element, 1.0f);
-        if (ElementStencil == 0) {
-            ElementStencil = static_cast<uint8_t>(SDK::EStencilAlliance::Element);
-        }
-        s_resourceDiagnostics.StencilValue = ElementStencil;
-
-        for (SDK::UPrimitiveComponent* Component : DesiredComponents) {
-            if (!Component || !Component->Class) continue;
-            const int32_t ObjectIndex = Component->Index;
-            if (!IsLiveResourcePrimitive(Component, ObjectIndex)) continue;
-
-            if (!s_resourceHighlightStates.contains(Component)) {
-                s_resourceHighlightStates.emplace(Component, ResourceHighlightState{
-                    ObjectIndex,
-                    Component->bRenderCustomDepth != 0,
-                    Component->CustomDepthStencilValue,
-                    Component->CustomDepthStencilWriteMask
-                    });
+            auto [Iterator, Inserted] = s_modelHighlightStates.try_emplace(Component);
+            ModelHighlightState& State = Iterator->second;
+            if (Inserted) {
+                State.ObjectIndex = DesiredHighlight.ObjectIndex;
+                State.SerialNumber = DesiredHighlight.SerialNumber;
+                State.OriginalRenderCustomDepth = Component->bRenderCustomDepth != 0;
+                State.OriginalStencilValue = Component->CustomDepthStencilValue;
+                State.OriginalStencilWriteMask = Component->CustomDepthStencilWriteMask;
+                State.LastAppliedRenderCustomDepth = State.OriginalRenderCustomDepth;
+                State.LastAppliedStencilValue = State.OriginalStencilValue;
+                State.LastAppliedStencilWriteMask = State.OriginalStencilWriteMask;
+            }
+            else {
+                // If the game or another effect changed a field after our last
+                // write, adopt it as the new baseline instead of overwriting it
+                // when this highlight is later released.
+                if ((Component->bRenderCustomDepth != 0) !=
+                    State.LastAppliedRenderCustomDepth) {
+                    State.OriginalRenderCustomDepth = Component->bRenderCustomDepth != 0;
+                }
+                if (Component->CustomDepthStencilValue !=
+                    State.LastAppliedStencilValue) {
+                    State.OriginalStencilValue = Component->CustomDepthStencilValue;
+                }
+                if (Component->CustomDepthStencilWriteMask !=
+                    State.LastAppliedStencilWriteMask) {
+                    State.OriginalStencilWriteMask =
+                        Component->CustomDepthStencilWriteMask;
+                }
             }
 
-            if (Component->CustomDepthStencilValue != ElementStencil) {
-                Component->SetCustomDepthStencilValue(ElementStencil);
+            if (Component->CustomDepthStencilValue != DesiredHighlight.StencilValue) {
+                Component->SetCustomDepthStencilValue(DesiredHighlight.StencilValue);
             }
-            if (Component->CustomDepthStencilWriteMask != SDK::ERendererStencilMask::ERSM_255) {
-                Component->SetCustomDepthStencilWriteMask(SDK::ERendererStencilMask::ERSM_255);
+            if (Component->CustomDepthStencilWriteMask !=
+                SDK::ERendererStencilMask::ERSM_255) {
+                Component->SetCustomDepthStencilWriteMask(
+                    SDK::ERendererStencilMask::ERSM_255);
             }
             if (!Component->bRenderCustomDepth) {
                 Component->SetRenderCustomDepth(true);
             }
+            if (DesiredHighlight.SolidFill || Component->IsA(SDK::USkeletalMeshComponent::StaticClass())) {
+                ApplySolidHighlight(Component, DesiredHighlight.StencilValue, State);
+            }
+            else if (State.AppliedOverlay) {
+                RestoreSolidHighlight(Component, State);
+                State.AppliedOverlay = nullptr;
+                State.AppliedOverlayDistance = false;
+            }
+            State.LastAppliedRenderCustomDepth = true;
+            State.LastAppliedStencilValue = DesiredHighlight.StencilValue;
+            State.LastAppliedStencilWriteMask = SDK::ERendererStencilMask::ERSM_255;
         }
+
         s_resourceDiagnostics.HighlightedComponents =
-            static_cast<int>(s_resourceHighlightStates.size());
+            static_cast<int>(s_modelHighlightStates.size());
+        s_resourceDiagnostics.SolidFillComponents = 0;
+        for (const auto& [Component, State] : s_modelHighlightStates)
+            if (State.AppliedOverlay) ++s_resourceDiagnostics.SolidFillComponents;
+    }
+
+    void RestoreSharedModelHighlightPipelineIfUnused() {
+        if (HasActiveModelHighlights()) return;
+        RestoreResourceCameraHighlight();
+        RestoreResourceRenderPipeline();
+    }
+
+    void RestoreAllResourceHighlights() {
+        if (s_resourceDesiredHighlights.empty()) {
+            RestoreSharedModelHighlightPipelineIfUnused();
+            s_resourceDiagnostics.StencilValue = 0;
+            return;
+        }
+        s_resourceDesiredHighlights.clear();
+        ApplyCombinedModelHighlights();
+        RestoreSharedModelHighlightPipelineIfUnused();
+        if (s_resourceDesiredHighlights.empty()) {
+            s_resourceDiagnostics.StencilValue = 0;
+        }
+    }
+
+    void RestoreAllActorHighlights() {
+        if (s_actorDesiredHighlights.empty()) {
+            RestoreSharedModelHighlightPipelineIfUnused();
+            return;
+        }
+        s_actorDesiredHighlights.clear();
+        ApplyCombinedModelHighlights();
+        RestoreSharedModelHighlightPipelineIfUnused();
+    }
+
+    void ApplyResourceHighlights(const std::vector<ResourceMarker>& Markers) {
+        s_resourceDesiredHighlights.clear();
+
+        constexpr uint8_t ElementStencil =
+            EncodeFullHealthStencil(SDK::EStencilAlliance::Element);
+        if (g_Config::bResourceModelHighlight) {
+            for (const ResourceMarker& Marker : Markers) {
+                for (const HighlightObjectRef& ComponentRef : Marker.HighlightComponents) {
+                    if (ComponentRef.Component) {
+                        s_resourceDesiredHighlights[ComponentRef.Component] = {
+                            ComponentRef.ObjectIndex,
+                            ComponentRef.SerialNumber,
+                            ElementStencil
+                        };
+                    }
+                }
+            }
+        }
+
+        s_resourceDiagnostics.StencilValue = s_resourceDesiredHighlights.empty()
+            ? 0 : ElementStencil;
+        ApplyCombinedModelHighlights();
     }
 
     std::string BuildInstancedResourceIdentity(SDK::UInstancedStaticMeshComponent* Component) {
@@ -1230,8 +2256,7 @@ namespace g_DrawESP {
 
         if (!g_Config::bResourceMetal && !g_Config::bResourceCrystal &&
             !g_Config::bResourceObsidian && !g_Config::bResourceOil &&
-            !g_Config::bResourcePearl && !g_Config::bResourceElementShard &&
-            !g_Config::bAutoHarvestTekStriderElementShard) {
+            !g_Config::bResourcePearl && !g_Config::bResourceElementShard) {
             s_resourceMarkers.clear();
             s_resourceDiagnostics = {};
             return;
@@ -1296,9 +2321,12 @@ namespace g_DrawESP {
                             SDK::UActorComponent* MeshComponent = MeshComponents[MeshIndex];
                             if (MeshComponent && MeshComponent->Class &&
                                 MeshComponent->IsA(MeshComponentClass)) {
-                                Marker.HighlightComponents.push_back(
+                                HighlightObjectRef ComponentRef = CaptureHighlightObjectRef(
                                     static_cast<SDK::UPrimitiveComponent*>(
                                         static_cast<SDK::UMeshComponent*>(MeshComponent)));
+                                if (ComponentRef.Component) {
+                                    Marker.HighlightComponents.push_back(ComponentRef);
+                                }
                             }
                         }
                     }
@@ -1346,10 +2374,10 @@ namespace g_DrawESP {
                 // Some foliage Blueprints populate their harvesting data only on the live
                 // component. Sample at most a few instances once per ISM component rather
                 // than invoking the Blueprint helper for every nearby rock/tree.
-                const bool NeedElementShardSample =
-                    g_Config::bAutoHarvestTekStriderElementShard &&
+                const bool NeedSelectedShardSample =
+                    g_Config::bResourceElementShard &&
                     ComponentType != ResourceType::ElementShard;
-                if ((!IsResourceTypeNeeded(ComponentType) || NeedElementShardSample) &&
+                if ((!IsResourceTypeNeeded(ComponentType) || NeedSelectedShardSample) &&
                     CanResolveFromSample) {
                     const int32_t SampleLimit = std::min(InstanceIndices.Num(), 4);
                     for (int32_t SampleOffset = 0; SampleOffset < SampleLimit; ++SampleOffset) {
@@ -1390,7 +2418,10 @@ namespace g_DrawESP {
                     Marker.Location = ResourceCenter;
                     Marker.Type = ComponentType;
                     Marker.DistanceSquared = DistanceSquared;
-                    Marker.HighlightComponents.push_back(Component);
+                    HighlightObjectRef ComponentRef = CaptureHighlightObjectRef(Component);
+                    if (ComponentRef.Component) {
+                        Marker.HighlightComponents.push_back(ComponentRef);
+                    }
                     Candidates.push_back(std::move(Marker));
                     if (Candidates.size() >= 768) break;
                 }
@@ -1443,29 +2474,28 @@ namespace g_DrawESP {
         return s_resourceDiagnostics;
     }
 
-    bool FindNearestResourceTarget(const SDK::FVector& Origin, float MaxDistanceMeters,
-        SDK::FVector* OutLocation, float* OutDistanceMeters, std::string* OutTypeName,
-        const std::vector<SDK::FVector>* ExcludedLocations, float ExclusionRadiusMeters,
-        bool ElementShardOnly) {
-        if (!OutLocation || !IsFiniteResourceVector(Origin) || s_resourceMarkers.empty()) {
-            return false;
+    std::vector<ResourceTargetCandidate> FindResourceTargetCandidates(
+        const SDK::FVector& Origin, float MaxDistanceMeters, size_t Limit,
+        const std::vector<SDK::FVector>& ExcludedLocations, float ExclusionRadiusMeters,
+        const SDK::FVector* RequiredForward) {
+        if (!Limit || !std::isfinite(MaxDistanceMeters) || !std::isfinite(ExclusionRadiusMeters) ||
+            !IsFiniteResourceVector(Origin) || s_resourceMarkers.empty()) {
+            return {};
         }
 
         const double MaximumUU = std::clamp(static_cast<double>(MaxDistanceMeters), 1.0, 1000.0) * 100.0;
         const double MaximumSquared = MaximumUU * MaximumUU;
         const double ExclusionUU = std::max(0.0, static_cast<double>(ExclusionRadiusMeters)) * 100.0;
         const double ExclusionSquared = ExclusionUU * ExclusionUU;
-        const ResourceMarker* Best = nullptr;
-        double BestDistanceSquared = MaximumSquared;
+        std::vector<ResourceTargetCandidate> Result;
+        Limit = std::min<size_t>(Limit, 16);
 
         for (const ResourceMarker& Marker : s_resourceMarkers) {
             if (!IsFiniteResourceVector(Marker.Location) ||
-                (ElementShardOnly
-                    ? Marker.Type != ResourceType::ElementShard
-                    : !IsResourceTypeEnabled(Marker.Type))) continue;
+                !IsResourceTypeEnabled(Marker.Type)) continue;
             bool Excluded = false;
-            if (ExcludedLocations && ExclusionSquared > 0.0) {
-                for (const SDK::FVector& ExcludedLocation : *ExcludedLocations) {
+            if (ExclusionSquared > 0.0) {
+                for (const SDK::FVector& ExcludedLocation : ExcludedLocations) {
                     if (IsFiniteResourceVector(ExcludedLocation) &&
                         ResourceDistanceSquared(Marker.Location, ExcludedLocation) <= ExclusionSquared) {
                         Excluded = true;
@@ -1475,22 +2505,44 @@ namespace g_DrawESP {
             }
             if (Excluded) continue;
             const double DistanceSquared = ResourceDistanceSquared(Marker.Location, Origin);
-            if (!std::isfinite(DistanceSquared) || DistanceSquared > BestDistanceSquared) continue;
-            BestDistanceSquared = DistanceSquared;
-            Best = &Marker;
+            if (!std::isfinite(DistanceSquared) || DistanceSquared > MaximumSquared) continue;
+            if (RequiredForward) {
+                if (!IsFiniteResourceVector(*RequiredForward) || DistanceSquared <= 1) continue;
+                const auto Delta = Marker.Location - Origin;
+                const double Dot = (Delta.X * RequiredForward->X + Delta.Y * RequiredForward->Y +
+                    Delta.Z * RequiredForward->Z) / std::sqrt(DistanceSquared);
+                if (Dot < 0.10) continue;
+            }
+            Result.push_back({Marker.Location, static_cast<float>(std::sqrt(DistanceSquared) * 0.01),
+                GetResourceTypeLabel(Marker.Type)});
         }
+        const auto Nearer = [](const ResourceTargetCandidate& A, const ResourceTargetCandidate& B) {
+            if (A.DistanceMeters != B.DistanceMeters) return A.DistanceMeters < B.DistanceMeters;
+            if (A.Location.X != B.Location.X) return A.Location.X < B.Location.X;
+            if (A.Location.Y != B.Location.Y) return A.Location.Y < B.Location.Y;
+            return A.Location.Z < B.Location.Z;
+        };
+        std::partial_sort(Result.begin(), Result.begin() + std::min(Limit, Result.size()), Result.end(), Nearer);
+        if (Result.size() > Limit) Result.resize(Limit);
+        return Result;
+    }
 
-        if (!Best) return false;
-        *OutLocation = Best->Location;
-        if (OutDistanceMeters) {
-            *OutDistanceMeters = static_cast<float>(std::sqrt(BestDistanceSquared) * 0.01);
-        }
-        if (OutTypeName) *OutTypeName = GetResourceTypeLabel(Best->Type);
+    bool FindNearestResourceTarget(const SDK::FVector& Origin, float MaxDistanceMeters,
+        SDK::FVector* OutLocation, float* OutDistanceMeters, std::string* OutTypeName,
+        const std::vector<SDK::FVector>* ExcludedLocations, float ExclusionRadiusMeters) {
+        if (!OutLocation) return false;
+        const auto Candidates = FindResourceTargetCandidates(Origin, MaxDistanceMeters, 1,
+            ExcludedLocations ? *ExcludedLocations : std::vector<SDK::FVector>{}, ExclusionRadiusMeters);
+        if (Candidates.empty()) return false;
+        const auto& Best = Candidates.front();
+        *OutLocation = Best.Location;
+        if (OutDistanceMeters) *OutDistanceMeters = Best.DistanceMeters;
+        if (OutTypeName) *OutTypeName = Best.TypeName;
         return true;
     }
 
     bool FindResourceTargetNear(const SDK::FVector& ExpectedLocation, float ToleranceMeters,
-        SDK::FVector* OutLocation, std::string* OutTypeName, bool ElementShardOnly) {
+        SDK::FVector* OutLocation, std::string* OutTypeName) {
         if (!OutLocation || !IsFiniteResourceVector(ExpectedLocation) || s_resourceMarkers.empty()) {
             return false;
         }
@@ -1501,9 +2553,7 @@ namespace g_DrawESP {
         double BestDistanceSquared = ToleranceSquared;
         for (const ResourceMarker& Marker : s_resourceMarkers) {
             if (!IsFiniteResourceVector(Marker.Location) ||
-                (ElementShardOnly
-                    ? Marker.Type != ResourceType::ElementShard
-                    : !IsResourceTypeEnabled(Marker.Type))) continue;
+                !IsResourceTypeEnabled(Marker.Type)) continue;
             const double DistanceSquared = ResourceDistanceSquared(Marker.Location, ExpectedLocation);
             if (!std::isfinite(DistanceSquared) || DistanceSquared > BestDistanceSquared) continue;
             BestDistanceSquared = DistanceSquared;
@@ -1517,22 +2567,78 @@ namespace g_DrawESP {
 
     void ResetResourceModelHighlights() {
         RestoreAllResourceHighlights();
+        RestoreAllActorHighlights();
     }
 
-    void ResetTekHelmetNightVision() {
-        RestoreTekNightVision();
-        s_tekNightVisionStatus = "已关闭";
+    bool PrepareModelHighlightCameraUpdate(
+        SDK::AShooterPlayerCameraManager* CameraManager) {
+        if (!HasActiveModelHighlights() ||
+            !IsLiveResourceCamera(CameraManager,
+                s_resourceCameraHighlightState.ObjectIndex,
+                s_resourceCameraHighlightState.SerialNumber) ||
+            CameraManager != s_resourceCameraHighlightState.CameraManager) {
+            return false;
+        }
+
+        ApplyOwnedCameraBool(CameraManager->bHasCustomDepthStencil,
+            s_resourceCameraHighlightState.HasCustomDepthStencilOverride, true);
+        ApplyOwnedCameraBool(CameraManager->bCompleteCustomDepthStencilOverride,
+            s_resourceCameraHighlightState.CompleteStencilOverride, true);
+        ApplyOwnedCameraBool(CameraManager->bCustomDepthStencilIgnoreHealth,
+            s_resourceCameraHighlightState.IgnoreHealthOverride, true);
+        RestoreResourceOutlineBlendable(CameraManager);
+        ApplyCombinedModelHighlights();
+        s_resourceCameraHighlightState.BlendablePreparedForCameraUpdate =
+            EnsureResourceOutlineBlendable(CameraManager, false);
+        return s_resourceCameraHighlightState.BlendablePreparedForCameraUpdate;
     }
 
-    std::string GetTekHelmetNightVisionStatus() {
-        return s_tekNightVisionStatus;
+    void FinishModelHighlightCameraUpdate(
+        SDK::AShooterPlayerCameraManager* CameraManager) {
+        if (!HasActiveModelHighlights() ||
+            CameraManager != s_resourceCameraHighlightState.CameraManager ||
+            !IsLiveResourceCamera(CameraManager,
+                s_resourceCameraHighlightState.ObjectIndex,
+                s_resourceCameraHighlightState.SerialNumber)) {
+            s_resourceCameraHighlightState.BlendablePreparedForCameraUpdate = false;
+            return;
+        }
+
+        if (s_resourceCameraHighlightState.BlendablePreparedForCameraUpdate) {
+            // UpdateCamera rebuilds these values every frame. The alliance ESP
+            // material normally makes bHas true; retain a fallback for maps
+            // where the material metadata is streamed late. CompleteOverride
+            // prevents ASA from replacing our chosen 0xF9/0xFC stencil values.
+            ApplyOwnedCameraBool(CameraManager->bHasCustomDepthStencil,
+                s_resourceCameraHighlightState.HasCustomDepthStencilOverride, true);
+            ApplyOwnedCameraBool(CameraManager->bCompleteCustomDepthStencilOverride,
+                s_resourceCameraHighlightState.CompleteStencilOverride, true);
+            ApplyOwnedCameraBool(CameraManager->bCustomDepthStencilIgnoreHealth,
+                s_resourceCameraHighlightState.IgnoreHealthOverride, true);
+        }
+
+        // Native camera processing may have rewritten both CustomDepth and the
+        // stencil. Restore the desired values in the same pre-render frame.
+        ApplyCombinedModelHighlights();
+        // UpdateCamera has already copied/consumed PPMaterials into this frame's
+        // camera cache. Release only the exact temporary array mutation now.
+        RestoreResourceOutlineBlendable(CameraManager);
+        ApplyFinalCameraEffect(CameraManager, s_resourceCameraHighlightState.OutlineMaterial,
+            s_resourceCameraHighlightState.FinalCameraSlot);
+        s_resourceCameraHighlightState.BlendablePreparedForCameraUpdate = false;
+        s_resourceDiagnostics.CameraStencilEnabled =
+            CameraManager->bHasCustomDepthStencil;
+        if (s_resourceDiagnostics.PreRenderWrites < 999999) {
+            ++s_resourceDiagnostics.PreRenderWrites;
+        }
     }
 
     void MaintainResourceModelHighlightState() {
-        if (!g_Config::bResourceModelHighlight || s_resourceHighlightStates.empty()) return;
+        if (!HasActiveModelHighlights()) return;
 
         if (IsLiveResourceCamera(s_resourceCameraHighlightState.CameraManager,
-            s_resourceCameraHighlightState.ObjectIndex)) {
+            s_resourceCameraHighlightState.ObjectIndex,
+            s_resourceCameraHighlightState.SerialNumber)) {
             s_resourceDiagnostics.CameraStencilEnabled =
                 s_resourceCameraHighlightState.CameraManager->bHasCustomDepthStencil;
         }
@@ -1545,21 +2651,11 @@ namespace g_DrawESP {
             s_resourceDiagnostics.PostProcessingEnabled = true;
         }
 
-        if (s_resourceDiagnostics.PreRenderWrites < 999999) {
-            ++s_resourceDiagnostics.PreRenderWrites;
-        }
     }
 
     void DrawResourceESP(SDK::UCanvas* Canvas) {
-        if (Canvas) {
-            MaintainTekNightVision(_DD::LocalSPC);
-        }
-        else {
-            RestoreTekNightVision();
-        }
-
         // Resource ESP is independent of the player/dino ESP master switch.
-        const bool DrawResourceVisuals = g_Config::bResourceESPEnabled;
+        const bool DrawResourceVisuals = g_Config::bResourceESPEnabled && !g_Config::bCombatESP;
         const bool NeedResourceScan = DrawResourceVisuals || g_Config::bAutoHarvestResources;
         if (!Canvas || !NeedResourceScan) {
             RestoreAllResourceHighlights();
@@ -1595,11 +2691,11 @@ namespace g_DrawESP {
         for (const ResourceMarker& Marker : s_resourceMarkers) {
             const Shadow::Color Color = GetResourceTypeColor(Marker.Type);
             SDK::FVector2D ScreenPosition{};
-            if (!LocalPC->ProjectWorldLocationToScreen(Marker.Location, &ScreenPosition, false)) continue;
+            if (!g_ESP::ProjectToCanvas(Canvas, LocalPC, Marker.Location, &ScreenPosition)) continue;
             const float ScreenX = static_cast<float>(ScreenPosition.X);
             const float ScreenY = static_cast<float>(ScreenPosition.Y);
-            if (ScreenX < 0.0f || ScreenX >= IO.DisplaySize.x ||
-                ScreenY < 0.0f || ScreenY >= IO.DisplaySize.y) continue;
+            if (ScreenX < 0.0f || ScreenX >= Canvas->ClipX ||
+                ScreenY < 0.0f || ScreenY >= Canvas->ClipY) continue;
 
             const Shadow::Color BackColor{ 0.0f, 0.0f, 0.0f, Color.a * 0.85f };
             DrawList->AddLine({ ScreenX - 5.0f, ScreenY }, { ScreenX + 5.0f, ScreenY },
@@ -1627,6 +2723,8 @@ namespace g_DrawESP {
         }
     }
 
+#include "FeatureExpansionESP.inl"
+
     void DrawESP(SDK::UCanvas* Canvas)
     {
         if (!Canvas) return;
@@ -1650,17 +2748,28 @@ namespace g_DrawESP {
             break;
         }
 
-        if (!g_Config::bESPEnabled) {
+        const bool CharacterVisuals = (g_Config::bESPPlayers || g_Config::bESPCreatures) &&
+            (g_Config::bModelHighlightEnabled || g_Config::bShowCreatureAggro ||
+             g_Config::bDrawBox || g_Config::bDrawHealthBar ||
+             g_Config::bDrawName || g_Config::bDrawDistance || g_Config::bDrawTorpor ||
+             g_Config::bDrawRagdoll || g_Config::bEnableOOF || g_Config::bMinimalESP || g_Config::bRadar ||
+             g_Config::bDrawArmorQuality || g_Config::bDrawHeldWeapon);
+        if (!CharacterVisuals && !g_Config::bCombatESP && !g_Config::bDrawTurretAmmo && !g_Config::bDrawStructures && !g_Config::bDrawDroppedItems && !g_Config::bDrawWater) {
+            RestoreAllActorHighlights();
             s_entries.clear();
             waterCandidates.clear();
             return;
         }
 
         SDK::UWorld* World = _DD::World;
-        if (!World || !World->GameState) return;
+        if (!World || !World->GameState) {
+            RestoreAllActorHighlights();
+            return;
+        }
 
         SDK::APlayerController* LocalPC = _DD::LocalSPC;
         if (!LocalPC || !LocalPC->Pawn) {
+            RestoreAllActorHighlights();
             for (auto& kv : s_entries) {
                 kv.second.targetAlpha = 0.0f;
                 kv.second.aliveThisFrame = false;
@@ -1670,6 +2779,7 @@ namespace g_DrawESP {
 
         SDK::AShooterPlayerState* LocalPS = _DD::LocalSPS;
         if (!LocalPS) {
+            RestoreAllActorHighlights();
             for (auto& kv : s_entries) {
                 kv.second.targetAlpha = 0.0f;
                 kv.second.aliveThisFrame = false;
@@ -1679,8 +2789,8 @@ namespace g_DrawESP {
 
         Shadow::ShadowIO& IO = Shadow::GetIO();
 
-        const float screenW = IO.DisplaySize.x;
-        const float screenH = IO.DisplaySize.y;
+        const float screenW = Canvas->ClipX;
+        const float screenH = Canvas->ClipY;
         const float deltaTime = IO.DeltaTime;
 
         SDK::APrimalCharacter* LocalChar = _DD::LocalSC;
@@ -1688,36 +2798,53 @@ namespace g_DrawESP {
             LocalPC->Pawn->IsA(SDK::APrimalCharacter::StaticClass())) {
             LocalChar = static_cast<SDK::APrimalCharacter*>(LocalPC->Pawn);
         }
-
-        // ASA streams creatures and players across multiple ULevels. Looking
-        // only at PersistentLevel misses actors living in streamed sub-levels.
-        static std::vector<SDK::AActor*> Actors;
-        Actors.clear();
-        const int32_t PersistentActorCount = World->PersistentLevel
-            ? World->PersistentLevel->Actors.Num() : 0;
-        if (PersistentActorCount > 0 && PersistentActorCount <= 200000) {
-            Actors.reserve(static_cast<size_t>(PersistentActorCount));
+        TryAttachSpyglassInventory(LocalChar);
+        if (!g_Config::bStructureShowLootContents) {
+            std::lock_guard<std::mutex> Guard(s_spyglassLootMutex);
+            s_spyglassLoot.clear();
+            s_spyglassPending.clear();
         }
-        auto AppendLevelActors = [&](SDK::ULevel* Level) {
-            if (!Level) return;
-            const int32_t Count = Level->Actors.Num();
-            if (Count < 0 || Count > 200000) return;
-            for (int32_t ActorIndex = 0; ActorIndex < Count; ++ActorIndex) {
-                SDK::AActor* Actor = Level->Actors[ActorIndex];
-                if (Actor) Actors.push_back(Actor);
-            }
-        };
 
-        const int32_t LevelCount = World->Levels.Num();
-        bool IncludedPersistentLevel = false;
-        if (LevelCount >= 0 && LevelCount <= 4096) {
-            for (int32_t LevelIndex = 0; LevelIndex < LevelCount; ++LevelIndex) {
-                SDK::ULevel* Level = World->Levels[LevelIndex];
-                IncludedPersistentLevel |= Level == World->PersistentLevel;
-                AppendLevelActors(Level);
-            }
-        }
-        if (!IncludedPersistentLevel) AppendLevelActors(World->PersistentLevel);
+        // ASA streams actors across multiple ULevels. Rebuilding and classifying
+        // the complete world list every render frame is expensive, so retain a
+        // typed registry for 200 ms. Every pointer is still validated through
+        // GObjects before it is dereferenced, making the short cache GC-safe.
+		const auto ActorRefreshNow = std::chrono::steady_clock::now();
+		if (s_cachedESPWorld != World || ActorRefreshNow >= s_nextESPActorRefresh) {
+			s_cachedESPWorld = World;
+			s_nextESPActorRefresh = ActorRefreshNow + std::chrono::milliseconds(200);
+			s_cachedESPActors.clear();
+
+			const int32_t PersistentActorCount = World->PersistentLevel
+				? World->PersistentLevel->Actors.Num() : 0;
+			if (PersistentActorCount > 0 && PersistentActorCount <= 200000) {
+				s_cachedESPActors.reserve(static_cast<size_t>(PersistentActorCount));
+			}
+
+			auto AppendLevelActors = [&](SDK::ULevel* Level) {
+				if (!Level) return;
+				const int32_t Count = Level->Actors.Num();
+				if (Count < 0 || Count > 200000) return;
+				for (int32_t ActorIndex = 0; ActorIndex < Count; ++ActorIndex) {
+					SDK::AActor* Actor = Level->Actors[ActorIndex];
+					if (!Actor || !Actor->Class || Actor->Index < 0) continue;
+					const ActorType Type = ClassifyESPActor(Actor);
+					if (Type == ActorType::Unknown) continue;
+					s_cachedESPActors.push_back({ Actor, Actor->Index, Type });
+				}
+			};
+
+			const int32_t LevelCount = World->Levels.Num();
+			bool IncludedPersistentLevel = false;
+			if (LevelCount >= 0 && LevelCount <= 4096) {
+				for (int32_t LevelIndex = 0; LevelIndex < LevelCount; ++LevelIndex) {
+					SDK::ULevel* Level = World->Levels[LevelIndex];
+					IncludedPersistentLevel |= Level == World->PersistentLevel;
+					AppendLevelActors(Level);
+				}
+			}
+			if (!IncludedPersistentLevel) AppendLevelActors(World->PersistentLevel);
+		}
 
         waterCandidates.clear();
 
@@ -1725,16 +2852,40 @@ namespace g_DrawESP {
         const bool  hasEntityFilter = g_Config::bEnableFilter && rawEntityFilter[0] != '\0';
         const char* rawStructFilter = g_Config::structureSearchBuf;
         const bool  hasStructureFilter = g_Config::bEnableStructureFilter && rawStructFilter[0] != '\0';
+        const g_ESP::Structures::Filter StructureTypes{g_Config::bStructureTypeFilter,
+            {g_Config::bStructureAutoTurret, g_Config::bStructureHeavyTurret, g_Config::bStructureTekTurret,
+             g_Config::bStructureGenerator, g_Config::bStructureTekGenerator, g_Config::bStructureWindTurbine,
+             g_Config::bStructureSupplyDrop, g_Config::bStructureLootCrate,
+             g_Config::bStructureBuriedTreasure, g_Config::bStructureOther}};
 
         for (auto& kv : s_entries)
             kv.second.aliveThisFrame = false;
 
-        for (SDK::AActor* TargetActor : Actors) {
+        s_actorDesiredHighlights.clear();
+        constexpr uint8_t FriendlyDinoStencil =
+            EncodeFullHealthStencil(SDK::EStencilAlliance::Friendly);
+        constexpr uint8_t HostileDinoStencil =
+            EncodeFullHealthStencil(SDK::EStencilAlliance::Hostile);
+        constexpr uint8_t CalmDinoStencil =
+            EncodeFullHealthStencil(SDK::EStencilAlliance::NPC);
+        constexpr uint8_t FleeingDinoStencil =
+            EncodeFullHealthStencil(SDK::EStencilAlliance::NPCFleeing);
+
+        for (const CachedESPActorRef& ActorRef : s_cachedESPActors) {
+			if (ActorRef.ObjectIndex < 0 ||
+				ActorRef.ObjectIndex >= SDK::UObject::GObjects->Num()) continue;
+			SDK::UObject* LiveObject =
+				SDK::UObject::GObjects->GetByIndex(ActorRef.ObjectIndex);
+			if (LiveObject != ActorRef.Actor || !LiveObject || !LiveObject->Class ||
+				LiveObject->Index != ActorRef.ObjectIndex ||
+				(LiveObject->Flags & SDK::EObjectFlags::BeginDestroyed) ||
+				(LiveObject->Flags & SDK::EObjectFlags::FinishDestroyed)) {
+				continue;
+			}
+			SDK::AActor* TargetActor = ActorRef.Actor;
             if (!TargetActor || TargetActor == LocalPC->Pawn || TargetActor == _DD::LocalSC) continue;
 
-            const ActorType CurrentActorType = ClassifyESPActor(TargetActor);
-            if (CurrentActorType == ActorType::Unknown) continue;
-
+            const ActorType CurrentActorType = ActorRef.Type;
             uintptr_t  key = reinterpret_cast<uintptr_t>(TargetActor);
             ESPEntry& entry = s_entries[key];
 
@@ -1748,6 +2899,7 @@ namespace g_DrawESP {
             entry.objectIndex = TargetActor->Index;
             entry.actorType = CurrentActorType;
             entry.lastSeenTime = 0.0f;
+            entry.cachedRect.valid = false;
 
             if (TargetActor->bHidden) {
                 entry.targetAlpha = 0.0f;
@@ -1757,7 +2909,9 @@ namespace g_DrawESP {
 
             const SDK::FVector actorLoc = TargetActor->K2_GetActorLocation();
             entry.lastWorldLoc = actorLoc;
+            entry.indicatorWorldLoc = actorLoc;
             entry.aliveThisFrame = true;
+			entry.isOOF = false;
 
             // ============================================================
             // Branch: PrimalCharacter (包含了 ShooterCharacter, PrimalDinoCharacter 以及其它派生)
@@ -1767,50 +2921,28 @@ namespace g_DrawESP {
                 SDK::APlayerState* TargetPS = TargetChar->PlayerState;
 
                 const float dist = (LocalPC && LocalPC->Pawn && TargetActor) ? LocalPC->Pawn->GetDistanceTo(TargetActor) * 0.01f : 0.0f;
+                entry.distanceMeters = dist;
                 const bool isDead = TargetChar->IsDead();
+                entry.characterAlive = !isDead;
+                entry.selectedTarget = g_Aimbot::IsSelectedTarget(TargetActor);
 
                 // 将生物类型判定作为一个布尔值，用于区分全局ESP应用规则
                 // Non-player APrimalCharacter subclasses are creature/NPC
                 // fallbacks and should obey the dino display settings.
                 const bool isDino = (entry.actorType != ActorType::ShooterCharacter);
+                if (!g_Config::ESPCharacterEnabled(isDino) || (isDino && g_Config::bCombatESP)) {
+                    entry.targetAlpha = 0.0f;
+                    entry.aliveThisFrame = false;
+                    continue;
+                }
+
 
                 if (isDead) {
                     g_ESP::RelationType relation = g_ESP::GetRelation(TargetChar, LocalChar);
 
-                    bool   bShowRagdoll = false;
-                    float* RagdollCol = nullptr;
-                    float* DistCol = nullptr;
-
-                    if (isDino) {
-                        if (relation == g_ESP::RelationType::Team) {
-                            bShowRagdoll = g_Config::bTeamDinoDrawRagdoll;
-                            RagdollCol = g_Config::TeamDinoRagdollColor;
-                            DistCol = g_Config::TeamDinoDistanceColor;
-                        }
-                        else {
-                            bShowRagdoll = g_Config::bDinoDrawRagdoll;
-                            RagdollCol = g_Config::DinoRagdollColor;
-                            DistCol = g_Config::DinoDistanceColor;
-                        }
-                    }
-                    else {
-                        // ShooterCharacter (Player) 逻辑保持
-                        if (relation == g_ESP::RelationType::Team) {
-                            if (!g_Config::bESPTeamEnabled) {
-                                entry.targetAlpha = 0.0f;
-                                entry.aliveThisFrame = false;
-                                continue;
-                            }
-                            bShowRagdoll = g_Config::bDrawRagdollTeam;
-                            RagdollCol = g_Config::RagdollColorTeam;
-                            DistCol = g_Config::RagdollColorTeam;
-                        }
-                        else {
-                            bShowRagdoll = g_Config::bDrawRagdoll;
-                            RagdollCol = g_Config::RagdollColor;
-                            DistCol = g_Config::RagdollColor;
-                        }
-                    }
+                    const bool bShowRagdoll = g_Config::bDrawRagdoll;
+                    const float* RagdollCol = relation == g_ESP::RelationType::Team ? g_Config::RagdollColorTeam : g_Config::RagdollColor;
+                    const float* DistCol = relation == g_ESP::RelationType::Team ? g_Config::DistanceColorTeam : g_Config::DistanceColor;
 
                     if (!bShowRagdoll) {
                         entry.targetAlpha = 0.0f;
@@ -1818,7 +2950,15 @@ namespace g_DrawESP {
                         continue;
                     }
 
-                    g_ESP::BoxRect rect = g_ESP::GetBox(Canvas, TargetActor, 0.5f, false);
+                    SDK::FVector VisualOrigin{};
+                    SDK::FVector VisualExtent{};
+                    const bool HasVisualBounds = isDino && ResolveCharacterVisualBounds(
+                        TargetChar, entry, actorLoc, ActorRefreshNow,
+                        &VisualOrigin, &VisualExtent);
+                    g_ESP::BoxRect rect = g_ESP::GetBox(
+                        Canvas, TargetActor, 0.5f, true,
+                        HasVisualBounds ? &VisualOrigin : nullptr,
+                        HasVisualBounds ? &VisualExtent : nullptr);
 
                     if (!rect.valid) {
                         entry.targetAlpha = 0.0f;
@@ -1832,50 +2972,35 @@ namespace g_DrawESP {
                     entry.targetAlpha = 1.0f;
                     entry.aliveThisFrame = true;
 
-                    if (isDino) {
-                        if (relation == g_ESP::RelationType::Team) {
-                            entry.shouldDrawBox = g_Config::bTeamDinoDrawBox;
-                            entry.shouldDrawName = g_Config::bTeamDinoDrawName;
-                            entry.shouldDrawDistance = g_Config::bTeamDinoDrawDistance;
-                        }
-                        else {
-                            entry.shouldDrawBox = g_Config::bDinoDrawBox;
-                            entry.shouldDrawName = g_Config::bDinoDrawName;
-                            entry.shouldDrawDistance = g_Config::bDinoDrawDistance;
-                        }
-                    }
-                    else {
-                        if (relation == g_ESP::RelationType::Team) {
-                            entry.shouldDrawBox = g_Config::bDrawBoxTeam;
-                            entry.shouldDrawName = g_Config::bDrawNameTeam;
-                            entry.shouldDrawDistance = g_Config::bDrawDistanceTeam;
-                        }
-                        else {
-                            entry.shouldDrawBox = g_Config::bDrawBox;
-                            entry.shouldDrawName = g_Config::bDrawName;
-                            entry.shouldDrawDistance = g_Config::bDrawDistance;
-                        }
-                    }
+                    entry.shouldDrawBox = g_Config::bDrawBox;
+                    entry.shouldDrawName = g_Config::bDrawName;
+                    entry.shouldDrawDistance = g_Config::bDrawDistance;
 
                     entry.shouldDrawHealthBar = false;
                     entry.shouldDrawTorpor = false;
                     entry.flags.clear();
                     entry.bars.clear();
 
+                    entry.labelScale = GetDinoLabelScale(dist);
+
                     std::string deadLabel;
+                    if (entry.shouldDrawDistance && isDino) {
+                        deadLabel = "[" + std::to_string((int)dist) + "m]";
+                    }
                     if (entry.shouldDrawName) {
-                        deadLabel = TargetPS
+                        if (!deadLabel.empty()) deadLabel += "  ";
+                        deadLabel += TargetPS
                             ? TargetPS->GetPlayerName().ToString()
                             : TargetChar->GetDescriptiveName().ToString();
                     }
-                    if (entry.shouldDrawDistance) {
+                    if (entry.shouldDrawDistance && !isDino) {
                         if (!deadLabel.empty()) deadLabel += "  ";
                         deadLabel += "[" + std::to_string((int)dist) + "m]";
                     }
                     if (!deadLabel.empty()) {
                         entry.flags.push_back({ std::move(deadLabel),
-                            entry.shouldDrawName ? entry.boxColor : entry.distanceColor,
-                            g_ESP::FlagPos::Bottom });
+                            entry.shouldDrawDistance ? entry.distanceColor : entry.boxColor,
+                            isDino ? g_ESP::FlagPos::Top : g_ESP::FlagPos::Bottom });
                     }
                     continue;
                 }
@@ -1892,73 +3017,101 @@ namespace g_DrawESP {
                 }
 
                 g_ESP::RelationType relation = g_ESP::GetRelation(TargetChar, LocalChar);
+                entry.relation = relation;
+                const bool Friendly = relation == g_ESP::RelationType::Team;
 
-                bool   bDrawBox = false, bDrawHealthBar = false, bDrawName = false;
-                bool   bDrawGrowth = false, bDrawDistance = false, bDrawTorpor = false;
-                float* BoxColor = nullptr;
-                float* NameColor = nullptr;
-                float* DistanceColor = nullptr;
-                float* TorporColor = nullptr;
-
-                if (isDino) {
-                    if (relation == g_ESP::RelationType::Team) {
-                        bDrawBox = g_Config::bTeamDinoDrawBox;
-                        BoxColor = g_Config::TeamDinoBoxColor;
-                        bDrawHealthBar = g_Config::bTeamDinoDrawHealthBar;
-                        bDrawName = g_Config::bTeamDinoDrawName;
-                        NameColor = g_Config::TeamDinoNameColor;
-                        bDrawDistance = g_Config::bTeamDinoDrawDistance;
-                        DistanceColor = g_Config::TeamDinoDistanceColor;
-                        bDrawTorpor = g_Config::bTeamDinoDrawTorpor;
-                        TorporColor = g_Config::TeamDinoTorporColor;
-                        bDrawGrowth = false; // 生物通常不应用玩家类型的Growth特征
-                    }
-                    else {
-                        bDrawBox = g_Config::bDinoDrawBox;
-                        BoxColor = g_Config::DinoBoxColor;
-                        bDrawHealthBar = g_Config::bDinoDrawHealthBar;
-                        bDrawName = g_Config::bDinoDrawName;
-                        NameColor = g_Config::DinoNameColor;
-                        bDrawDistance = g_Config::bDinoDrawDistance;
-                        DistanceColor = g_Config::DinoDistanceColor;
-                        bDrawTorpor = g_Config::bDinoDrawTorpor;
-                        TorporColor = g_Config::DinoTorporColor;
-                        bDrawGrowth = false;
-                    }
-                }
-                else {
-                    if (relation == g_ESP::RelationType::Team) {
-                        if (!g_Config::bESPTeamEnabled) {
-                            entry.targetAlpha = 0.0f;
-                            entry.aliveThisFrame = false;
-                            continue;
+                if (isDino && g_Config::bShowCreatureAggro && LocalChar &&
+                    TargetChar->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
+                    if (ActorRefreshNow >= entry.nextAggroRefresh) {
+                        auto* Dino = static_cast<SDK::APrimalDinoCharacter*>(TargetChar);
+                        entry.localAggro = 0;
+                        SDK::AActor* AttackTarget = nullptr;
+                        SDK::FVector AttackLocation{};
+                        bool HasTarget = false;
+                        Dino->BPGetReplicatedAttackTargets(&AttackTarget, &AttackLocation, &HasTarget);
+                        if (HasTarget && AttackTarget == LocalChar) {
+                            entry.localAggro = 1;
+                        } else if (HasTarget && AttackTarget &&
+                                   LocalChar->IsA(SDK::AShooterCharacter::StaticClass())) {
+                            auto* Mount = static_cast<SDK::AShooterCharacter*>(LocalChar)->MountedDino.Get();
+                            if (Mount && AttackTarget == Mount) entry.localAggro = 2;
                         }
-                        bDrawBox = g_Config::bDrawBoxTeam;
-                        BoxColor = g_Config::BoxColorTeam;
-                        bDrawHealthBar = g_Config::bDrawHealthBarTeam;
-                        bDrawName = g_Config::bDrawNameTeam;
-                        NameColor = g_Config::NameColorTeam;
-                        bDrawGrowth = g_Config::bDrawGrowthTeam;
-                        bDrawDistance = g_Config::bDrawDistanceTeam;
-                        DistanceColor = g_Config::DistanceColorTeam;
-                        bDrawTorpor = g_Config::bDrawTorporTeam;
-                        TorporColor = g_Config::TorporColorTeam;
+                        const bool Hostile = !Friendly &&
+                            (entry.localAggro != 0 || Dino->BPIsTamed() ||
+                             Dino->IsHostileOrAggressiveTo(LocalChar));
+                        entry.creatureAggroStencil = Hostile ? HostileDinoStencil :
+                            Dino->IsFleeing() ? FleeingDinoStencil : CalmDinoStencil;
+                        entry.nextAggroRefresh = ActorRefreshNow + std::chrono::milliseconds(250);
                     }
-                    else {
-                        bDrawBox = g_Config::bDrawBox;
-                        BoxColor = g_Config::BoxColor;
-                        bDrawHealthBar = g_Config::bDrawHealthBar;
-                        bDrawName = g_Config::bDrawName;
-                        NameColor = g_Config::NameColor;
-                        bDrawGrowth = g_Config::bDrawGrowth;
-                        bDrawDistance = g_Config::bDrawDistance;
-                        DistanceColor = g_Config::DistanceColor;
-                        bDrawTorpor = g_Config::bDrawTorpor;
-                        TorporColor = g_Config::TorporColor;
+                } else {
+                    entry.localAggro = 0;
+                    entry.creatureAggroStencil = 0;
+                    entry.nextAggroRefresh = {};
+                }
+
+                if ((g_Config::bModelHighlightEnabled || (isDino && g_Config::bShowCreatureAggro)) &&
+                    std::isfinite(dist) &&
+                    dist <= std::clamp(g_Config::ModelHighlightMaxDistance,
+                        25.0f, 1000.0f)) {
+                    const uint8_t HighlightStencil = isDino && g_Config::bShowCreatureAggro &&
+                        entry.creatureAggroStencil ? entry.creatureAggroStencil :
+                        Friendly ? FriendlyDinoStencil : HostileDinoStencil;
+                    const auto HighlightMesh = [&](SDK::USkeletalMeshComponent* Mesh) {
+                        const HighlightObjectRef MeshRef = CaptureHighlightObjectRef(Mesh);
+                        if (MeshRef.Component) s_actorDesiredHighlights[MeshRef.Component] = {
+                            MeshRef.ObjectIndex, MeshRef.SerialNumber,
+                            HighlightStencil, true};
+                    };
+                    HighlightMesh(TargetChar->Mesh);
+                    // Walk existing attachments: the SDK cannot free an engine-
+                    // allocated GetComponentsByClass result. Clothing belongs to
+                    // the survivor; attached weapons owned by other actors do not.
+                    if (!isDino && TargetChar->Mesh) {
+                        std::vector<SDK::USceneComponent*> Pending{TargetChar->Mesh};
+                        std::unordered_set<SDK::USceneComponent*> SeenComponents;
+                        for (size_t I = 0; I < Pending.size() && I < 128; ++I) {
+                            auto* Component = Pending[I];
+                            if (!Component || !Component->Class || !SeenComponents.insert(Component).second) continue;
+                            if (Component->Outer == TargetChar && Component->IsA(SDK::USkeletalMeshComponent::StaticClass()))
+                                HighlightMesh(static_cast<SDK::USkeletalMeshComponent*>(Component));
+                            const auto& Children = Component->AttachChildren;
+                            if (Children.Num() > 0 && Children.Num() <= 128 && Children.IsValid())
+                                for (auto* Child : Children) {
+                                    if (Pending.size() >= 128) break;
+                                    if (Child) Pending.push_back(Child);
+                                }
+                        }
                     }
                 }
 
-                g_ESP::BoxRect rect = g_ESP::GetBox(Canvas, TargetActor, 0.5f, true);
+                if (!isDino) CollectEquipment(static_cast<SDK::AShooterCharacter*>(TargetChar), entry, ActorRefreshNow);
+                const bool bDrawBox = g_Config::bDrawBox || g_Config::bMinimalESP, bDrawHealthBar = g_Config::bDrawHealthBar;
+                const bool bDrawName = g_Config::bDrawName, bDrawDistance = g_Config::bDrawDistance;
+                const bool bDrawTorpor = g_Config::bDrawTorpor;
+                const float* BoxColor = Friendly ? g_Config::BoxColorTeam : g_Config::BoxColor;
+                const float* NameColor = Friendly ? g_Config::NameColorTeam : g_Config::NameColor;
+                const float* DistanceColor = Friendly ? g_Config::DistanceColorTeam : g_Config::DistanceColor;
+                const float* TorporColor = Friendly ? g_Config::TorporColorTeam : g_Config::TorporColor;
+
+                SDK::FVector VisualOrigin{};
+                SDK::FVector VisualExtent{};
+                g_ESP::BoxRect rect{};
+                const bool NeedsVisualRect = bDrawBox || bDrawHealthBar || bDrawName ||
+                    bDrawDistance || bDrawTorpor ||
+                    (isDino && g_Config::bShowCreatureAggro) ||
+                    g_Config::bEnableOOF || (!isDino && (g_Config::bDrawArmorQuality || g_Config::bDrawHeldWeapon));
+                if (NeedsVisualRect) {
+                    const bool HasVisualBounds = isDino && ResolveCharacterVisualBounds(
+                        TargetChar, entry, actorLoc, ActorRefreshNow,
+                        &VisualOrigin, &VisualExtent);
+                    if (HasVisualBounds) {
+                        entry.indicatorWorldLoc = VisualOrigin;
+                    }
+                    rect = g_ESP::GetBox(
+                        Canvas, TargetActor, 0.5f, true,
+                        HasVisualBounds ? &VisualOrigin : nullptr,
+                        HasVisualBounds ? &VisualExtent : nullptr);
+                }
 
                 entry.cachedRect = rect;
                 entry.boxColor = Shadow::Color{ BoxColor[0], BoxColor[1], BoxColor[2], BoxColor[3] };
@@ -1986,6 +3139,10 @@ namespace g_DrawESP {
                 entry.shouldDrawDistance = bDrawDistance;
                 entry.shouldDrawTorpor = bDrawTorpor;
 
+                const float TargetLabelScale = GetDinoLabelScale(dist);
+                const float ScaleBlend = std::clamp(deltaTime * 10.0f, 0.0f, 1.0f);
+                entry.labelScale += (TargetLabelScale - entry.labelScale) * ScaleBlend;
+
                 if (bDrawName) {
                     const char* genderSuffix = TargetActor->IsFemale() ? "-F" : "-M";
                     entry.name = TargetPS
@@ -1999,21 +3156,33 @@ namespace g_DrawESP {
                 entry.flags.clear();
                 entry.bars.clear();
 
-                std::string primaryLabel = bDrawName ? entry.name : std::string{};
-                if (bDrawDistance) {
+                if (isDino && g_Config::bShowCreatureAggro && entry.localAggro)
+                    entry.flags.push_back({LanguageManager::Get().TranslateCopy(
+                        entry.localAggro == 1 ? "正在攻击你" : "正在攻击坐骑"),
+                        Shadow::Color{1.0f, 0.32f, 0.18f, 1.0f}, g_ESP::FlagPos::Bottom});
+
+                std::string primaryLabel;
+                if (bDrawDistance && isDino) {
+                    primaryLabel = "[" + std::to_string((int)dist) + "m]";
+                }
+                if (bDrawName) {
+                    if (!primaryLabel.empty()) primaryLabel += "  ";
+                    primaryLabel += entry.name;
+                }
+                if (bDrawDistance && !isDino) {
                     if (!primaryLabel.empty()) primaryLabel += "  ";
                     primaryLabel += "[" + std::to_string((int)dist) + "m]";
                 }
                 if (!primaryLabel.empty()) {
                     entry.flags.push_back({ std::move(primaryLabel),
-                        bDrawName ? entry.nameColor : entry.distanceColor,
-                        g_ESP::FlagPos::Bottom });
+                        bDrawDistance ? entry.distanceColor : entry.nameColor,
+                        isDino ? g_ESP::FlagPos::Top : g_ESP::FlagPos::Bottom });
                 }
 
                 if (bDrawHealthBar) {
                     const float healthPct = (entry.cachedMaxHP > 0.0f) ? (entry.cachedHP / entry.cachedMaxHP) : 0.0f;
-                    float* colMax = (relation == g_ESP::RelationType::Team) ? g_Config::TeamHealthColor1 : g_Config::HealthBarColor1;
-                    float* colMin = (relation == g_ESP::RelationType::Team) ? g_Config::TeamHealthColor2 : g_Config::HealthBarColor2;
+                    float* colMax = Friendly ? g_Config::TeamHealthColor1 : g_Config::HealthBarColor1;
+                    float* colMin = Friendly ? g_Config::TeamHealthColor2 : g_Config::HealthBarColor2;
 
                     const Shadow::Color hpCol = GetHealthColorLinear(healthPct, colMax, colMin);
 
@@ -2030,23 +3199,42 @@ namespace g_DrawESP {
                     entry.bars.push_back({ entry.cachedTorpor, entry.cachedMaxTorpor, torporCol, g_ESP::BarPos::Bottom, g_ESP::BarOrientation::Horizontal });
                 }
 
-                const bool onScreen = rect.valid && rect.bottomRight.x > 0.0f &&
-                    rect.topLeft.x < screenW && rect.bottomRight.y > 0.0f &&
-                    rect.topLeft.y < screenH;
+                // Use the model centre with an inner safe area. A tail/wing
+                // touching one edge no longer makes the direction arrow flash
+                // on and off while the target itself remains off screen.
+                const float RectCenterX = rect.valid
+                    ? (rect.topLeft.x + rect.bottomRight.x) * 0.5f : -1.0f;
+                const float RectCenterY = rect.valid
+                    ? (rect.topLeft.y + rect.bottomRight.y) * 0.5f : -1.0f;
+                constexpr float ScreenEdgeHysteresis = 18.0f;
+                const bool onScreen = rect.valid &&
+                    RectCenterX >= ScreenEdgeHysteresis &&
+                    RectCenterX <= screenW - ScreenEdgeHysteresis &&
+                    RectCenterY >= ScreenEdgeHysteresis &&
+                    RectCenterY <= screenH - ScreenEdgeHysteresis;
                 if (onScreen) {
                     entry.targetAlpha = 1.0f;
                     entry.isOOF = false;
                 }
+                else if (g_Config::bEnableOOF &&
+                    relation == g_ESP::RelationType::Enemy &&
+                    std::isfinite(dist) && dist <= std::clamp(
+                        g_Config::OOFMaxDistance, 25.0f, 2000.0f)) {
+                    entry.targetAlpha = 1.0f;
+                    entry.aliveThisFrame = true;
+                    entry.isOOF = true;
+                }
                 else {
                     entry.targetAlpha = 0.0f;
                     entry.aliveThisFrame = false;
+                    entry.isOOF = false;
                 }
             }
 
             // ============================================================
             // Branch: WaterVolume
             // ============================================================
-            else if (entry.actorType == ActorType::PhysicsVolume && g_Config::bDrawWater) {
+            else if (entry.actorType == ActorType::PhysicsVolume && g_Config::bDrawWater && !g_Config::bCombatESP) {
                 SDK::APhysicsVolume* PV = static_cast<SDK::APhysicsVolume*>(TargetActor);
                 if (!PV->bWaterVolume && !PV->bDynamicWaterVolume) {
                     entry.targetAlpha = 0.0f;
@@ -2068,7 +3256,7 @@ namespace g_DrawESP {
             // ============================================================
             // Branch: DroppedItem
             // ============================================================
-            else if (entry.actorType == ActorType::DroppedItem && g_Config::bDrawDroppedItems) {
+            else if (entry.actorType == ActorType::DroppedItem && g_Config::bDrawDroppedItems && !g_Config::bCombatESP) {
                 SDK::ADroppedItem* DroppedItem = static_cast<SDK::ADroppedItem*>(TargetActor);
                 SDK::UPrimalItem* Item = DroppedItem ? DroppedItem->MyItem : nullptr;
 
@@ -2096,12 +3284,28 @@ namespace g_DrawESP {
                 }
 
                 SDK::FVector2D screenPos;
-                bool bIsProjected = LocalPC && LocalPC->ProjectWorldLocationToScreen(actorLoc, &screenPos, false);
-                bool bOnScreen = bIsProjected && (screenPos.X > 0 && screenPos.X < screenW && screenPos.Y > 0 && screenPos.Y < screenH);
+                const bool bIsProjected = LocalPC && g_ESP::ProjectToCanvas(Canvas, LocalPC, actorLoc, &screenPos);
+                const bool bOnScreen = bIsProjected && (screenPos.X > 0 && screenPos.X < screenW && screenPos.Y > 0 && screenPos.Y < screenH);
+
+                // JIT icons are already selected by the game for this item.
+                // The deprecated field is a cheap fallback while JIT loads.
+                if (bOnScreen && (entry.iconSourceItem != Item ||
+                    ActorRefreshNow >= entry.nextItemIconRefresh)) {
+                    entry.iconSourceItem = Item;
+                    entry.nextItemIconRefresh = ActorRefreshNow + std::chrono::milliseconds(500);
+                    entry.itemIcon = nullptr;
+                    entry.itemIconIndex = entry.itemIconSerial = -1;
+                    const auto Icon = CaptureItemTexture(Item);
+                    entry.itemIcon = Icon.texture;
+                    entry.itemIconIndex = Icon.index;
+                    entry.itemIconSerial = Icon.serial;
+                    entry.itemQualityColor = ResolveItemQuality(Item, SDK::UPrimalGameData::BPGetGameData()).color;
+                }
 
                 if (bIsProjected) {
-                    entry.cachedRect.topLeft = Shadow::Vec2{ (float)(screenPos.X - 5), (float)(screenPos.Y - 5) };
-                    entry.cachedRect.bottomRight = Shadow::Vec2{ (float)(screenPos.X + 5), (float)(screenPos.Y + 5) };
+                    const float HalfSize = entry.itemIcon ? g_Config::ESPIconPixels * 0.5f : 5.0f;
+                    entry.cachedRect.topLeft = Shadow::Vec2{ (float)(screenPos.X - HalfSize), (float)(screenPos.Y - HalfSize) };
+                    entry.cachedRect.bottomRight = Shadow::Vec2{ (float)(screenPos.X + HalfSize), (float)(screenPos.Y + HalfSize) };
                     entry.cachedRect.valid = true;
                 }
 
@@ -2150,120 +3354,166 @@ namespace g_DrawESP {
             // Branch: PrimalStructure
             // ============================================================
             else if (entry.actorType == ActorType::PrimalStructure) {
-                // 如果两项结构开关都没开，则直接跳过拦截
-                if (!g_Config::bDrawStructures && !g_Config::bTeamDrawStructures) {
-                    entry.targetAlpha = 0.0f;
-                    entry.aliveThisFrame = false;
-                    continue;
-                }
-
-                SDK::APrimalStructure* Structure = static_cast<SDK::APrimalStructure*>(TargetActor);
-
-                if (Structure->Health <= 0.0f) {
-                    entry.targetAlpha = 0.0f;
-                    entry.aliveThisFrame = false;
-                    continue;
-                }
-
-                // Team ownership is represented by TargetingTeam. OwnerName is
-                // only a display string and may contain the player rather than
-                // the tribe, so it is used solely as a legacy fallback.
-                bool isTeam = false;
-                if (LocalChar) {
-                    const int32_t LocalTeam = LocalChar->TargetingTeam;
-                    const int32_t StructureTeam = Structure->TargetingTeam;
-                    isTeam = LocalTeam != 0 && StructureTeam != 0 &&
-                        LocalTeam == StructureTeam;
-                    if (!isTeam && (LocalTeam == 0 || StructureTeam == 0)) {
-                        const std::string LocalTribe = LocalChar->TribeName.ToString();
-                        const std::string OwnerName = Structure->OwnerName.ToString();
-                        isTeam = !LocalTribe.empty() && LocalTribe != "None" &&
-                            LocalTribe == OwnerName;
-                    }
-                }
-                if (isTeam && !g_Config::bTeamDrawStructures) {
-                    entry.targetAlpha = 0.0f;
-                    entry.aliveThisFrame = false;
-                    continue;
-                }
-                if (!isTeam && !g_Config::bDrawStructures) {
-                    entry.targetAlpha = 0.0f;
-                    entry.aliveThisFrame = false;
-                    continue;
-                }
-
-                if (hasStructureFilter) {
-                    std::string sName = Structure->GetDescriptiveName().ToString();
-                    if (sName.empty() || sName == "None") sName = "Structure";
-                    if (!g_Util::IsStructureMatchMulti(sName, rawStructFilter)) {
-                        entry.targetAlpha = 0.0f;
-                        entry.aliveThisFrame = false;
-                        continue;
-                    }
-                }
-
-                // 获取并使用不同的距离过滤
-                float maxDist = isTeam ? g_Config::TeamStructureMaxDistance : g_Config::StructureMaxDistance;
-                const float dist = (LocalPC && LocalPC->Pawn && TargetActor) ? LocalPC->Pawn->GetDistanceTo(TargetActor) * 0.01f : 0.0f;
-                if (dist > maxDist) {
-                    entry.targetAlpha = 0.0f;
-                    entry.aliveThisFrame = false;
-                    continue;
-                }
-
-                SDK::FVector2D screenPos;
-                bool bProjected = LocalPC && LocalPC->ProjectWorldLocationToScreen(actorLoc, &screenPos, false);
-
-                if (bProjected) {
-                    entry.cachedRect.topLeft = Shadow::Vec2{ (float)(screenPos.X - 2), (float)(screenPos.Y - 2) };
-                    entry.cachedRect.bottomRight = Shadow::Vec2{ (float)(screenPos.X + 2), (float)(screenPos.Y + 2) };
-                    entry.cachedRect.valid = true;
-                }
-
-                bool bOnScreen = bProjected && (screenPos.X > 0 && screenPos.X < screenW && screenPos.Y > 0 && screenPos.Y < screenH);
-
-                if (bOnScreen) {
-                    entry.aliveThisFrame = true;
-                    entry.targetAlpha = 1.0f;
-                    entry.isItem = true;
-                }
-                else {
-                    entry.targetAlpha = 0.0f;
-                    entry.aliveThisFrame = false;
-                }
-
-                std::string sName = Structure->GetDescriptiveName().ToString();
-                if (sName.empty() || sName == "None") sName = "Structure";
-
-                const float curHP = Structure->Health;
-                const float maxHP = Structure->MaxHealth;
-                const float healthPct = (maxHP > 0.0f) ? (curHP / maxHP) : 0.0f;
-                const int   hpPctInt = (int)(healthPct * 100.0f);
-
-                float* sColMax = isTeam ? g_Config::TeamStructureHealthColor1 : g_Config::StructureHealthColor1;
-                float* sColMin = isTeam ? g_Config::TeamStructureHealthColor2 : g_Config::StructureHealthColor2;
-
-                const Shadow::Color hpColor = GetHealthColorLinear(healthPct, sColMax, sColMin);
-
-                std::string owner = Structure->OwnerName.ToString();
-                std::string ownerStf = (owner.empty() || owner == "None") ? "" : " [" + owner + "]";
-
+                auto* Structure = static_cast<SDK::APrimalStructure*>(TargetActor);
+                entry.targetAlpha = 0.0f;
+                entry.aliveThisFrame = false;
+                entry.isItem = false;
+                entry.characterAlive = false;
+                entry.selectedTarget = false;
+                entry.shouldDrawTorpor = false;
                 entry.flags.clear();
                 entry.bars.clear();
+                entry.owner.clear();
+                const bool IsTurret = Structure->IsA(SDK::APrimalStructureTurret::StaticClass());
+                entry.ammo.clear();
+                entry.lootContents.clear();
+                if ((g_Config::bCombatESP && !IsTurret) ||
+                    (!g_Config::bDrawStructures && !(IsTurret && (g_Config::bDrawTurretAmmo || g_Config::bCombatESP))) || Structure->bIsPreviewStructure ||
+                    !std::isfinite(Structure->Health) || Structure->Health <= 0.0f) continue;
 
-                entry.flags.push_back({
-                    "[" + sName + "]" + std::move(ownerStf) + " [" + std::to_string(hpPctInt) + "%] (" + std::to_string((int)dist) + "m" + ")",
-                    hpColor,
-                    g_ESP::FlagPos::Right
-                    });
+                const float Distance = LocalPC->Pawn->GetDistanceTo(TargetActor) * 0.01f;
+                if (!std::isfinite(Distance) || !std::isfinite(g_Config::StructureMaxDistance) ||
+                    Distance > std::clamp(g_Config::StructureMaxDistance, 1.0f, 10000.0f)) continue;
+                entry.distanceMeters = Distance;
+                std::string Name = Structure->GetDescriptiveName().ToString();
+                if (Name.empty() || Name == "None") Name = "Structure";
+                if (hasStructureFilter && !g_Util::IsStructureMatchMulti(Name, rawStructFilter)) continue;
+                if (StructureTypes.Enabled || g_Config::bStructureShowLootContents) {
+                    if (!entry.structureTypeKnown) {
+                        entry.structureType = ClassifyStructure(Structure, Name);
+                        entry.structureTypeKnown = true;
+                    }
+                }
+                if (!StructureTypes.Allows(entry.structureType)) continue;
 
-                entry.shouldDrawTorpor = false;
+                bool Friendly = LocalChar && LocalChar->TargetingTeam != 0 &&
+                    LocalChar->TargetingTeam == Structure->TargetingTeam;
+                if (!Friendly && LocalChar && (LocalChar->TargetingTeam == 0 || Structure->TargetingTeam == 0)) {
+                    const auto Tribe = LocalChar->TribeName.ToString();
+                    Friendly = !Tribe.empty() && Tribe != "None" && Tribe == Structure->OwnerName.ToString();
+                }
+                entry.relation = Friendly ? g_ESP::RelationType::Team : g_ESP::RelationType::Enemy;
+                if (IsTurret && (g_Config::bDrawTurretAmmo || g_Config::bCombatESP)) {
+                    const int Ammo = static_cast<SDK::APrimalStructureTurret*>(Structure)->NumBullets;
+                    entry.ammo = LanguageManager::Get().TranslateCopy("弹量：") + (Ammo >= 0 ? std::to_string(Ammo) : "?");
+                }
+                if (g_Config::bStructureShowLootContents && !g_Config::bCombatESP &&
+                    (entry.structureType == g_ESP::Structures::Type::SupplyDrop ||
+                     entry.structureType == g_ESP::Structures::Type::LootCrate ||
+                     entry.structureType == g_ESP::Structures::Type::BuriedTreasure) &&
+                    Structure->IsA(SDK::APrimalStructureItemContainer::StaticClass())) {
+                    auto* Inventory = static_cast<SDK::APrimalStructureItemContainer*>(Structure)->MyInventoryComponent;
+                    int32_t Serial = -1;
+                    if (Inventory && TryGetLiveObjectSerial(Inventory, Inventory->Index, &Serial)) {
+                        const int32_t Count = Inventory->InventoryItems.Num();
+                        if (Count > 0 && Count <= 10000) {
+                            int Shown = 0, Inspected = 0;
+                            for (auto* Item : Inventory->InventoryItems) {
+                                if (++Inspected > 64) break;
+                                if (!Item || !TryGetLiveObjectSerial(Item, Item->Index, &Serial) ||
+                                    Item->ItemQuantity <= 0) continue;
+                                std::string ItemName = Item->DescriptiveNameBase.IsValid()
+                                    ? Item->DescriptiveNameBase.ToString()
+                                    : (Item->Class ? Item->Class->GetName() : "");
+                                if (ItemName.empty()) continue;
+                                entry.lootContents.push_back(ItemName + " x" + std::to_string(Item->ItemQuantity));
+                                if (++Shown == 3) break;
+                            }
+                            if (Shown && Count > Shown) entry.lootContents.push_back(LanguageManager::Get().TranslateCopy("…更多物品"));
+                        }
+                    }
+                }
+                if (g_Config::bStructureShowLootContents && entry.lootContents.empty() &&
+                    (entry.structureType == g_ESP::Structures::Type::SupplyDrop ||
+                     entry.structureType == g_ESP::Structures::Type::LootCrate ||
+                     entry.structureType == g_ESP::Structures::Type::BuriedTreasure)) {
+                    std::lock_guard<std::mutex> Guard(s_spyglassLootMutex);
+                    auto Cached = s_spyglassLoot.find(key);
+                    if (Cached != s_spyglassLoot.end()) {
+                        if (Cached->second.ObjectIndex == Structure->Index &&
+                            ActorRefreshNow - Cached->second.Received < std::chrono::seconds(8))
+                            entry.lootContents = Cached->second.Items;
+                        else s_spyglassLoot.erase(Cached);
+                    }
+                }
+                const bool Highlight = !g_Config::bCombatESP && g_Config::bModelHighlightEnabled &&
+                    Distance <= std::clamp(g_Config::ModelHighlightMaxDistance, 25.0f, 1000.0f);
+                const bool ShowInfo = !entry.ammo.empty() || !entry.lootContents.empty() || g_Config::bDrawBox || g_Config::bMinimalESP || g_Config::bDrawName ||
+                    g_Config::bDrawDistance || g_Config::bDrawHealthBar;
+                if (!Highlight && !ShowInfo) continue;
+
+                // Use rendered mesh bounds, excluding collision/range spheres.
+                // Queue highlights before projection so occluded/offscreen meshes
+                // use the same native material path as players and creatures.
+                static std::vector<HighlightObjectRef> StructureMeshes;
+                CollectStructureMeshes(Structure, StructureMeshes);
+                SDK::FVector Minimum{}, Maximum{};
+                bool HasBounds = false;
+                for (const auto& Ref : StructureMeshes) {
+                    if (Highlight) s_actorDesiredHighlights[Ref.Component] = {
+                        Ref.ObjectIndex, Ref.SerialNumber, Friendly ? FriendlyDinoStencil : HostileDinoStencil, true};
+                    if (!ShowInfo) continue;
+                    SDK::FVector Origin{}, Extent{};
+                    float Radius = 0;
+                    SDK::UKismetSystemLibrary::GetComponentBounds(Ref.Component, &Origin, &Extent, &Radius);
+                    if (!IsFiniteResourceVector(Origin) || !IsFiniteResourceVector(Extent) ||
+                        !std::isfinite(Radius) || Radius <= 0 || Extent.X <= 0 || Extent.Y <= 0 || Extent.Z <= 0 ||
+                        Extent.X > 250000 || Extent.Y > 250000 || Extent.Z > 250000) continue;
+                    const auto Low = Origin - Extent, High = Origin + Extent;
+                    if (!HasBounds) { Minimum = Low; Maximum = High; HasBounds = true; }
+                    else {
+                        Minimum = {std::min(Minimum.X, Low.X), std::min(Minimum.Y, Low.Y), std::min(Minimum.Z, Low.Z)};
+                        Maximum = {std::max(Maximum.X, High.X), std::max(Maximum.Y, High.Y), std::max(Maximum.Z, High.Z)};
+                    }
+                }
+                entry.aliveThisFrame = Highlight;
+                if (!ShowInfo) continue;
+                const SDK::FVector Origin = (Minimum + Maximum) * 0.5;
+                const SDK::FVector Extent = (Maximum - Minimum) * 0.5;
+                entry.cachedRect = g_ESP::GetBox(Canvas, TargetActor, 1.0f, false,
+                    HasBounds ? &Origin : nullptr, HasBounds ? &Extent : nullptr);
+                if (!entry.cachedRect.valid) continue;
+                const auto& Rect = entry.cachedRect;
+                if (Rect.bottomRight.x <= 0 || Rect.bottomRight.y <= 0 ||
+                    Rect.topLeft.x >= screenW || Rect.topLeft.y >= screenH) continue;
+
+                const float* BoxColor = Friendly ? g_Config::BoxColorTeam : g_Config::BoxColor;
+                const float* NameColor = Friendly ? g_Config::NameColorTeam : g_Config::NameColor;
+                const float* DistanceColor = Friendly ? g_Config::DistanceColorTeam : g_Config::DistanceColor;
+                entry.boxColor = {BoxColor[0], BoxColor[1], BoxColor[2], BoxColor[3]};
+                entry.nameColor = {NameColor[0], NameColor[1], NameColor[2], NameColor[3]};
+                entry.distanceColor = {DistanceColor[0], DistanceColor[1], DistanceColor[2], DistanceColor[3]};
+                entry.shouldDrawBox = !g_Config::bCombatESP && (g_Config::bDrawBox || g_Config::bMinimalESP);
+                entry.shouldDrawName = !g_Config::bCombatESP && g_Config::bDrawName;
+                entry.shouldDrawDistance = !g_Config::bCombatESP && g_Config::bDrawDistance;
+                entry.shouldDrawHealthBar = !g_Config::bCombatESP && g_Config::bDrawHealthBar;
+                entry.name = entry.shouldDrawName ? Name : "";
+                if (entry.shouldDrawName && g_Config::bStructureShowOwner) {
+                    entry.owner = Structure->OwnerName.ToString();
+                    if (entry.owner == "None") entry.owner.clear();
+                }
+                entry.cachedHP = Structure->Health;
+                entry.cachedMaxHP = std::isfinite(Structure->MaxHealth) ? Structure->MaxHealth : 0;
+                if (entry.shouldDrawHealthBar) {
+                    const auto Color = GetHealthColorLinear(entry.cachedMaxHP > 0 ? entry.cachedHP / entry.cachedMaxHP : 0,
+                        Friendly ? g_Config::TeamHealthColor1 : g_Config::HealthBarColor1,
+                        Friendly ? g_Config::TeamHealthColor2 : g_Config::HealthBarColor2);
+                    entry.bars.push_back({entry.cachedHP, entry.cachedMaxHP, Color,
+                        g_ESP::BarPos::Left, g_ESP::BarOrientation::Vertical});
+                }
+                entry.labelScale += (GetDinoLabelScale(Distance) - entry.labelScale) * std::clamp(deltaTime * 10.0f, 0.0f, 1.0f);
+                entry.aliveThisFrame = true;
+                entry.targetAlpha = 1.0f;
             }
             else {
                 entry.targetAlpha = 0.0f;
                 entry.aliveThisFrame = false;
             }
         } // end actor loop
+
+        ApplyCombinedModelHighlights();
+        ApplyResourceCameraHighlight(LocalPC);
+        ApplyResourceRenderPipeline(World);
 
         for (auto& kv : s_entries) {
             if (!kv.second.aliveThisFrame)
@@ -2302,7 +3552,7 @@ namespace g_DrawESP {
                 ESPEntry& wEntry = s_entries[wkey];
 
                 SDK::FVector2D currentScreenPos;
-                if (LocalPC && LocalPC->ProjectWorldLocationToScreen(wc.surfaceLoc, &currentScreenPos, false)) {
+                if (LocalPC && g_ESP::ProjectToCanvas(Canvas, LocalPC, wc.surfaceLoc, &currentScreenPos)) {
                     wEntry.cachedRect.topLeft = Shadow::Vec2{ (float)(currentScreenPos.X - 2), (float)(currentScreenPos.Y - 2) };
                     wEntry.cachedRect.bottomRight = Shadow::Vec2{ (float)(currentScreenPos.X + 2), (float)(currentScreenPos.Y + 2) };
                     wEntry.cachedRect.valid = true;
@@ -2342,7 +3592,9 @@ namespace g_DrawESP {
         // ----------------------------------------------------------------
         s_toErase.clear();
         static std::vector<ESPEntry*> RenderEntries;
+        static std::vector<ESPEntry*> OffscreenEntries;
         RenderEntries.clear();
+        OffscreenEntries.clear();
 
         for (auto& kv : s_entries) {
             ESPEntry& entry = kv.second;
@@ -2356,36 +3608,140 @@ namespace g_DrawESP {
             }
 
             if (entry.alpha > 0.001f) {
-                RenderEntries.push_back(&entry);
+				if (entry.isOOF && entry.aliveThisFrame) {
+					OffscreenEntries.push_back(&entry);
+				}
+				else {
+					RenderEntries.push_back(&entry);
+				}
             }
         }
+
+		std::sort(OffscreenEntries.begin(), OffscreenEntries.end(),
+			[](const ESPEntry* Left, const ESPEntry* Right) {
+				if (Left->distanceMeters != Right->distanceMeters) {
+					return Left->distanceMeters < Right->distanceMeters;
+				}
+				return Left->actorKey < Right->actorKey;
+			});
+		if (g_Config::bEnableOOF && !OffscreenEntries.empty()) {
+			SDK::FVector CameraLocation{};
+			SDK::FRotator CameraRotation{};
+			LocalPC->GetPlayerViewPoint(&CameraLocation, &CameraRotation);
+			const double IndicatorTime = std::chrono::duration<double>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+			static std::vector<Shadow::Vec2> OccupiedIndicatorTips;
+			OccupiedIndicatorTips.clear();
+			constexpr size_t MaximumVisibleThreats = 16;
+			size_t DrawnThreats = 0;
+			for (ESPEntry* Threat : OffscreenEntries) {
+				if (DrawnThreats >= MaximumVisibleThreats) break;
+				if (DrawOffscreenThreatIndicator(*Threat, CameraLocation,
+					CameraRotation, screenW, screenH, IndicatorTime,
+					OccupiedIndicatorTips)) {
+					++DrawnThreats;
+				}
+			}
+		}
 
         // Give readable labels to the visually nearest/largest targets first.
         // Farther labels that collide are suppressed by FlagManager instead of
         // being shifted away from the creature they describe.
         std::sort(RenderEntries.begin(), RenderEntries.end(), [](const ESPEntry* Left,
             const ESPEntry* Right) {
+                if (Left->selectedTarget != Right->selectedTarget) return Left->selectedTarget;
                 if (Left->aliveThisFrame != Right->aliveThisFrame) {
                     return Left->aliveThisFrame > Right->aliveThisFrame;
                 }
-                const float LeftHeight = Left->cachedRect.valid
-                    ? Left->cachedRect.bottomRight.y - Left->cachedRect.topLeft.y : 0.0f;
-                const float RightHeight = Right->cachedRect.valid
-                    ? Right->cachedRect.bottomRight.y - Right->cachedRect.topLeft.y : 0.0f;
-                if (LeftHeight != RightHeight) return LeftHeight > RightHeight;
+                const auto IsCharacterEntry = [](const ESPEntry* Entry) {
+                    return Entry->actorType == ActorType::ShooterCharacter ||
+                        Entry->actorType == ActorType::PrimalDinoCharacter ||
+                        Entry->actorType == ActorType::PrimalCharacter;
+                    };
+                if (IsCharacterEntry(Left) != IsCharacterEntry(Right)) {
+                    return IsCharacterEntry(Left) > IsCharacterEntry(Right);
+                }
+                if (Left->distanceMeters != Right->distanceMeters) {
+                    return Left->distanceMeters < Right->distanceMeters;
+                }
                 return Left->actorKey < Right->actorKey;
             });
 
-        g_ESP::BeginLabelFrame();
         for (ESPEntry* Entry : RenderEntries) {
             ESPEntry& entry = *Entry;
-            if (entry.alpha > 0.001f) {
+            if (entry.alpha > 0.001f && entry.aliveThisFrame) {
+                if (entry.actorType == ActorType::DroppedItem && entry.itemIcon &&
+                    entry.cachedRect.valid) {
+                    int32_t Serial = -1;
+                    if (TryGetLiveObjectSerial(entry.itemIcon, entry.itemIconIndex, &Serial) &&
+                        Serial == entry.itemIconSerial &&
+                        !(entry.itemIcon->Flags & SDK::EObjectFlags::BeginDestroyed) &&
+                        !(entry.itemIcon->Flags & SDK::EObjectFlags::FinishDestroyed)) {
+                        const SDK::FVector2D IconPosition{entry.cachedRect.topLeft.x, entry.cachedRect.topLeft.y};
+                        const SDK::FVector2D IconSize{g_Config::ESPIconPixels, g_Config::ESPIconPixels};
+                        const SDK::FVector2D Zero{0.0, 0.0}, One{1.0, 1.0};
+                        if (Canvas->DefaultTexture && entry.itemQualityColor.a > 0.0f) {
+                            const auto& C = entry.itemQualityColor;
+                            Canvas->K2_DrawTexture(Canvas->DefaultTexture, IconPosition, IconSize,
+                                Zero, One, {C.r, C.g, C.b, entry.alpha * 0.8f},
+                                SDK::EBlendMode::BLEND_Translucent, 0.0f, Zero);
+                        }
+                        const double Inset = entry.itemQualityColor.a > 0.0f ? 2.0 : 0.0;
+                        Canvas->K2_DrawTexture(entry.itemIcon,
+                            {IconPosition.X + Inset, IconPosition.Y + Inset},
+                            {IconSize.X - 2.0 * Inset, IconSize.Y - 2.0 * Inset},
+                            Zero, One, {1.0f, 1.0f, 1.0f, entry.alpha},
+                            SDK::EBlendMode::BLEND_Translucent, 0.0f, Zero);
+                    }
+                }
                 if (!entry.isItem && entry.shouldDrawBox && entry.cachedRect.valid) {
                     Shadow::Color boxCol = entry.boxColor;
 
                     g_ESP::DrawBox(Canvas, entry.cachedRect, boxCol, entry.alpha);
                 }
 
+                if (entry.actorType == ActorType::PrimalStructure ||
+                    (entry.characterAlive && (entry.actorType == ActorType::ShooterCharacter ||
+                    entry.actorType == ActorType::PrimalDinoCharacter || entry.actorType == ActorType::PrimalCharacter))) {
+                    g_ESP::EntityInfo Info;
+                    if (entry.actorType == ActorType::ShooterCharacter) {
+                        if (g_Config::bDrawArmorQuality) Info.Armor = entry.armor;
+                        if (g_Config::bDrawHeldWeapon) Info.Weapon = entry.weapon;
+                        if (g_Config::bDrawArmorQuality)
+                            for (size_t Slot = 0; Slot < Info.ArmorIcons.size(); ++Slot) {
+                                Info.ArmorIcons[Slot] = LiveItemTexture(entry.armorIcons[Slot]);
+                                Info.ArmorQualityColors[Slot] = entry.armorQualityColors[Slot];
+                            }
+                        if (g_Config::bDrawHeldWeapon) {
+                            Info.WeaponIcon = LiveItemTexture(entry.weaponIcon);
+                            Info.WeaponQualityColor = entry.weaponQualityColor;
+                        }
+                        Info.ArmorColor = ExpansionColor(g_Config::ArmorQualityColor);
+                        Info.WeaponColor = ExpansionColor(g_Config::HeldWeaponColor);
+                    }
+                    Info.Ammo = entry.ammo;
+                    Info.LootItems = entry.lootContents;
+                    Info.AmmoColor = ExpansionColor(g_Config::TurretAmmoColor);
+                    Info.Name = entry.shouldDrawName ? entry.name : "";
+                    if (entry.actorType == ActorType::PrimalStructure) {
+                        Info.Detail = entry.owner.empty() ? "" : "归属：" + entry.owner;
+                        const auto* Color = g_Config::StructureOwnerColor;
+                        Info.DetailColor = {Color[0], Color[1], Color[2], Color[3]};
+                    }
+                    Info.Distance = entry.distanceMeters;
+                    Info.Health = entry.cachedHP; Info.MaxHealth = entry.cachedMaxHP;
+                    Info.Torpor = entry.cachedTorpor; Info.MaxTorpor = entry.cachedMaxTorpor;
+                    Info.Scale = entry.labelScale; Info.Alpha = entry.alpha;
+                    Info.ShowDistance = entry.shouldDrawDistance; Info.ShowHealth = entry.shouldDrawHealthBar;
+                    Info.ShowTorpor = entry.shouldDrawTorpor;
+                    Info.NameColor = entry.nameColor; Info.DistanceColor = entry.distanceColor;
+                    for (const auto& Bar : entry.bars) {
+                        if (Bar.pos == g_ESP::BarPos::Left) Info.HealthColor = Bar.color;
+                        else Info.TorporColor = Bar.color;
+                    }
+                    g_ESP::DrawEntityInfo(Canvas, entry.cachedRect, Info, entry.infoSlot);
+                    continue;
+                }
                 g_ESP::BarManager bm;
                 bm.Reset();
                 for (const auto& bar : entry.bars)
@@ -2394,11 +3750,13 @@ namespace g_DrawESP {
                 g_ESP::FlagManager fm;
                 fm.Reset();
                 for (const auto& f : entry.flags)
-                    fm.AddFlag(Canvas, entry.cachedRect, f.text, f.color, f.pos, entry.alpha, &bm);
+                    fm.AddFlag(Canvas, entry.cachedRect, f.text, f.color, f.pos,
+                        entry.alpha, &bm, entry.labelScale);
             }
         }
 
         for (uintptr_t k : s_toErase)
             s_entries.erase(k);
+        DrawExpansionRadar(Canvas, LocalPC, LocalChar);
     }
 } // namespace g_DrawESP

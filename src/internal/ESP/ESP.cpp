@@ -1,8 +1,12 @@
-﻿// ESP.cpp
+// ESP.cpp
 #include "../../external/CppSDK/SDK.hpp"
 #include "../../external/Shadow-Gui/include/Shadow.h"
 #include "ESP.h"
+#include "ESPLayout.h"
+#include <format>
+#include "../Legit/Aimbot/AimSelection.h"
 #include "../Config/Configs.h"
+#include "../Language/LanguageManager.h"
 #include "../Util/Util.h"
 #include <cmath>
 #include <algorithm>
@@ -24,6 +28,33 @@ namespace {
 */
 
 namespace g_ESP {
+    namespace {
+        SDK::UCanvas* ProjectionCanvas = nullptr;
+        SDK::APlayerController* ProjectionController = nullptr;
+        g_Aimbot::AimCanvasSpace ProjectionSpace{};
+    }
+    void BeginProjectionFrame(SDK::UCanvas* Canvas) {
+        ProjectionCanvas = Canvas;
+        ProjectionController = g_Util::GetLocalPC();
+        ProjectionSpace = {};
+        if (!Canvas || !ProjectionController) return;
+        int32_t Width = 0, Height = 0;
+        ProjectionController->GetViewportSize(&Width, &Height);
+        // Use exactly the same converter as the accurately positioned aim marker.
+        ProjectionSpace = g_Aimbot::AimCanvasSpace::FromViewport(Width, Height, Canvas->ClipX, Canvas->ClipY);
+    }
+    bool ProjectToCanvas(SDK::UCanvas* Canvas, SDK::APlayerController* PC,
+        const SDK::FVector& World, SDK::FVector2D* Screen) {
+        if (!Canvas || !PC || !Screen || PC != ProjectionController || Canvas != ProjectionCanvas ||
+            ProjectionSpace.ScaleX <= 0 || ProjectionSpace.ScaleY <= 0 ||
+            !std::isfinite(World.X) || !std::isfinite(World.Y) || !std::isfinite(World.Z) ||
+            !PC->ProjectWorldLocationToScreen(World, Screen, false) ||
+            !std::isfinite(Screen->X) || !std::isfinite(Screen->Y)) return false;
+        const auto Point = ProjectionSpace.ToCanvas(Screen->X, Screen->Y);
+        Screen->X = Point.X; Screen->Y = Point.Y;
+        return true;
+    }
+
     struct LabelRect {
         float minX;
         float minY;
@@ -35,7 +66,7 @@ namespace g_ESP {
 
     static bool ReserveTopLabel(const LabelRect& Candidate) {
         constexpr float Margin = 3.0f;
-        for (const LabelRect& Occupied : s_occupiedTopLabels) {
+        if (g_Config::bESPPreventOverlap) for (const LabelRect& Occupied : s_occupiedTopLabels) {
             const bool Separated = Candidate.maxX + Margin < Occupied.minX ||
                 Candidate.minX - Margin > Occupied.maxX ||
                 Candidate.maxY + Margin < Occupied.minY ||
@@ -50,8 +81,17 @@ namespace g_ESP {
         s_occupiedTopLabels.clear();
     }
 
+#include "ESPStyle.inl"
+
     RelationType GetRelation(SDK::APrimalCharacter* TargetChar, SDK::APrimalCharacter* LocalChar) {
         if (!TargetChar || !LocalChar) return RelationType::Enemy;
+
+        // Let ASA resolve tribe/alliance rules first. TargetingTeam equality
+        // alone treats allied tribes as enemies and can disagree with the
+        // model-stencil color used by the native scanner.
+        if (LocalChar->IsPrimalCharFriendly(TargetChar)) {
+            return RelationType::Team;
+        }
 
         int targetTeam = TargetChar->TargetingTeam;
         int localTeam = LocalChar->TargetingTeam;
@@ -171,7 +211,9 @@ namespace g_ESP {
         }
     }
 
-    void FlagManager::AddFlag(SDK::UCanvas* Canvas, BoxRect rect, const std::string& text, Shadow::Color color, FlagPos pos, float alphaMult, const BarManager* barMgr) {
+    void FlagManager::AddFlag(SDK::UCanvas* Canvas, BoxRect rect,
+        const std::string& text, Shadow::Color color, FlagPos pos,
+        float alphaMult, const BarManager* barMgr, float scaleMultiplier) {
         if (!rect.valid || text.empty() || !Canvas) return;
 
         Shadow::ShadowDrawList* dl = Shadow::GetBackgroundDrawList();
@@ -183,8 +225,10 @@ namespace g_ESP {
         if (!SansationBold18 || !OpenSansRegular12) return;
         SDK::UFont* currentFont = (pos == FlagPos::Top) ? SansationBold18 : OpenSansRegular12;
 
-        // 获取精确宽高
-        Shadow::PushFont(currentFont, g_Config::ESPScale);
+        const float textScale = InfoFontScale(currentFont, scaleMultiplier, pos == FlagPos::Top);
+
+        // 使用与最终绘制完全一致的缩放测量文字，避免缩放后锚点漂移。
+        Shadow::PushFont(currentFont, textScale);
         Shadow::Vec2 textSize = Shadow::MeasureTextSize(text);
         Shadow::PopFont();
 
@@ -207,9 +251,8 @@ namespace g_ESP {
             float barOffset = barMgr ? barMgr->GetTopOffset() : 0.0f;
             float centerX = (rect.topLeft.x + rect.bottomRight.x) * 0.5f;
             drawPos = { (float)(centerX - textSize.x * 0.5f), (float)(rect.topLeft.y - barOffset - topY - textSize.y - 3.0f) };
-            Shadow::ShadowIO& IO = Shadow::GetIO();
-            drawPos.x = std::clamp(drawPos.x, 2.0f,
-                std::max(2.0f, IO.DisplaySize.x - textSize.x - 2.0f));
+            // Preserve the target's horizontal anchor; do not pin labels to a screen corner.
+            if (drawPos.x + textSize.x < 0 || drawPos.x > Canvas->ClipX) return;
             if (drawPos.y < 2.0f) {
                 drawPos.y = rect.bottomRight.y + barOffset + topY + 3.0f;
             }
@@ -236,9 +279,11 @@ namespace g_ESP {
             float centerX = (rect.topLeft.x + rect.bottomRight.x) * 0.5f;
             drawPos = { (float)(centerX - textSize.x * 0.5f), (float)(rect.bottomRight.y + barOffset + bottomY + 3.0f) };
             if (firstBottomLabel) {
-                Shadow::ShadowIO& IO = Shadow::GetIO();
-                drawPos.x = std::clamp(drawPos.x, 2.0f,
-                    std::max(2.0f, IO.DisplaySize.x - textSize.x - 2.0f));
+                if (drawPos.x + textSize.x < 0 || drawPos.x > Canvas->ClipX) return;
+                if (drawPos.y + textSize.y > Canvas->ClipY - 2.0f) {
+                    drawPos.y = rect.topLeft.y - barOffset - textSize.y - 3.0f;
+                    labelAboveBox = true;
+                }
                 const LabelRect LabelBounds{
                     drawPos.x - 3.0f,
                     drawPos.y - 1.0f,
@@ -251,6 +296,13 @@ namespace g_ESP {
             bottomY += textSize.y + 1.0f;
         }
 
+        if (!anchoredLabel) {
+            const LabelRect Bounds{drawPos.x - 3, drawPos.y - 1, drawPos.x + textSize.x + 3, drawPos.y + textSize.y + 1};
+            if (Bounds.minX < 0 || Bounds.minY < 0 || Bounds.maxX > Canvas->ClipX || Bounds.maxY > Canvas->ClipY ||
+                !ReserveTopLabel(Bounds)) return;
+            dl->AddRectFilled({Bounds.minX, Bounds.minY}, {Bounds.maxX - Bounds.minX, Bounds.maxY - Bounds.minY},
+                {0.025f, 0.035f, 0.045f, alphaMult * 0.8f});
+        }
         color.a *= alphaMult;
         Shadow::Color shadowCol = { 0.0f, 0.0f, 0.0f, color.a };
 
@@ -274,12 +326,13 @@ namespace g_ESP {
         }
 
         // 渲染文字
-        dl->AddText(currentFont, g_Config::ESPScale, shadowCol, shadowCol, drawPos, color, text);
+        dl->AddText(currentFont, textScale, shadowCol, shadowCol, drawPos, color, text);
         // Canvas->K2_DrawText(currentFont, fText, drawPos, scaleSize, color, 0.0f, shadowCol, SDK::FVector2D{ 1.0f, 1.0f }, false, false, true, shadowCol);
     }
 
     BoxRect GetBox(SDK::UCanvas* Canvas, SDK::AActor* entity, float width_scale,
-        bool useCharacterMeshBounds) {
+        bool useCharacterMeshBounds, const SDK::FVector* visualBoundsOrigin,
+        const SDK::FVector* visualBoundsExtent) {
         BoxRect rect;
         rect.valid = false;
         if (!Canvas || !entity || entity->bHidden) return rect;
@@ -288,6 +341,8 @@ namespace g_ESP {
 
         std::array<SDK::FVector, 8> worldCorners{};
         int worldCornerCount = 0;
+        SDK::FVector boundsOrigin{};
+        SDK::FVector boundsExtent{};
 
         const auto IsFiniteVector = [](const SDK::FVector& Value) {
             return std::isfinite(Value.X) && std::isfinite(Value.Y) &&
@@ -313,6 +368,8 @@ namespace g_ESP {
                     }
                 }
                 worldCornerCount = CornerIndex;
+                boundsOrigin = Origin;
+                boundsExtent = Extent;
                 return true;
             };
         // Ask Unreal for the skeletal component's current world-space bounds.
@@ -320,10 +377,14 @@ namespace g_ESP {
         // some ASA dinos apply extra mesh/root-bone offsets that are not represented
         // by the component transform, which moves the entire ESP box off the model.
         bool usedMeshBounds = false;
+        if (visualBoundsOrigin && visualBoundsExtent) {
+            usedMeshBounds = FillAxisAlignedCorners(
+                *visualBoundsOrigin, *visualBoundsExtent);
+        }
         if (useCharacterMeshBounds && entity->IsA(SDK::ACharacter::StaticClass())) {
             SDK::ACharacter* Character = static_cast<SDK::ACharacter*>(entity);
             SDK::USkeletalMeshComponent* Mesh = Character->Mesh;
-            if (Mesh && Mesh->Class) {
+            if (!usedMeshBounds && Mesh && Mesh->Class) {
                 SDK::FVector MeshOrigin{};
                 SDK::FVector MeshExtent{};
                 float SphereRadius = 0.0f;
@@ -354,19 +415,97 @@ namespace g_ESP {
             if (!FillAxisAlignedCorners(Origin, Extent)) return rect;
         }
 
-        // Project all eight AABB corners. Projecting only the top and bottom
-        // center points and guessing width from height shifts boxes whenever
-        // the camera or a long/rotated creature changes perspective.
+        // The mesh's current local bounds avoid projecting an already expanded
+        // world AABB a second time. Retain the verified world center so ASA mesh
+        // offsets cannot reintroduce the previous target-position bug.
+        if (usedMeshBounds && useCharacterMeshBounds && entity->IsA(SDK::ACharacter::StaticClass())) {
+            auto* Mesh = static_cast<SDK::ACharacter*>(entity)->Mesh;
+            // Current runtime reflection verified these flags and bounds fields.
+            // The shared cache can contain world-space data: never transform it
+            // again unless it explicitly holds valid local bounds.
+            if (Mesh && Mesh->bCachedLocalBoundsUpToDate && !Mesh->bCachedWorldSpaceBoundsUpToDate) {
+                const auto Local = Mesh->CachedWorldOrLocalSpaceBounds.BoxExtent;
+                const auto Transform = Mesh->K2_GetComponentToWorld();
+                const auto& S = Transform.Scale3D;
+                const auto& Q = Transform.Rotation;
+                const auto Oriented = Layout::TightBounds({Local.X, Local.Y, Local.Z}, {S.X, S.Y, S.Z},
+                    {Q.X, Q.Y, Q.Z, Q.W}, {boundsExtent.X, boundsExtent.Y, boundsExtent.Z});
+                if (Oriented) for (int I = 0; I < 8; ++I) {
+                    const auto& Offset = (*Oriented)[I];
+                    worldCorners[I] = boundsOrigin + SDK::FVector{Offset.X, Offset.Y, Offset.Z};
+                }
+            }
+        }
+
+        // Project the AABB against the camera near plane. The old implementation
+        // accepted any two projected corners; for a large creature close to the
+        // camera, most corners sit behind the near plane and the surviving pair
+        // describes only one corner of the model.
+        SDK::FVector CameraLocation{};
+        SDK::FRotator CameraRotation{};
+        PC->GetPlayerViewPoint(&CameraLocation, &CameraRotation);
+        const SDK::FVector CameraForward =
+            SDK::UKismetMathLibrary::GetForwardVector(CameraRotation);
+        const auto CameraDepth = [&](const SDK::FVector& Point) {
+            const SDK::FVector Delta{
+                Point.X - CameraLocation.X,
+                Point.Y - CameraLocation.Y,
+                Point.Z - CameraLocation.Z
+            };
+            return Delta.X * CameraForward.X + Delta.Y * CameraForward.Y +
+                Delta.Z * CameraForward.Z;
+            };
+
+        const bool cameraInsideBounds =
+            std::abs(CameraLocation.X - boundsOrigin.X) <= boundsExtent.X &&
+            std::abs(CameraLocation.Y - boundsOrigin.Y) <= boundsExtent.Y &&
+            std::abs(CameraLocation.Z - boundsOrigin.Z) <= boundsExtent.Z;
+        if (cameraInsideBounds) return rect;
+
+        constexpr double NearPlaneDepth = 10.0;
+        constexpr int BoxEdges[12][2] = {
+            {0, 1}, {0, 2}, {0, 4}, {1, 3}, {1, 5}, {2, 3},
+            {2, 6}, {3, 7}, {4, 5}, {4, 6}, {5, 7}, {6, 7}
+        };
+        std::array<SDK::FVector, 20> projectionPoints{};
+        int projectionPointCount = 0;
+        std::array<double, 8> cornerDepths{};
+        for (int CornerIndex = 0; CornerIndex < worldCornerCount; ++CornerIndex) {
+            cornerDepths[CornerIndex] = CameraDepth(worldCorners[CornerIndex]);
+            if (cornerDepths[CornerIndex] >= NearPlaneDepth) {
+                projectionPoints[projectionPointCount++] = worldCorners[CornerIndex];
+            }
+        }
+        for (const auto& Edge : BoxEdges) {
+            const int AIndex = Edge[0];
+            const int BIndex = Edge[1];
+            const double ADepth = cornerDepths[AIndex];
+            const double BDepth = cornerDepths[BIndex];
+            if ((ADepth >= NearPlaneDepth) == (BDepth >= NearPlaneDepth) ||
+                std::abs(BDepth - ADepth) < 0.0001) {
+                continue;
+            }
+            const double T = std::clamp(
+                (NearPlaneDepth - ADepth) / (BDepth - ADepth), 0.0, 1.0);
+            const SDK::FVector& A = worldCorners[AIndex];
+            const SDK::FVector& B = worldCorners[BIndex];
+            projectionPoints[projectionPointCount++] = SDK::FVector{
+                A.X + (B.X - A.X) * T,
+                A.Y + (B.Y - A.Y) * T,
+                A.Z + (B.Z - A.Z) * T
+            };
+        }
+
         float minX = std::numeric_limits<float>::max();
         float minY = std::numeric_limits<float>::max();
         float maxX = std::numeric_limits<float>::lowest();
         float maxY = std::numeric_limits<float>::lowest();
         int projectedCorners = 0;
-        for (int CornerIndex = 0; CornerIndex < worldCornerCount; ++CornerIndex) {
-            const SDK::FVector& Corner = worldCorners[CornerIndex];
-            if (!IsFiniteVector(Corner)) continue;
+        for (int PointIndex = 0; PointIndex < projectionPointCount; ++PointIndex) {
+            const SDK::FVector& Point = projectionPoints[PointIndex];
+            if (!IsFiniteVector(Point)) continue;
             SDK::FVector2D screen{};
-            if (!PC->ProjectWorldLocationToScreen(Corner, &screen, false) ||
+            if (!ProjectToCanvas(Canvas, PC, Point, &screen) ||
                 !std::isfinite(screen.X) || !std::isfinite(screen.Y)) {
                 continue;
             }
@@ -379,16 +518,14 @@ namespace g_ESP {
             ++projectedCorners;
         }
 
-        if (projectedCorners >= 2 && maxX - minX > 1.0f && maxY - minY > 1.0f) {
-            const float height = maxY - minY;
-            const float minimumWidth = height * std::max(0.1f, width_scale);
-            if (maxX - minX < minimumWidth) {
-                const float centerX = (minX + maxX) * 0.5f;
-                minX = centerX - minimumWidth * 0.5f;
-                maxX = centerX + minimumWidth * 0.5f;
-            }
-            rect.topLeft = { minX, minY };
-            rect.bottomRight = { maxX, maxY };
+        if (projectedCorners >= 4 && maxX - minX > 1.0f && maxY - minY > 1.0f) {
+            // Retain the projected model aspect ratio. The old half-height
+            // minimum made tall/edge-on targets and their labels unnecessarily wide.
+            const float Padding = std::isfinite(g_Config::ESPBoxPaddingPixels) ?
+                std::clamp(g_Config::ESPBoxPaddingPixels, 0.0f, 10.0f) : 2.0f;
+            const float paddingX = PixelsX(Padding), paddingY = PixelsY(Padding);
+            rect.topLeft = { minX - paddingX, minY - paddingY };
+            rect.bottomRight = { maxX + paddingX, maxY + paddingY };
             rect.valid = true;
         }
 
@@ -407,21 +544,25 @@ namespace g_ESP {
         float y = rect.topLeft.y;
         float w = rect.bottomRight.x - rect.topLeft.x;
         float h = rect.bottomRight.y - rect.topLeft.y;
-        float thickness = 1.0f; // 边框线条粗细
-
-        // 1. 绘制黑色外边框阴影
-        Shadow::Color shadowCol = { 0.0f, 0.0f, 0.0f, color.a };
-        float s_t = thickness + 2.0f; // 阴影比主线稍微粗一点点
-        dl->AddRectFilled( { x - 1.0f, y - 1.0f }, { w + 2.0f, s_t }, shadowCol); // 顶
-        dl->AddRectFilled( { x - 1.0f, y + h - thickness - 1.0f }, { w + 2.0f, s_t }, shadowCol); // 底
-        dl->AddRectFilled( { x - 1.0f, y - 1.0f }, { s_t, h + 2.0f }, shadowCol); // 左
-        dl->AddRectFilled( { x + w - thickness - 1.0f, y - 1.0f }, { s_t, h + 2.0f }, shadowCol); // 右
-
-        // 2. 绘制彩色主边框
-        dl->AddRectFilled( { x, y }, { w, thickness }, color); // 顶
-        dl->AddRectFilled( { x, y + h - thickness }, { w, thickness }, color); // 底
-        dl->AddRectFilled( { x, y }, { thickness, h }, color); // 左
-        dl->AddRectFilled( { x + w - thickness, y }, { thickness, h }, color); // 右
+        const float ThicknessPixels = std::isfinite(g_Config::ESPBoxThicknessPixels) ?
+            std::clamp(g_Config::ESPBoxThicknessPixels, 0.5f, 3.0f) : 1.25f;
+        const float thickness = PixelsX(ThicknessPixels);
+        const float CornerX = std::min(w * 0.25f, PixelsX(18)), CornerY = std::min(h * 0.25f, PixelsY(18));
+        const auto Line = [&](Shadow::Vec2 A, Shadow::Vec2 B) {
+            dl->AddLine(A, B, {0, 0, 0, color.a * 0.85f}, thickness + PixelsX(1.5f));
+            dl->AddLine(A, B, color, thickness);
+        };
+        if (g_Config::bESPCornerBox) {
+            for (int SideX : {0, 1}) for (int SideY : {0, 1}) {
+                const float X = x + SideX * w, Y = y + SideY * h;
+                Line({X, Y}, {X + (SideX ? -CornerX : CornerX), Y});
+                Line({X, Y}, {X, Y + (SideY ? -CornerY : CornerY)});
+            }
+        }
+        else {
+            Line({x, y}, {x + w, y}); Line({x + w, y}, {x + w, y + h});
+            Line({x + w, y + h}, {x, y + h}); Line({x, y + h}, {x, y});
+        }
     }
 
     void DrawHealthBar(SDK::UCanvas* Canvas, BoxRect rect, float healthPercent, float maxHealth, float a) {

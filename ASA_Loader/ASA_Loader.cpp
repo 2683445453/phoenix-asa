@@ -1,5 +1,4 @@
-﻿#include <windows.h>
-#include <wininet.h>
+#include <windows.h>
 #include <psapi.h>
 #include <iostream>
 #include <string>
@@ -12,15 +11,15 @@
 #include <sstream>
 #include <iomanip>
 #include <system_error>
-#pragma comment(lib, "wininet.lib")
+#include <ctime>
+#include "LicenseClient.h"
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "psapi.lib")
 
 namespace fs = std::filesystem;
 
-const char* URL = "https://github.com/zetsr/Begeerte-ASA/raw/refs/heads/main/release/begeerte_ark_survival_ascended.dll";
-const char* DLL_NAME = "begeerte_ark_survival_ascended.dll";
-const char* PENDING_DLL_NAME = "begeerte_ark_survival_ascended.dll.pending";
+const char* DLL_NAME = "phoenix.dll";
+const char* PENDING_DLL_NAME = "phoenix.dll.pending";
 const char* TARGET_PROCESS = "ArkAscended.exe";
 
 namespace {
@@ -94,7 +93,7 @@ namespace {
     void InitializePersistentLog() {
         std::error_code error;
         fs::create_directories("logs", error);
-        const std::string filename = "ASA_Loader_" + LogFileTimestamp() + "_PID" +
+        const std::string filename = "phoenix_loader_" + LogFileTimestamp() + "_PID" +
             std::to_string(GetCurrentProcessId()) + ".log";
         g_LogPath = error ? fs::path(filename) : fs::path("logs") / filename;
         g_LogFile = CreateFileW(g_LogPath.c_str(), GENERIC_WRITE,
@@ -151,88 +150,6 @@ bool ApplyPendingDLL() {
     LogWin32Failure("Apply pending DLL update", moveError);
     WriteToConsoleBuffer(
         "    Fully exit ArkAscended.exe, then start the loader again.\n");
-    return false;
-}
-
-// --- 业务逻辑：下载 DLL ---
-bool DownloadDLL() {
-    const char* TEMP_DLL_NAME = "begeerte_ark_survival_ascended.dll.tmp";
-    HINTERNET hInternet = InternetOpenA("DLLDownloader/1.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-    if (!hInternet) {
-        LogWin32Failure("InternetOpenA", GetLastError());
-        return false;
-    }
-
-    HINTERNET hUrl = InternetOpenUrlA(hInternet, URL, "User-Agent: Mozilla/5.0\r\n", 0, INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_RELOAD, 0);
-    if (!hUrl) {
-        const DWORD error = GetLastError();
-        InternetCloseHandle(hInternet);
-        LogWin32Failure("InternetOpenUrlA", error);
-        return false;
-    }
-
-    DWORD fileSize = 0;
-    DWORD sizeLen = sizeof(DWORD);
-    HttpQueryInfoA(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &fileSize, &sizeLen, NULL);
-
-    HANDLE hFile = CreateFileA(TEMP_DLL_NAME, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        const DWORD error = GetLastError();
-        InternetCloseHandle(hUrl);
-        InternetCloseHandle(hInternet);
-        LogWin32Failure("CreateFileA(download temporary DLL)", error);
-        return false;
-    }
-
-    const DWORD BUFFER_SIZE = 1048576;
-    BYTE* buffer = (BYTE*)malloc(BUFFER_SIZE);
-    if (!buffer) {
-        CloseHandle(hFile);
-        InternetCloseHandle(hUrl);
-        InternetCloseHandle(hInternet);
-        DeleteFileA(TEMP_DLL_NAME);
-        WriteToConsoleBuffer("[-] Download buffer allocation failed.\n");
-        return false;
-    }
-    DWORD downloaded = 0;
-    bool success = true;
-
-    while (true) {
-        DWORD bytesRead = 0;
-        if (!InternetReadFile(hUrl, buffer, BUFFER_SIZE, &bytesRead)) {
-            LogWin32Failure("InternetReadFile", GetLastError());
-            success = false;
-            break;
-        }
-        if (bytesRead == 0) break;
-        DWORD bytesWritten = 0;
-        if (!WriteFile(hFile, buffer, bytesRead, &bytesWritten, NULL) || bytesWritten != bytesRead) {
-            const DWORD error = GetLastError();
-            LogWin32Failure("WriteFile(download temporary DLL)", error);
-            success = false;
-            break;
-        }
-        downloaded += bytesRead;
-    }
-
-    free(buffer);
-    CloseHandle(hFile);
-    InternetCloseHandle(hUrl);
-    InternetCloseHandle(hInternet);
-
-    if (success && downloaded > 0) {
-        if (MoveFileExA(TEMP_DLL_NAME, DLL_NAME, MOVEFILE_REPLACE_EXISTING)) {
-            WriteToConsoleBuffer("[+] Downloaded " + std::to_string(downloaded) +
-                " bytes.\n");
-            return true;
-        }
-        LogWin32Failure("MoveFileExA(replace local DLL)", GetLastError());
-        return false;
-    }
-    if (downloaded == 0) {
-        WriteToConsoleBuffer("[-] Download returned an empty file.\n");
-    }
-    DeleteFileA(TEMP_DLL_NAME);
     return false;
 }
 
@@ -368,9 +285,51 @@ bool InjectDLL(DWORD procID) {
     return true;
 }
 
+#if PHOENIX_LICENSE_ENABLED
+std::string ReadActivationCode() {
+    WriteToConsoleBuffer("请输入激活码（输入不回显）：");
+    HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD previous = 0;
+    const bool console = GetConsoleMode(input, &previous) != FALSE;
+    if (console) SetConsoleMode(input, previous & ~ENABLE_ECHO_INPUT);
+    char buffer[128]{};
+    std::cin.getline(buffer, sizeof(buffer));
+    if (console) SetConsoleMode(input, previous);
+    WriteConsoleOnly("\n");
+    std::string result = std::cin ? buffer : "";
+    SecureZeroMemory(buffer, sizeof(buffer));
+    return result;
+}
+
+void PrintLicenseResult(const phoenix::license::Result& result) {
+    if (!result.ok) {
+        const std::pair<const char*, const char*> explanations[] = {
+            {"activation_required", "尚未激活"}, {"invalid_code", "激活码不正确"},
+            {"expired", "使用期限已到"}, {"lease_expired", "授权凭证已到期"},
+            {"revoked", "此授权已被停用"}, {"invalid_session", "会话已失效，请重新激活"},
+            {"device_mismatch", "激活码已绑定其他设备"}, {"service_unavailable", "无法连接授权服务"},
+            {"clock_rollback", "授权服务检测到系统时间回拨"},
+            {"missing_service_config", "缺少授权服务地址配置"},
+            {"invalid_or_expired_lease", "授权签名无效或响应已过期"},
+            {"cached_session_unavailable", "无法读取当前用户的授权缓存"}
+        };
+        std::string explanation = result.message;
+        for (const auto& entry : explanations) if (result.message == entry.first) { explanation = entry.second; break; }
+        WriteToConsoleBuffer("[-] 授权验证失败：" + explanation +
+            "\n    请检查本地授权服务，或使用 --activate 重新激活。\n");
+        return;
+    }
+    __time64_t expires = result.expiresUtc;
+    tm local{};
+    char date[64]{};
+    if (_localtime64_s(&local, &expires) == 0) strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", &local);
+    WriteToConsoleBuffer("[+] 授权有效，到期时间（本机时区）：" + std::string(date) + "\n");
+}
+#endif
+
 // --- 主程序 ---
 int main(int argc, char* argv[]) {
-	SetConsoleTitleW(L"38s\u81EA\u7528");
+	SetConsoleTitleW(L"phoenix");
     SetConsoleOutputCP(CP_UTF8);
     char loaderPath[MAX_PATH]{};
     if (GetModuleFileNameA(nullptr, loaderPath, MAX_PATH) > 0) {
@@ -394,34 +353,39 @@ int main(int argc, char* argv[]) {
         return std::find(args.begin(), args.end(), value) != args.end();
     };
 
-    if (!hasArg("--help") && !hasArg("-h") && !hasArg("--check") &&
-        !ApplyPendingDLL()) {
-        return 4;
-    }
-
     if (hasArg("--help") || hasArg("-h")) {
         WriteToConsoleBuffer(
-            "Usage: ASA_Loader.exe [--update] [--download-only] [--check]\n"
+            "Usage: phoenix.exe [--check] [--help]\n"
             "  (no option)      Use the local DLL and wait for ArkAscended.exe.\n"
-            "  --update         Download the upstream DLL before injection.\n"
-            "  --download-only  Download the upstream DLL and exit.\n"
+            "  --update         Unavailable until a phoenix update service is configured.\n"
+            "  --download-only  Unavailable until a phoenix update service is configured.\n"
             "  --check          Verify that the local DLL exists and exit.\n");
+#if PHOENIX_LICENSE_ENABLED
+        WriteToConsoleBuffer(
+            "  --activate       输入激活码并保存加密会话，不加载游戏。\n"
+            "  --license-check  联网验证授权并显示到期时间，不加载游戏。\n"
+            "  --license-watch SECONDS  在指定秒数内持续验证，到期时退出。\n"
+            "  本版本用于本地授权验证，尚未加壳。\n");
+#else
+        WriteToConsoleBuffer("  Development build: licensing is disabled.\n");
+#endif
         return 0;
     }
 
-    const bool shouldDownload = hasArg("--update") || hasArg("--download-only");
-    if (shouldDownload) {
-        WriteToConsoleBuffer(">>> Downloading upstream DLL...\n");
-        if (!DownloadDLL()) {
-            WriteToConsoleBuffer("[-] Download failed.\n");
-            return 1;
-        }
-        WriteToConsoleBuffer("[+] Download complete.\n");
+    if (hasArg("--update") || hasArg("--download-only")) {
+        WriteToConsoleBuffer(
+            "[-] No phoenix update service is configured.\n"
+            "    Install a complete phoenix package from your software provider.\n");
+        return 5;
+    }
+
+    if (!hasArg("--check") && !ApplyPendingDLL()) {
+        return 4;
     }
 
     if (!fs::exists(DLL_NAME) || !fs::is_regular_file(DLL_NAME)) {
-        WriteToConsoleBuffer("[-] Local DLL not found next to ASA_Loader.exe.\n");
-        WriteToConsoleBuffer("    Copy the built DLL here or run with --update.\n");
+        WriteToConsoleBuffer("[-] Local DLL not found next to phoenix.exe.\n");
+        WriteToConsoleBuffer("    Place phoenix.exe and phoenix.dll from the same package together.\n");
         return 2;
     }
 
@@ -434,12 +398,55 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    if (hasArg("--download-only")) {
-        return 0;
+#if PHOENIX_LICENSE_ENABLED
+    const auto licenseDirectory = fs::current_path();
+    phoenix::license::Client licenseClient(licenseDirectory);
+    if (hasArg("--activate")) {
+        auto code = ReadActivationCode();
+        if (code.empty()) return 6;
+        auto result = licenseClient.Activate(code);
+        SecureZeroMemory(code.data(), code.size());
+        PrintLicenseResult(result);
+        return result.ok ? 0 : 6;
     }
+    if (hasArg("--license-watch")) {
+        auto position = std::find(args.begin(), args.end(), "--license-watch");
+        unsigned long seconds = 0;
+        try {
+            if (++position == args.end() || position->empty() || position->find_first_not_of("0123456789") != std::string::npos) return 7;
+            seconds = std::stoul(*position);
+            if (seconds < 1 || seconds > 3600) return 7;
+        } catch (...) { return 7; }
+        if (!phoenix::license::Start(licenseDirectory)) { PrintLicenseResult(phoenix::license::Status()); return 6; }
+        PrintLicenseResult(phoenix::license::Status());
+        const auto end = GetTickCount64() + seconds * 1000ULL;
+        while (GetTickCount64() < end && phoenix::license::IsAuthorized()) Sleep(100);
+        const auto result = phoenix::license::Status();
+        phoenix::license::Stop();
+        PrintLicenseResult(result);
+        return result.ok ? 0 : 6;
+    }
+    auto authorization = licenseClient.Refresh();
+    if (!hasArg("--license-check") && authorization.message == "activation_required") {
+        auto code = ReadActivationCode();
+        if (!code.empty()) authorization = licenseClient.Activate(code);
+        SecureZeroMemory(code.data(), code.size());
+    }
+    PrintLicenseResult(authorization);
+    if (!authorization.ok || hasArg("--license-check")) return authorization.ok ? 0 : 6;
+#else
+    if (hasArg("--activate") || hasArg("--license-check") || hasArg("--license-watch")) {
+        WriteToConsoleBuffer("[-] This is a development build. Use phoenix-local-license for license validation.\n");
+        return 7;
+    }
+#endif
 
     WriteToConsoleBuffer(">>> Using local DLL. Waiting for game...\n");
     DWORD procID = FindProcessId(TARGET_PROCESS);
+#if PHOENIX_LICENSE_ENABLED
+    authorization = licenseClient.Refresh();
+    if (!authorization.ok) { PrintLicenseResult(authorization); return 6; }
+#endif
     WriteToConsoleBuffer("[+] Target found! PID: " + std::to_string(procID) + "\n");
 
     WriteToConsoleBuffer("[*] Injecting DLL...\n");

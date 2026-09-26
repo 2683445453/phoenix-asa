@@ -89808,6 +89808,10 @@ static_assert(sizeof(UOnlineServicesEngineInterfaceImpl) == 0x000028, "Wrong siz
 static_assert(alignof(UOnlineEngineInterfaceImpl) == 0x000008, "Wrong alignment on UOnlineEngineInterfaceImpl"); \
 static_assert(sizeof(UOnlineEngineInterfaceImpl) == 0x000180, "Wrong size on UOnlineEngineInterfaceImpl"); \
 
+#define DUMPER7_ASSERTS_UOnlineEngineInterfaceEOS \
+static_assert(alignof(UOnlineEngineInterfaceEOS) == 0x000008, "Wrong alignment on UOnlineEngineInterfaceEOS"); \
+static_assert(sizeof(UOnlineEngineInterfaceEOS) == 0x000180, "Wrong size on UOnlineEngineInterfaceEOS"); \
+
 #define DUMPER7_ASSERTS_UOnlineSessionClient \
 static_assert(alignof(UOnlineSessionClient) == 0x000008, "Wrong alignment on UOnlineSessionClient"); \
 static_assert(sizeof(UOnlineSessionClient) == 0x0001E0, "Wrong size on UOnlineSessionClient"); \
@@ -134603,6 +134607,11 @@ static_assert(alignof(PrimalDinoCharacter_BPOnGestationChange) == 0x000001, "Wro
 static_assert(sizeof(PrimalDinoCharacter_BPOnGestationChange) == 0x000001, "Wrong size on PrimalDinoCharacter_BPOnGestationChange"); \
 static_assert(offsetof(PrimalDinoCharacter_BPOnGestationChange, bIsGestating) == 0x000000, "Member 'PrimalDinoCharacter_BPOnGestationChange::bIsGestating' has a wrong offset!"); \
 
+#define DUMPER7_ASSERTS_PrimalDinoCharacter_BPOnImpactEffectSpawned \
+static_assert(alignof(PrimalDinoCharacter_BPOnImpactEffectSpawned) == 0x000008, "Wrong alignment on PrimalDinoCharacter_BPOnImpactEffectSpawned"); \
+static_assert(sizeof(PrimalDinoCharacter_BPOnImpactEffectSpawned) == 0x000008, "Wrong size on PrimalDinoCharacter_BPOnImpactEffectSpawned"); \
+static_assert(offsetof(PrimalDinoCharacter_BPOnImpactEffectSpawned, Effect) == 0x000000, "Member 'PrimalDinoCharacter_BPOnImpactEffectSpawned::Effect' has a wrong offset!"); \
+
 #define DUMPER7_ASSERTS_PrimalDinoCharacter_BPOnMountCharacterChangedWeapons \
 static_assert(alignof(PrimalDinoCharacter_BPOnMountCharacterChangedWeapons) == 0x000008, "Wrong alignment on PrimalDinoCharacter_BPOnMountCharacterChangedWeapons"); \
 static_assert(sizeof(PrimalDinoCharacter_BPOnMountCharacterChangedWeapons) == 0x000008, "Wrong size on PrimalDinoCharacter_BPOnMountCharacterChangedWeapons"); \
@@ -138216,7 +138225,7 @@ static_assert(offsetof(PrimalShip_OverrideCannonAmmoConfig, ReturnValue) == 0x00
 
 #define DUMPER7_ASSERTS_APrimalShip \
 static_assert(alignof(APrimalShip) == 0x000010, "Wrong alignment on APrimalShip"); \
-static_assert(sizeof(APrimalShip) == 0x0036F0, "Wrong size on APrimalShip"); \
+static_assert(sizeof(APrimalShip) == 0x003710, "Wrong size on APrimalShip"); \
 static_assert(offsetof(APrimalShip, ThrottleAxis) == 0x002A90, "Member 'APrimalShip::ThrottleAxis' has a wrong offset!"); \
 static_assert(offsetof(APrimalShip, VesselDynamicsComponent) == 0x002A98, "Member 'APrimalShip::VesselDynamicsComponent' has a wrong offset!"); \
 static_assert(offsetof(APrimalShip, AnchoredNetworkAndStasisRangeMultiplier) == 0x002ACC, "Member 'APrimalShip::AnchoredNetworkAndStasisRangeMultiplier' has a wrong offset!"); \
@@ -163184,12 +163193,12 @@ static_assert(offsetof(APrimalStructureTurret, FluidSimSplashTemplateOverride) =
 
 #define DUMPER7_ASSERTS_APrimalPlayerFollowingShip \
 static_assert(alignof(APrimalPlayerFollowingShip) == 0x000010, "Wrong alignment on APrimalPlayerFollowingShip"); \
-static_assert(sizeof(APrimalPlayerFollowingShip) == 0x003720, "Wrong size on APrimalPlayerFollowingShip"); \
-static_assert(offsetof(APrimalPlayerFollowingShip, FleetCoordinatorClass) == 0x0036F0, "Member 'APrimalPlayerFollowingShip::FleetCoordinatorClass' has a wrong offset!"); \
-static_assert(offsetof(APrimalPlayerFollowingShip, ShipScale) == 0x0036F8, "Member 'APrimalPlayerFollowingShip::ShipScale' has a wrong offset!"); \
-static_assert(offsetof(APrimalPlayerFollowingShip, SailColorOverride) == 0x0036FC, "Member 'APrimalPlayerFollowingShip::SailColorOverride' has a wrong offset!"); \
-static_assert(offsetof(APrimalPlayerFollowingShip, LevelColorBandRegion) == 0x00370C, "Member 'APrimalPlayerFollowingShip::LevelColorBandRegion' has a wrong offset!"); \
-static_assert(offsetof(APrimalPlayerFollowingShip, NumLevelColorBands) == 0x003710, "Member 'APrimalPlayerFollowingShip::NumLevelColorBands' has a wrong offset!"); \
+static_assert(sizeof(APrimalPlayerFollowingShip) == 0x003740, "Wrong size on APrimalPlayerFollowingShip"); \
+static_assert(offsetof(APrimalPlayerFollowingShip, FleetCoordinatorClass) == 0x003710, "Member 'APrimalPlayerFollowingShip::FleetCoordinatorClass' has a wrong offset!"); \
+static_assert(offsetof(APrimalPlayerFollowingShip, ShipScale) == 0x003718, "Member 'APrimalPlayerFollowingShip::ShipScale' has a wrong offset!"); \
+static_assert(offsetof(APrimalPlayerFollowingShip, SailColorOverride) == 0x00371C, "Member 'APrimalPlayerFollowingShip::SailColorOverride' has a wrong offset!"); \
+static_assert(offsetof(APrimalPlayerFollowingShip, LevelColorBandRegion) == 0x00372C, "Member 'APrimalPlayerFollowingShip::LevelColorBandRegion' has a wrong offset!"); \
+static_assert(offsetof(APrimalPlayerFollowingShip, NumLevelColorBands) == 0x003730, "Member 'APrimalPlayerFollowingShip::NumLevelColorBands' has a wrong offset!"); \
 
 #define DUMPER7_ASSERTS_PrimalPreviewSceneSetup_BPCanUseFemaleBoneModifiers \
 static_assert(alignof(PrimalPreviewSceneSetup_BPCanUseFemaleBoneModifiers) == 0x000008, "Wrong alignment on PrimalPreviewSceneSetup_BPCanUseFemaleBoneModifiers"); \

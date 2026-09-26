@@ -1,0 +1,8 @@
+{
+  "FullName": "Phoenix Mek Beam Timing",
+  "Description": "Server authority timing experiment for the Power Rangers MEK beam.",
+  "Version": 0.1,
+  "MinApiVersion": 2.03,
+  "Dependencies": [],
+  "PreventUnloading": false
+}

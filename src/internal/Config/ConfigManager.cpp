@@ -1,5 +1,6 @@
-#include "ConfigManager.h"
+﻿#include "ConfigManager.h"
 #include "Configs.h"
+#include "../Menu/FeatureShortcuts.h"
 #include <regex>
 #include <unordered_set>
 
@@ -108,22 +109,69 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
 
         // 菜单功能
         file << "[Menu]\n";
+#define PHX_BOOL(Name, Default) CONFIG_BOOL(g_Config::Name);
+#define PHX_FLOAT(Name, Default, Min, Max) CONFIG_FLOAT(g_Config::Name);
+#define PHX_COLOR(Name, R, G, B, A) CONFIG_COLOR(g_Config::Name);
+#include "FeatureExpansion.inc"
+#undef PHX_BOOL
+#undef PHX_FLOAT
+#undef PHX_COLOR
         CONFIG_COLOR(g_Config::MenuColor);
 		CONFIG_BOOL(g_Config::bMenuLockResize);
 		CONFIG_INT(g_Config::MenuScaleIdx);
+        file << "HoverHelpVersion=2\n";
+        CONFIG_BOOL(g_Config::bShowFeatureHelp);
+        CONFIG_BOOL(g_Config::bAutoDropResources);
+        CONFIG_INT(g_Config::AutoDropResourceMask);
+        CONFIG_BOOL(g_Config::bUnderwaterWeapons);
+        CONFIG_BOOL(g_Config::bShowWelcome);
+        CONFIG_BOOL(g_Config::bStaticThreatIndicators);
+        WriteValue(file, "Shortcut.menu", PhoenixShortcuts::MenuKey);
+        WriteValue(file, "Shortcut.stop", PhoenixShortcuts::StopKey);
+        for (const auto& Action : PhoenixShortcuts::Actions)
+            WriteValue(file, std::string("Shortcut.") + Action.Id, Action.Key);
         file << "\n";
 
         // 其他功能
         file << "[Misc]\n";
-		CONFIG_BOOL(g_Config::bUnlockExplorerNotes);
+        CONFIG_FLOAT(g_Config::FreeCameraSpeedMeters);
         CONFIG_BOOL(g_Config::bAutoFeed);
         CONFIG_FLOAT(g_Config::AutoFeedRangeMeters);
         CONFIG_FLOAT(g_Config::AutoFeedIntervalSeconds);
         CONFIG_STRING(g_Config::AutoFeedDinoFilter, 256);
+        CONFIG_BOOL(g_Config::bWeaponFireRate);
+        CONFIG_FLOAT(g_Config::WeaponFireRateMultiplier);
+        CONFIG_BOOL(g_Config::bFireRateTekRifle);
+        CONFIG_BOOL(g_Config::bFireRateRifle);
+        CONFIG_BOOL(g_Config::bFireRateShotgun);
+        CONFIG_BOOL(g_Config::bFireRateSniper);
+        CONFIG_BOOL(g_Config::bFireRatePistol);
+        CONFIG_BOOL(g_Config::bFireRateBow);
+        CONFIG_BOOL(g_Config::bFireRateOther);
+        CONFIG_BOOL(g_Config::bProjectilePrediction);
+        CONFIG_FLOAT(g_Config::ProjectilePredictionMaxSeconds);
+        CONFIG_FLOAT(g_Config::ProjectilePredictionDelayMs);
+        CONFIG_BOOL(g_Config::bAutoLootContainers);
+        CONFIG_BOOL(g_Config::bAutoLootSupplyCrates);
+        CONFIG_BOOL(g_Config::bAutoLootBags);
+        CONFIG_BOOL(g_Config::bAutoLootBeaverDams);
+        CONFIG_BOOL(g_Config::bAutoLootWildEggs);
+        CONFIG_FLOAT(g_Config::AutoLootRangeMeters);
+        CONFIG_FLOAT(g_Config::AutoLootIntervalMs);
+        CONFIG_FLOAT(g_Config::AutoLootMaxWeightPercent);
+        CONFIG_BOOL(g_Config::bAutoPickupDroppedItems);
+        CONFIG_FLOAT(g_Config::AutoPickupRangeMeters);
+        CONFIG_FLOAT(g_Config::AutoPickupIntervalMs);
+        CONFIG_FLOAT(g_Config::AutoPickupMaxWeightPercent);
+        CONFIG_BOOL(g_Config::bAutoPickupUseDroppedItemFilter);
         CONFIG_BOOL(g_Config::bAutoOpenGachaCrystals);
         CONFIG_FLOAT(g_Config::AutoOpenGachaIntervalMs);
         CONFIG_BOOL(g_Config::bAutoPullGachaCrystals);
         CONFIG_FLOAT(g_Config::AutoPullGachaRangeMeters);
+        CONFIG_BOOL(g_Config::bAutoDepositGachaGear);
+        CONFIG_FLOAT(g_Config::AutoDepositGrinderRangeMeters);
+        CONFIG_BOOL(g_Config::bAutoDepositFishingBlueprints);
+        CONFIG_FLOAT(g_Config::AutoDepositVaultRangeMeters);
         CONFIG_BOOL(g_Config::bAutoFishingQTE);
         CONFIG_BOOL(g_Config::bAutoFishingRecast);
         CONFIG_BOOL(g_Config::bAutoEatDrink);
@@ -132,18 +180,42 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
         CONFIG_FLOAT(g_Config::MedicalBrewThresholdPercent);
         CONFIG_BOOL(g_Config::bAutoEnergyBrew);
         CONFIG_FLOAT(g_Config::EnergyBrewThresholdPercent);
+        CONFIG_BOOL(g_Config::bAutoBuffSoup);
+        CONFIG_BOOL(g_Config::bSoupBattleTartare);
+        CONFIG_BOOL(g_Config::bSoupCactusBroth);
+        CONFIG_BOOL(g_Config::bSoupFocalChili);
+        CONFIG_BOOL(g_Config::bSoupFriaCurry);
+        CONFIG_BOOL(g_Config::bSoupCalienSoup);
+        CONFIG_BOOL(g_Config::bSoupLazarusChowder);
+        CONFIG_BOOL(g_Config::bSoupEnduroStew);
+        CONFIG_BOOL(g_Config::bSoupShadowSteak);
+        CONFIG_BOOL(g_Config::bSoupMushroomBrew);
+        CONFIG_BOOL(g_Config::bAutoFireExtinguish);
+        CONFIG_FLOAT(g_Config::FireExtinguishIntervalSeconds);
         CONFIG_BOOL(g_Config::bAutoSwitchFishingRod);
         CONFIG_BOOL(g_Config::bAutoRecoverFishingBait);
 		CONFIG_BOOL(g_Config::bPumpShotgunNoReload);
+        // 秒换弹与弓秒蓄力（见 Hack/InstantReload.inl）
+        CONFIG_BOOL(g_Config::bInstantReload);
+        CONFIG_BOOL(g_Config::bInstantReloadPumpShotgun);
+        CONFIG_BOOL(g_Config::bInstantReloadLauncher);
+        CONFIG_BOOL(g_Config::bInstantReloadRifle);
+        CONFIG_BOOL(g_Config::bInstantReloadCrossbow);
+        CONFIG_BOOL(g_Config::bInstantReloadOther);
+        CONFIG_BOOL(g_Config::bInstantReloadProtectAmmo);
+        CONFIG_FLOAT(g_Config::InstantReloadRemoteIntervalMs);
+        CONFIG_BOOL(g_Config::bFastBowWood);
+        CONFIG_BOOL(g_Config::bFastBowCompound);
+        CONFIG_BOOL(g_Config::bFastBowTek);
+        CONFIG_BOOL(g_Config::bFastBowForceShot);
+        CONFIG_BOOL(g_Config::bInstantThrowLauncher);
+        CONFIG_BOOL(g_Config::bAutoRepairItems);
+        CONFIG_FLOAT(g_Config::AutoRepairThresholdPercent);
+        CONFIG_FLOAT(g_Config::AutoRepairIntervalSeconds);
+        CONFIG_BOOL(g_Config::bAutoRepairIncludeBackpack);
         CONFIG_BOOL(g_Config::bAutoCraft);
         CONFIG_FLOAT(g_Config::AutoCraftRangeMeters);
         CONFIG_FLOAT(g_Config::AutoCraftIntervalSeconds);
-        CONFIG_BOOL(g_Config::bAutoImprint);
-        CONFIG_FLOAT(g_Config::AutoImprintRangeMeters);
-		CONFIG_BOOL(g_Config::bAutoGrindHelicoprionInventory);
-		CONFIG_BOOL(g_Config::bExpandPlayerInventory);
-		CONFIG_FLOAT(g_Config::PlayerInventorySlotLimit);
-		CONFIG_BOOL(g_Config::bShowLostColonyCooldowns);
 		CONFIG_BOOL(g_Config::bSuperFlyer);
         // 由于船只的角度会在开启此功能后在不经意间导致角度怪异，所以最好不要保存此配置
         // 2026/4/3 @zetsr
@@ -155,6 +227,13 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
 
         CONFIG_BOOL(g_Config::bAutomatic);
         CONFIG_FLOAT(g_Config::ArmorRange);
+        CONFIG_BOOL(g_Config::bArmorSwapHead);
+        CONFIG_BOOL(g_Config::bArmorSwapShirt);
+        CONFIG_BOOL(g_Config::bArmorSwapPants);
+        CONFIG_BOOL(g_Config::bArmorSwapBoots);
+        CONFIG_BOOL(g_Config::bArmorSwapGloves);
+        CONFIG_BOOL(g_Config::bArmorSwapShield);
+        CONFIG_BOOL(g_Config::bArmorSwapOnlyEquipped);
         // Out-of-body is session-only. Never persist it across reconnects or restarts.
 
         CONFIG_BOOL(g_Config::bFastReconnected);
@@ -184,10 +263,43 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
         // 自瞄
         file << "[Aimbot]\n";
         CONFIG_BOOL(g_Config::bAimbotEnabled);
-        CONFIG_FLOAT(g_Config::AimbotFOV);
-        CONFIG_FLOAT(g_Config::AimbotSmooth);
-        CONFIG_FLOAT(g_Config::AimbotRCX);
-        CONFIG_FLOAT(g_Config::AimbotRCY);
+        CONFIG_BOOL(g_Config::bAimPlayers);
+        CONFIG_BOOL(g_Config::bAimWildDinos);
+        CONFIG_BOOL(g_Config::bAimTamedDinos);
+        CONFIG_BOOL(g_Config::bAimBosses);
+        CONFIG_BOOL(g_Config::bSpearAimPlayers);
+        CONFIG_BOOL(g_Config::bSpearAimCreatures);
+        CONFIG_BOOL(g_Config::bSpearAimBosses);
+        CONFIG_BOOL(g_Config::bAimHead);
+        CONFIG_BOOL(g_Config::bAimBody);
+        CONFIG_BOOL(g_Config::bAimRemoveSpread);
+        CONFIG_BOOL(g_Config::bTekPistolHoldTarget);
+        CONFIG_BOOL(g_Config::bShotgunConverge);
+        CONFIG_BOOL(g_Config::bTekSpearAutoBlock);
+        CONFIG_BOOL(g_Config::bTekSpearAutoDeflect);
+        CONFIG_INT(g_Config::TekSpearTargetCount);
+        CONFIG_BOOL(g_Config::bTekSpearAutoFace);
+        CONFIG_FLOAT(g_Config::TekSpearTargetRangeMeters);
+        CONFIG_BOOL(g_Config::bDrawTekSpearCircle);
+        CONFIG_BOOL(g_Config::bDrawTekSpearTargetLine);
+        CONFIG_BOOL(g_Config::bDrawTekSpearTargetInfo);
+        CONFIG_COLOR(g_Config::TekSpearTargetColor);
+        CONFIG_FLOAT(g_Config::TekSpearMeleeRangeMeters);
+        CONFIG_FLOAT(g_Config::TekSpearParryLeadSeconds);
+        CONFIG_FLOAT(g_Config::TekSpearParryTapSeconds);
+        CONFIG_FLOAT(g_Config::TekSpearProjectileRangeMeters);
+        CONFIG_FLOAT(g_Config::TekSpearLookAheadSeconds);
+        CONFIG_FLOAT(g_Config::AimbotMaxDistanceMeters);
+        CONFIG_FLOAT(g_Config::AimbotCircleRadiusPercent);
+        CONFIG_BOOL(g_Config::bDrawAimCircle);
+        CONFIG_BOOL(g_Config::bDrawAimTargetLine);
+        CONFIG_BOOL(g_Config::bDrawAimTargetInfo);
+        CONFIG_FLOAT(g_Config::AimTargetInfoScale);
+        CONFIG_FLOAT(g_Config::AimCircleThickness);
+        CONFIG_FLOAT(g_Config::AimTargetLineThickness);
+        CONFIG_FLOAT(g_Config::AimTargetMarkerSize);
+        CONFIG_COLOR(g_Config::AimCircleColor);
+        CONFIG_COLOR(g_Config::AimTargetLineColor);
         file << "\n";
 
         // 扳机
@@ -255,6 +367,19 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
         // 建筑
         file << "[Structures]\n";
         CONFIG_BOOL(g_Config::bDrawStructures);
+        CONFIG_BOOL(g_Config::bStructureTypeFilter);
+        CONFIG_BOOL(g_Config::bStructureAutoTurret);
+        CONFIG_BOOL(g_Config::bStructureHeavyTurret);
+        CONFIG_BOOL(g_Config::bStructureTekTurret);
+        CONFIG_BOOL(g_Config::bStructureGenerator);
+        CONFIG_BOOL(g_Config::bStructureTekGenerator);
+        CONFIG_BOOL(g_Config::bStructureWindTurbine);
+        CONFIG_BOOL(g_Config::bStructureSupplyDrop);
+        CONFIG_BOOL(g_Config::bStructureLootCrate);
+        CONFIG_BOOL(g_Config::bStructureBuriedTreasure);
+        CONFIG_BOOL(g_Config::bStructureOther);
+        CONFIG_BOOL(g_Config::bStructureShowLootContents);
+        CONFIG_BOOL(g_Config::bStructureShowOwner);
         CONFIG_BOOL(g_Config::bOnlyDrawStructuresEnemy);
         CONFIG_FLOAT(g_Config::StructureMaxDistance);
         CONFIG_COLOR(g_Config::StructureNameColor);
@@ -264,10 +389,6 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
         CONFIG_COLOR(g_Config::StructureHealthColor2);
 
         // 队友建筑
-        CONFIG_BOOL(g_Config::bTeamDrawStructures);
-        CONFIG_FLOAT(g_Config::TeamStructureMaxDistance);
-        CONFIG_COLOR(g_Config::TeamStructureHealthColor1);
-        CONFIG_COLOR(g_Config::TeamStructureHealthColor2);
         file << "\n";
 
         // 水源
@@ -281,7 +402,8 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
 
         // 附近资源点
         file << "[Resources]\n";
-        CONFIG_BOOL(g_Config::bTekHelmetNightVision);
+        CONFIG_FLOAT(g_Config::ModelHighlightIntensity);
+        CONFIG_FLOAT(g_Config::ModelHighlightOpacity);
         CONFIG_BOOL(g_Config::bResourceESPEnabled);
         CONFIG_FLOAT(g_Config::ResourceESPMaxDistance);
         CONFIG_BOOL(g_Config::bResourceModelHighlight);
@@ -293,7 +415,9 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
         CONFIG_BOOL(g_Config::bResourcePearl);
         CONFIG_BOOL(g_Config::bResourceElementShard);
         CONFIG_BOOL(g_Config::bAutoHarvestResources);
-        CONFIG_BOOL(g_Config::bAutoHarvestTekStriderElementShard);
+        CONFIG_BOOL(g_Config::bDinoHarvestRange);
+        CONFIG_FLOAT(g_Config::DinoHarvestRangeMultiplier);
+        CONFIG_BOOL(g_Config::bAutoHarvestTekStrider);
         CONFIG_BOOL(g_Config::bAutoHarvestApproach);
         CONFIG_BOOL(g_Config::bAutoHarvestSprint);
         CONFIG_BOOL(g_Config::bAutoHarvestSafeNavigation);
@@ -314,7 +438,19 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
 
         // 全局
         file << "[Global]\n";
-        CONFIG_BOOL(g_Config::bESPEnabled);
+        file << "g_Config::ESPSettingsVersion=2\n";
+        CONFIG_BOOL(g_Config::bModelHighlightEnabled);
+        CONFIG_BOOL(g_Config::bESPPlayers);
+        CONFIG_BOOL(g_Config::bESPCreatures);
+        CONFIG_BOOL(g_Config::bShowCreatureAggro);
+        CONFIG_FLOAT(g_Config::ModelHighlightMaxDistance);
+        CONFIG_FLOAT(g_Config::ESPFontPixels);
+        CONFIG_FLOAT(g_Config::ESPIconPixels);
+        CONFIG_FLOAT(g_Config::ESPMinFontPixels);
+        CONFIG_FLOAT(g_Config::ESPBoxPaddingPixels);
+        CONFIG_FLOAT(g_Config::ESPBoxThicknessPixels);
+        CONFIG_BOOL(g_Config::bESPCornerBox);
+        CONFIG_BOOL(g_Config::bESPPreventOverlap);
         CONFIG_INT(g_Config::ESPScaleIdx);
         // CONFIG_FLOAT(g_Config::ESPScale);
 
@@ -337,54 +473,20 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
         CONFIG_COLOR(g_Config::AimSkeletonColor);
         CONFIG_COLOR(g_Config::HealthBarColor1);
         CONFIG_COLOR(g_Config::HealthBarColor2);
-
-        // 生物
-        CONFIG_BOOL(g_Config::bDinoDrawBox);
-        CONFIG_COLOR(g_Config::DinoBoxColor);
-        CONFIG_BOOL(g_Config::bDinoDrawHealthBar);
-        CONFIG_BOOL(g_Config::bDinoDrawName);
-        CONFIG_COLOR(g_Config::DinoNameColor);
-        CONFIG_BOOL(g_Config::bDinoDrawTorpor);
-        CONFIG_COLOR(g_Config::DinoTorporColor);
-        CONFIG_BOOL(g_Config::bDinoDrawRagdoll);
-        CONFIG_COLOR(g_Config::DinoRagdollColor);
-        CONFIG_BOOL(g_Config::bDinoDrawDistance);
-        CONFIG_COLOR(g_Config::DinoDistanceColor);
-        file << "\n";
-
-        // 队友
-        file << "[Team]\n";
-        CONFIG_BOOL(g_Config::bESPTeamEnabled);
-
-        CONFIG_BOOL(g_Config::bDrawBoxTeam);
         CONFIG_COLOR(g_Config::BoxColorTeam);
-        CONFIG_BOOL(g_Config::bDrawHealthBarTeam);
-        CONFIG_BOOL(g_Config::bDrawNameTeam);
         CONFIG_COLOR(g_Config::NameColorTeam);
-        CONFIG_BOOL(g_Config::bDrawSpeciesTeam);
-        CONFIG_BOOL(g_Config::bDrawGrowthTeam);
-        CONFIG_BOOL(g_Config::bDrawTorporTeam);
-        CONFIG_COLOR(g_Config::TorporColorTeam);
-        CONFIG_BOOL(g_Config::bDrawRagdollTeam);
-        CONFIG_COLOR(g_Config::RagdollColorTeam);
-        CONFIG_BOOL(g_Config::bDrawDistanceTeam);
         CONFIG_COLOR(g_Config::DistanceColorTeam);
-
-        // 队友生物
-        CONFIG_BOOL(g_Config::bTeamDinoDrawBox);
-        CONFIG_COLOR(g_Config::TeamDinoBoxColor);
-        CONFIG_BOOL(g_Config::bTeamDinoDrawHealthBar);
-        CONFIG_BOOL(g_Config::bTeamDinoDrawName);
-        CONFIG_COLOR(g_Config::TeamDinoNameColor);
-        CONFIG_BOOL(g_Config::bTeamDinoDrawTorpor);
-        CONFIG_COLOR(g_Config::TeamDinoTorporColor);
-        CONFIG_BOOL(g_Config::bTeamDinoDrawRagdoll);
-        CONFIG_COLOR(g_Config::TeamDinoRagdollColor);
-        CONFIG_BOOL(g_Config::bTeamDinoDrawDistance);
-        CONFIG_COLOR(g_Config::TeamDinoDistanceColor);
+        CONFIG_COLOR(g_Config::TorporColorTeam);
+        CONFIG_COLOR(g_Config::RagdollColorTeam);
         CONFIG_COLOR(g_Config::TeamHealthColor1);
         CONFIG_COLOR(g_Config::TeamHealthColor2);
-        file << "\n";
+        CONFIG_COLOR(g_Config::TeamStructureHealthColor1);
+        CONFIG_COLOR(g_Config::TeamStructureHealthColor2);
+
+        CONFIG_BOOL(g_Config::bDinoDistanceTextScale);
+        CONFIG_FLOAT(g_Config::DinoNearTextScale);
+        CONFIG_FLOAT(g_Config::DinoFarTextScale);
+        CONFIG_FLOAT(g_Config::DinoTextScaleDistance);
 
         // OOF
         file << "[OOF]\n";
@@ -392,6 +494,7 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
         CONFIG_COLOR(g_Config::OOFColor);
         CONFIG_FLOAT(g_Config::OOFRadius);
         CONFIG_FLOAT(g_Config::OOFSize);
+        CONFIG_FLOAT(g_Config::OOFMaxDistance);
         CONFIG_FLOAT(g_Config::OOFBreathSpeed);
         CONFIG_FLOAT(g_Config::OOFMinAlpha);
         CONFIG_FLOAT(g_Config::OOFMaxAlpha);
@@ -430,22 +533,93 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
         }
 
         file.close();
-        
+
         // 菜单功能
+#define PHX_BOOL(Name, Default) g_Config::Name = Default; LOAD_BOOL(g_Config::Name);
+#define PHX_FLOAT(Name, Default, Min, Max) g_Config::Name = Default; LOAD_FLOAT(g_Config::Name); g_Config::Name = PhoenixInterface::FiniteClamp(g_Config::Name, Min, Max, Default);
+#define PHX_COLOR(Name, R, G, B, A) { const float Defaults[4] = {R,G,B,A}; std::copy(Defaults, Defaults+4, g_Config::Name); LOAD_COLOR(g_Config::Name); for (int I=0; I<4; ++I) g_Config::Name[I] = PhoenixInterface::FiniteClamp(g_Config::Name[I], 0, 1, Defaults[I]); }
+#include "FeatureExpansion.inc"
+#undef PHX_BOOL
+#undef PHX_FLOAT
+#undef PHX_COLOR
+        // Old experiment keys are ignored; reset dormant runtime fields.
+#define PHX_BOOL(Name, Default) g_Config::Name = Default;
+#define PHX_FLOAT(Name, Default, Min, Max) g_Config::Name = Default;
+#include "DeinoLegacyRuntime.inc"
+#undef PHX_BOOL
+#undef PHX_FLOAT
         LOAD_COLOR(g_Config::MenuColor);
 		LOAD_BOOL(g_Config::bMenuLockResize);
 		LOAD_INT(g_Config::MenuScaleIdx);
+        g_Config::bShowFeatureHelp = true;
+        if (data.contains("HoverHelpVersion")) { LOAD_BOOL(g_Config::bShowFeatureHelp); }
+        g_Config::bAutoDropResources = g_Config::bUnderwaterWeapons = false;
+        g_Config::AutoDropResourceMask = 0;
+        LOAD_BOOL(g_Config::bAutoDropResources);
+        LOAD_INT(g_Config::AutoDropResourceMask);
+        LOAD_BOOL(g_Config::bUnderwaterWeapons);
+        g_Config::AutoDropResourceMask = g_Config::AutoDropResourceMask < 0 ? 0 : (g_Config::AutoDropResourceMask & 2047);
+        LOAD_BOOL(g_Config::bShowWelcome);
+        LOAD_BOOL(g_Config::bStaticThreatIndicators);
+        auto LoadKey = [&](const std::string& Name, unsigned& Key, unsigned Fallback) {
+            Key = Fallback;
+            if (auto It = data.find(Name); It != data.end()) {
+                int Value = 0;
+                if (ReadValue(It->second, Value) && Value >= 0) Key = static_cast<unsigned>(Value);
+            }
+        };
+        LoadKey("Shortcut.menu", PhoenixShortcuts::MenuKey, PhoenixInterface::DefaultMenuKey);
+        LoadKey("Shortcut.stop", PhoenixShortcuts::StopKey, PhoenixInterface::DefaultStopKey);
+        for (auto& Action : PhoenixShortcuts::Actions)
+            LoadKey(std::string("Shortcut.") + Action.Id, Action.Key,
+                std::string(Action.Id) == "camera" ? 'Z' : 0);
+        PhoenixShortcuts::Normalize();
+        g_Config::MenuScaleIdx = std::clamp(g_Config::MenuScaleIdx, 0, 4);
 
         // 其他功能
-		LOAD_BOOL(g_Config::bUnlockExplorerNotes);
+        LOAD_FLOAT(g_Config::FreeCameraSpeedMeters);
         LOAD_BOOL(g_Config::bAutoFeed);
         LOAD_FLOAT(g_Config::AutoFeedRangeMeters);
         LOAD_FLOAT(g_Config::AutoFeedIntervalSeconds);
         LOAD_STRING(g_Config::AutoFeedDinoFilter, 256);
+        LOAD_BOOL(g_Config::bWeaponFireRate);
+        LOAD_FLOAT(g_Config::WeaponFireRateMultiplier);
+        LOAD_BOOL(g_Config::bFireRateTekRifle);
+        LOAD_BOOL(g_Config::bFireRateRifle);
+        LOAD_BOOL(g_Config::bFireRateShotgun);
+        LOAD_BOOL(g_Config::bFireRateSniper);
+        LOAD_BOOL(g_Config::bFireRatePistol);
+        LOAD_BOOL(g_Config::bFireRateBow);
+        LOAD_BOOL(g_Config::bFireRateOther);
+        LOAD_BOOL(g_Config::bProjectilePrediction);
+        LOAD_FLOAT(g_Config::ProjectilePredictionMaxSeconds);
+        LOAD_FLOAT(g_Config::ProjectilePredictionDelayMs);
+        LOAD_BOOL(g_Config::bAutoLootContainers);
+        LOAD_BOOL(g_Config::bAutoLootSupplyCrates);
+        LOAD_BOOL(g_Config::bAutoLootBags);
+        g_Config::bAutoLootBeaverDams = false;
+        LOAD_BOOL(g_Config::bAutoLootBeaverDams);
+        LOAD_BOOL(g_Config::bAutoLootWildEggs);
+        LOAD_FLOAT(g_Config::AutoLootRangeMeters);
+        LOAD_FLOAT(g_Config::AutoLootIntervalMs);
+        LOAD_FLOAT(g_Config::AutoLootMaxWeightPercent);
+        LOAD_BOOL(g_Config::bAutoPickupDroppedItems);
+        LOAD_FLOAT(g_Config::AutoPickupRangeMeters);
+        LOAD_FLOAT(g_Config::AutoPickupIntervalMs);
+        LOAD_FLOAT(g_Config::AutoPickupMaxWeightPercent);
+        LOAD_BOOL(g_Config::bAutoPickupUseDroppedItemFilter);
         LOAD_BOOL(g_Config::bAutoOpenGachaCrystals);
         LOAD_FLOAT(g_Config::AutoOpenGachaIntervalMs);
         LOAD_BOOL(g_Config::bAutoPullGachaCrystals);
         LOAD_FLOAT(g_Config::AutoPullGachaRangeMeters);
+        g_Config::bAutoDepositGachaGear = g_Config::bAutoDepositFishingBlueprints = false;
+        g_Config::AutoDepositGrinderRangeMeters = g_Config::AutoDepositVaultRangeMeters = 12;
+        LOAD_BOOL(g_Config::bAutoDepositGachaGear);
+        LOAD_FLOAT(g_Config::AutoDepositGrinderRangeMeters);
+        LOAD_BOOL(g_Config::bAutoDepositFishingBlueprints);
+        LOAD_FLOAT(g_Config::AutoDepositVaultRangeMeters);
+        g_Config::AutoDepositGrinderRangeMeters = PhoenixInterface::FiniteClamp(g_Config::AutoDepositGrinderRangeMeters, 2, 30, 12);
+        g_Config::AutoDepositVaultRangeMeters = PhoenixInterface::FiniteClamp(g_Config::AutoDepositVaultRangeMeters, 2, 30, 12);
         LOAD_BOOL(g_Config::bAutoFishingQTE);
         LOAD_BOOL(g_Config::bAutoFishingRecast);
         LOAD_BOOL(g_Config::bAutoEatDrink);
@@ -454,18 +628,45 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
         LOAD_FLOAT(g_Config::MedicalBrewThresholdPercent);
         LOAD_BOOL(g_Config::bAutoEnergyBrew);
         LOAD_FLOAT(g_Config::EnergyBrewThresholdPercent);
+        LOAD_BOOL(g_Config::bAutoBuffSoup);
+        LOAD_BOOL(g_Config::bSoupBattleTartare);
+        LOAD_BOOL(g_Config::bSoupCactusBroth);
+        LOAD_BOOL(g_Config::bSoupFocalChili);
+        LOAD_BOOL(g_Config::bSoupFriaCurry);
+        LOAD_BOOL(g_Config::bSoupCalienSoup);
+        LOAD_BOOL(g_Config::bSoupLazarusChowder);
+        LOAD_BOOL(g_Config::bSoupEnduroStew);
+        LOAD_BOOL(g_Config::bSoupShadowSteak);
+        LOAD_BOOL(g_Config::bSoupMushroomBrew);
+        LOAD_BOOL(g_Config::bAutoFireExtinguish);
+        LOAD_FLOAT(g_Config::FireExtinguishIntervalSeconds);
+        g_Config::FireExtinguishIntervalSeconds = PhoenixInterface::FiniteClamp(g_Config::FireExtinguishIntervalSeconds, 2.0f, 60.0f, 5.0f);
         LOAD_BOOL(g_Config::bAutoSwitchFishingRod);
         LOAD_BOOL(g_Config::bAutoRecoverFishingBait);
 		LOAD_BOOL(g_Config::bPumpShotgunNoReload);
+        // 秒换弹与弓秒蓄力（见 Hack/InstantReload.inl）
+        LOAD_BOOL(g_Config::bInstantReload);
+        LOAD_BOOL(g_Config::bInstantReloadPumpShotgun);
+        LOAD_BOOL(g_Config::bInstantReloadLauncher);
+        LOAD_BOOL(g_Config::bInstantReloadRifle);
+        LOAD_BOOL(g_Config::bInstantReloadCrossbow);
+        LOAD_BOOL(g_Config::bInstantReloadOther);
+        LOAD_BOOL(g_Config::bInstantReloadProtectAmmo);
+        LOAD_FLOAT(g_Config::InstantReloadRemoteIntervalMs);
+        g_Config::InstantReloadRemoteIntervalMs = PhoenixInterface::FiniteClamp(
+            g_Config::InstantReloadRemoteIntervalMs, 120.0f, 2000.0f, 500.0f);
+        LOAD_BOOL(g_Config::bFastBowWood);
+        LOAD_BOOL(g_Config::bFastBowCompound);
+        LOAD_BOOL(g_Config::bFastBowTek);
+        LOAD_BOOL(g_Config::bFastBowForceShot);
+        LOAD_BOOL(g_Config::bInstantThrowLauncher);
+        LOAD_BOOL(g_Config::bAutoRepairItems);
+        LOAD_FLOAT(g_Config::AutoRepairThresholdPercent);
+        LOAD_FLOAT(g_Config::AutoRepairIntervalSeconds);
+        LOAD_BOOL(g_Config::bAutoRepairIncludeBackpack);
         LOAD_BOOL(g_Config::bAutoCraft);
         LOAD_FLOAT(g_Config::AutoCraftRangeMeters);
         LOAD_FLOAT(g_Config::AutoCraftIntervalSeconds);
-        LOAD_BOOL(g_Config::bAutoImprint);
-        LOAD_FLOAT(g_Config::AutoImprintRangeMeters);
-		LOAD_BOOL(g_Config::bAutoGrindHelicoprionInventory);
-		LOAD_BOOL(g_Config::bExpandPlayerInventory);
-		LOAD_FLOAT(g_Config::PlayerInventorySlotLimit);
-		LOAD_BOOL(g_Config::bShowLostColonyCooldowns);
 		LOAD_BOOL(g_Config::bSuperFlyer);
         // 由于船只的角度会在开启此功能后在不经意间导致角度怪异，所以最好不要保存此配置
         // 2026/4/3 @zetsr
@@ -477,7 +678,26 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
 
         LOAD_BOOL(g_Config::bAutomatic);
         LOAD_FLOAT(g_Config::ArmorRange);
-        g_Config::bOutBodyChecked = false;
+        // 旧版“独立自动换盾”迁移：盾牌并入自动换甲的部位筛选。
+        // 旧配置只开盾时，只保留副手部位，避免突然自动穿戴其他护甲。
+        if (g_Config::bAutoSwapShield) {
+            g_Config::bArmorSwapShield = true;
+            if (!g_Config::bAutomatic) {
+                g_Config::bArmorSwapHead = g_Config::bArmorSwapShirt =
+                g_Config::bArmorSwapPants = g_Config::bArmorSwapBoots =
+                g_Config::bArmorSwapGloves = false;
+            }
+            g_Config::bAutomatic = true;
+        }
+        g_Config::bAutoSwapShield = false;
+        LOAD_BOOL(g_Config::bArmorSwapHead);
+        LOAD_BOOL(g_Config::bArmorSwapShirt);
+        LOAD_BOOL(g_Config::bArmorSwapPants);
+        LOAD_BOOL(g_Config::bArmorSwapBoots);
+        LOAD_BOOL(g_Config::bArmorSwapGloves);
+        LOAD_BOOL(g_Config::bArmorSwapShield);
+        LOAD_BOOL(g_Config::bArmorSwapOnlyEquipped);
+        g_Config::bFreeCameraEnabled = false;
 
         LOAD_BOOL(g_Config::bFastReconnected);
         LOAD_BOOL(g_Config::bFastRespawned);
@@ -497,10 +717,44 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
 
         // 自瞄
         LOAD_BOOL(g_Config::bAimbotEnabled);
-        LOAD_FLOAT(g_Config::AimbotFOV);
-        LOAD_FLOAT(g_Config::AimbotSmooth);
-        LOAD_FLOAT(g_Config::AimbotRCX);
-        LOAD_FLOAT(g_Config::AimbotRCY);
+        LOAD_BOOL(g_Config::bAimPlayers);
+        LOAD_BOOL(g_Config::bAimWildDinos);
+        LOAD_BOOL(g_Config::bAimTamedDinos);
+        LOAD_BOOL(g_Config::bAimBosses);
+        LOAD_BOOL(g_Config::bSpearAimPlayers);
+        LOAD_BOOL(g_Config::bSpearAimCreatures);
+        LOAD_BOOL(g_Config::bSpearAimBosses);
+        LOAD_BOOL(g_Config::bAimHead);
+        LOAD_BOOL(g_Config::bAimBody);
+        LOAD_BOOL(g_Config::bAimRemoveSpread);
+        LOAD_BOOL(g_Config::bTekPistolHoldTarget);
+        LOAD_BOOL(g_Config::bShotgunConverge);
+        LOAD_BOOL(g_Config::bTekSpearAutoBlock);
+        LOAD_BOOL(g_Config::bTekSpearAutoDeflect);
+        LOAD_INT(g_Config::TekSpearTargetCount);
+        LOAD_BOOL(g_Config::bTekSpearAutoFace);
+        LOAD_FLOAT(g_Config::TekSpearTargetRangeMeters);
+        LOAD_BOOL(g_Config::bDrawTekSpearCircle);
+        LOAD_BOOL(g_Config::bDrawTekSpearTargetLine);
+        LOAD_BOOL(g_Config::bDrawTekSpearTargetInfo);
+        LOAD_COLOR(g_Config::TekSpearTargetColor);
+        LOAD_FLOAT(g_Config::TekSpearMeleeRangeMeters);
+        LOAD_FLOAT(g_Config::TekSpearParryLeadSeconds);
+        LOAD_FLOAT(g_Config::TekSpearParryTapSeconds);
+        g_Config::TekSpearParryTapSeconds = PhoenixInterface::FiniteClamp(g_Config::TekSpearParryTapSeconds, .03f, PhoenixInterface::MaxSpearTapSeconds, .08f);
+        LOAD_FLOAT(g_Config::TekSpearProjectileRangeMeters);
+        LOAD_FLOAT(g_Config::TekSpearLookAheadSeconds);
+        LOAD_FLOAT(g_Config::AimbotMaxDistanceMeters);
+        LOAD_FLOAT(g_Config::AimbotCircleRadiusPercent);
+        LOAD_BOOL(g_Config::bDrawAimCircle);
+        LOAD_BOOL(g_Config::bDrawAimTargetLine);
+        LOAD_BOOL(g_Config::bDrawAimTargetInfo);
+        LOAD_FLOAT(g_Config::AimTargetInfoScale);
+        LOAD_FLOAT(g_Config::AimCircleThickness);
+        LOAD_FLOAT(g_Config::AimTargetLineThickness);
+        LOAD_FLOAT(g_Config::AimTargetMarkerSize);
+        LOAD_COLOR(g_Config::AimCircleColor);
+        LOAD_COLOR(g_Config::AimTargetLineColor);
 
         // 扳机
         LOAD_BOOL(g_Config::bTriggerbotEnabled);
@@ -560,6 +814,28 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
 
         // 建筑
         LOAD_BOOL(g_Config::bDrawStructures);
+        // Loading a pre-filter config must not inherit a restrictive selection
+        // from the config that was active immediately before it.
+        g_Config::bStructureTypeFilter = false;
+        g_Config::bStructureAutoTurret = g_Config::bStructureHeavyTurret = g_Config::bStructureTekTurret = true;
+        g_Config::bStructureGenerator = g_Config::bStructureTekGenerator = g_Config::bStructureWindTurbine = true;
+        g_Config::bStructureSupplyDrop = g_Config::bStructureLootCrate = g_Config::bStructureBuriedTreasure = true;
+        g_Config::bStructureOther = false;
+        g_Config::bStructureShowLootContents = false;
+        g_Config::bStructureShowOwner = true;
+        LOAD_BOOL(g_Config::bStructureTypeFilter);
+        LOAD_BOOL(g_Config::bStructureAutoTurret);
+        LOAD_BOOL(g_Config::bStructureHeavyTurret);
+        LOAD_BOOL(g_Config::bStructureTekTurret);
+        LOAD_BOOL(g_Config::bStructureGenerator);
+        LOAD_BOOL(g_Config::bStructureTekGenerator);
+        LOAD_BOOL(g_Config::bStructureWindTurbine);
+        LOAD_BOOL(g_Config::bStructureSupplyDrop);
+        LOAD_BOOL(g_Config::bStructureLootCrate);
+        LOAD_BOOL(g_Config::bStructureBuriedTreasure);
+        LOAD_BOOL(g_Config::bStructureOther);
+        LOAD_BOOL(g_Config::bStructureShowLootContents);
+        LOAD_BOOL(g_Config::bStructureShowOwner);
         LOAD_BOOL(g_Config::bOnlyDrawStructuresEnemy);
         LOAD_FLOAT(g_Config::StructureMaxDistance);
         LOAD_COLOR(g_Config::StructureNameColor);
@@ -582,7 +858,8 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
         LOAD_COLOR(g_Config::WaterDistanceColor);
 
         // 附近资源点
-        LOAD_BOOL(g_Config::bTekHelmetNightVision);
+        LOAD_FLOAT(g_Config::ModelHighlightIntensity);
+        LOAD_FLOAT(g_Config::ModelHighlightOpacity);
         LOAD_BOOL(g_Config::bResourceESPEnabled);
         LOAD_FLOAT(g_Config::ResourceESPMaxDistance);
         LOAD_BOOL(g_Config::bResourceModelHighlight);
@@ -594,7 +871,21 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
         LOAD_BOOL(g_Config::bResourcePearl);
         LOAD_BOOL(g_Config::bResourceElementShard);
         LOAD_BOOL(g_Config::bAutoHarvestResources);
-        LOAD_BOOL(g_Config::bAutoHarvestTekStriderElementShard);
+        g_Config::bDinoHarvestRange = false;
+        g_Config::DinoHarvestRangeMultiplier = 2.f;
+        LOAD_BOOL(g_Config::bDinoHarvestRange);
+        LOAD_FLOAT(g_Config::DinoHarvestRangeMultiplier);
+        LOAD_BOOL(g_Config::bAutoHarvestTekStrider);
+        // Preserve configs written before the Tek Strider mode was expanded
+        // from Element Shards to every selected resource type.
+        if (!data.contains("g_Config::bAutoHarvestTekStrider")) {
+            const auto LegacyTekStriderMode =
+                data.find("g_Config::bAutoHarvestTekStriderElementShard");
+            if (LegacyTekStriderMode != data.end()) {
+                ReadValue(LegacyTekStriderMode->second,
+                    g_Config::bAutoHarvestTekStrider);
+            }
+        }
         LOAD_BOOL(g_Config::bAutoHarvestApproach);
         LOAD_BOOL(g_Config::bAutoHarvestSprint);
         LOAD_BOOL(g_Config::bAutoHarvestSafeNavigation);
@@ -605,6 +896,12 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
         LOAD_FLOAT(g_Config::AutoHarvestAttackIntervalMs);
         LOAD_FLOAT(g_Config::AutoHarvestMaxSafeDropMeters);
         LOAD_FLOAT(g_Config::AutoHarvestTekStriderBeamRangeMeters);
+        g_Config::AutoHarvestSearchRadiusMeters = PhoenixInterface::FiniteClamp(g_Config::AutoHarvestSearchRadiusMeters, 5.f, PhoenixInterface::MaxHarvestSearchMeters, 30.f);
+        g_Config::AutoHarvestAttackDistanceMeters = PhoenixInterface::FiniteClamp(g_Config::AutoHarvestAttackDistanceMeters, 1.5f, PhoenixInterface::MaxHarvestApproachMeters, 4.5f);
+        g_Config::AutoHarvestTekStriderBeamRangeMeters = PhoenixInterface::FiniteClamp(g_Config::AutoHarvestTekStriderBeamRangeMeters, 10.f, PhoenixInterface::MaxHarvestBeamMeters, 35.f);
+        g_Config::AutoHarvestAttackIntervalMs = PhoenixInterface::FiniteClamp(g_Config::AutoHarvestAttackIntervalMs, 200.f, PhoenixInterface::MaxHarvestAttackIntervalMs, 850.f);
+        g_Config::AutoHarvestMaxSafeDropMeters = PhoenixInterface::FiniteClamp(g_Config::AutoHarvestMaxSafeDropMeters, 0.5f, PhoenixInterface::MaxHarvestSafeDropMeters, 2.5f);
+        g_Config::DinoHarvestRangeMultiplier = PhoenixInterface::FiniteClamp(g_Config::DinoHarvestRangeMultiplier, 1.f, PhoenixInterface::MaxDinoHarvestRangeMultiplier, 2.f);
         LOAD_COLOR(g_Config::ResourceMetalColor);
         LOAD_COLOR(g_Config::ResourceCrystalColor);
         LOAD_COLOR(g_Config::ResourceObsidianColor);
@@ -614,6 +911,13 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
 
         // 全局
         LOAD_BOOL(g_Config::bESPEnabled);
+        LOAD_FLOAT(g_Config::ESPFontPixels);
+        LOAD_FLOAT(g_Config::ESPIconPixels);
+        LOAD_FLOAT(g_Config::ESPMinFontPixels);
+        LOAD_FLOAT(g_Config::ESPBoxPaddingPixels);
+        LOAD_FLOAT(g_Config::ESPBoxThicknessPixels);
+        LOAD_BOOL(g_Config::bESPCornerBox);
+        LOAD_BOOL(g_Config::bESPPreventOverlap);
         LOAD_INT(g_Config::ESPScaleIdx);
         // LOAD_FLOAT(g_Config::ESPScale);
 
@@ -649,6 +953,13 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
         LOAD_COLOR(g_Config::DinoRagdollColor);
         LOAD_BOOL(g_Config::bDinoDrawDistance);
         LOAD_COLOR(g_Config::DinoDistanceColor);
+        LOAD_BOOL(g_Config::bDinoDistanceTextScale);
+        LOAD_FLOAT(g_Config::DinoNearTextScale);
+        LOAD_FLOAT(g_Config::DinoFarTextScale);
+        LOAD_FLOAT(g_Config::DinoTextScaleDistance);
+        LOAD_BOOL(g_Config::bDinoModelHighlight);
+        LOAD_BOOL(g_Config::bDinoModelOnly);
+        LOAD_FLOAT(g_Config::DinoModelHighlightMaxDistance);
 
         // 队友
         LOAD_BOOL(g_Config::bESPTeamEnabled);
@@ -681,15 +992,76 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
         LOAD_COLOR(g_Config::TeamDinoRagdollColor);
         LOAD_BOOL(g_Config::bTeamDinoDrawDistance);
         LOAD_COLOR(g_Config::TeamDinoDistanceColor);
+        LOAD_BOOL(g_Config::bTeamDinoModelHighlight);
+        LOAD_BOOL(g_Config::bTeamDinoModelOnly);
+
+        // Unified settings are authoritative. Legacy branch switches/colors are
+        // read above only to migrate old files; new saves omit those keys.
+        if (!data.contains("g_Config::ESPSettingsVersion") &&
+            (data.contains("g_Config::bESPEnabled") || data.contains("g_Config::bESPTeamEnabled") ||
+             data.contains("g_Config::bDinoModelHighlight") || data.contains("g_Config::bTeamDinoModelHighlight"))) {
+            const auto OldBool = [&](const std::string& Key) {
+                bool Value = false;
+                if (const auto It = data.find("g_Config::" + Key); It != data.end()) ReadValue(It->second, Value);
+                return Value;
+            };
+            g_Config::bModelHighlightEnabled = OldBool("bESPEnabled") || OldBool("bESPTeamEnabled") ||
+                OldBool("bDinoModelHighlight") || OldBool("bTeamDinoModelHighlight");
+            g_Config::bESPPlayers = g_Config::bESPCreatures = true;
+            g_Config::ModelHighlightMaxDistance = g_Config::DinoModelHighlightMaxDistance;
+            const auto MergeFeature = [&](bool& Enabled, float* EnemyColor, float* TeamColor, const char* Feature, const char* ColorName) {
+                const std::string Keys[] = {"bDraw" + std::string(Feature), "bDinoDraw" + std::string(Feature),
+                    "bDraw" + std::string(Feature) + "Team", "bTeamDinoDraw" + std::string(Feature)};
+                const std::string Colors[] = {ColorName, "Dino" + std::string(ColorName),
+                    std::string(ColorName) + "Team", "TeamDino" + std::string(ColorName)};
+                Enabled = false;
+                bool HasColor[2] = {false, false};
+                for (int I = 0; I < 4; ++I) {
+                    if (!OldBool(Keys[I])) continue;
+                    const int Alliance = I < 2 ? 0 : 1;
+                    float* Color = Alliance == 0 ? EnemyColor : TeamColor;
+                    if (!HasColor[Alliance] && Color) {
+                        const auto It = data.find("g_Config::" + Colors[I]);
+                        if (It != data.end()) {
+                            ReadColorArray(It->second, Color);
+                            HasColor[Alliance] = true;
+                        }
+                    }
+                    Enabled = true;
+                }
+            };
+            MergeFeature(g_Config::bDrawBox, g_Config::BoxColor, g_Config::BoxColorTeam, "Box", "BoxColor");
+            MergeFeature(g_Config::bDrawName, g_Config::NameColor, g_Config::NameColorTeam, "Name", "NameColor");
+            MergeFeature(g_Config::bDrawDistance, g_Config::DistanceColor, g_Config::DistanceColorTeam, "Distance", "DistanceColor");
+            MergeFeature(g_Config::bDrawTorpor, g_Config::TorporColor, g_Config::TorporColorTeam, "Torpor", "TorporColor");
+            MergeFeature(g_Config::bDrawRagdoll, g_Config::RagdollColor, g_Config::RagdollColorTeam, "Ragdoll", "RagdollColor");
+            MergeFeature(g_Config::bDrawHealthBar, nullptr, nullptr, "HealthBar", "");
+            if (!OldBool("bDrawStructures") && OldBool("bTeamDrawStructures")) {
+                g_Config::StructureMaxDistance = g_Config::TeamStructureMaxDistance;
+            }
+            g_Config::bDrawStructures = OldBool("bDrawStructures") || OldBool("bTeamDrawStructures");
+        }
+        LOAD_BOOL(g_Config::bModelHighlightEnabled);
+        LOAD_BOOL(g_Config::bESPPlayers);
+        LOAD_BOOL(g_Config::bESPCreatures);
+        LOAD_BOOL(g_Config::bShowCreatureAggro);
+        LOAD_FLOAT(g_Config::ModelHighlightMaxDistance);
 
         // OOF
         LOAD_BOOL(g_Config::bEnableOOF);
         LOAD_COLOR(g_Config::OOFColor);
         LOAD_FLOAT(g_Config::OOFRadius);
         LOAD_FLOAT(g_Config::OOFSize);
+        LOAD_FLOAT(g_Config::OOFMaxDistance);
         LOAD_FLOAT(g_Config::OOFBreathSpeed);
         LOAD_FLOAT(g_Config::OOFMinAlpha);
         LOAD_FLOAT(g_Config::OOFMaxAlpha);
+        using PhoenixInterface::FiniteClamp;
+        g_Config::AimbotMaxDistanceMeters = FiniteClamp(g_Config::AimbotMaxDistanceMeters, 10, PhoenixInterface::MaxAimDistance, 300);
+        g_Config::ESPFontPixels = FiniteClamp(g_Config::ESPFontPixels, 12, PhoenixInterface::MaxFontPixels, 16);
+        g_Config::ESPIconPixels = FiniteClamp(g_Config::ESPIconPixels, 10, 40, 18);
+        g_Config::ESPMinFontPixels = FiniteClamp(g_Config::ESPMinFontPixels, 12, g_Config::ESPFontPixels, 13);
+        g_Config::FreeCameraSpeedMeters = FiniteClamp(g_Config::FreeCameraSpeedMeters, 1, PhoenixInterface::MaxCameraSpeed, 15);
 
         return true;
     }
