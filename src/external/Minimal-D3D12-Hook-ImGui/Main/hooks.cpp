@@ -1,7 +1,8 @@
-﻿#include "../../../internal/Menu/VibrancyBackdrop.h"
+#include "../../../internal/Menu/VibrancyBackdrop.h"
 #include "mdx12_api.h"
 #include "hooks.h"
 #include "UnloadBarrier.h"
+#include "RespawnNotification.h"
 #include "../../AOBScan/AOBScan.hpp"
 #include "../../../internal/CheatData/CheatData.hpp"
 #include "../../../internal/Config/Configs.h"
@@ -195,7 +196,7 @@ namespace {
         if (Target > RegionEnd || RegionEnd - Target < 0x80) return false;
 
         const auto* Code = static_cast<const uint8_t*>(Address);
-        // ASA 93.37.0 / CL 831297 UpdateCamera(float) prologue. Stack-frame displacements are
+        // ASA CL 832029 UpdateCamera(float) prologue. Stack-frame displacements are
         // deliberately ignored, while the register-save shape is required.
         constexpr uint8_t Prologue[] = {
             0x4C, 0x8B, 0xDC, 0x55, 0x53, 0x56, 0x57,
@@ -889,6 +890,7 @@ namespace g_Hook {
         if (HighlightPrepared) {
             g_DrawESP::FinishModelHighlightCameraUpdate(CameraManager);
         }
+        g_Hack::MaintainMountedFullRotationCamera(CameraManager);
         g_Hack::UpdateFreeCamera(CameraManager, DeltaTime);
         // Selection uses the finished camera view. Tek spear may temporarily
         // turn for a parry; the weapon-aim redirect itself keeps the view intact.
@@ -938,11 +940,8 @@ namespace g_Hook {
 
     void __fastcall hkClientNotifyRespawned(SDK::APrimalPlayerController* rcx, SDK::APawn* NewPawn, bool IsFirstSpawn) {
         CallbackScope Guard;
-        if (!ShouldBypassFeatures() && g_Config::bFastRespawned) {
-            return;
-        }
-
-        return oClientNotifyRespawned(rcx, NewPawn, IsFirstSpawn);
+        PhoenixRespawn::Dispatch(rcx, NewPawn, IsFirstSpawn,
+            g_Config::bFastRespawned, ShouldBypassFeatures(), oClientNotifyRespawned);
     }
 
     void __fastcall hkClientChatMessage(SDK::AShooterPlayerController* rcx, SDK::FPrimalChatMessage& Chat) {
@@ -1189,33 +1188,31 @@ namespace g_Hook {
     }
 
     void initClientNotifyRespawned() {
-        /*
-        std::string pattern = g_CheatData::Signature::APrimalPlayerController::ClientNotifyRespawned;
-        AOB::Result ok = AOB::Scan(pattern);
-
-        if (ok && ok.size() == 1) {
-            void* targetAddr = ok[0];
-
-            if (MH_CreateHook(targetAddr, &hkClientNotifyRespawned, reinterpret_cast<LPVOID*>(&oClientNotifyRespawned)) == MH_OK) {
-                MH_EnableHook(targetAddr);
-                ClientNotifyRespawnedOK = true;
-            }
+        ClientNotifyRespawnedOK = false;
+        const auto* Wrapper = static_cast<const uint8_t*>(g_Util::FindUFunction(
+            "Function Engine.PrimalPlayerController.ClientNotifyRespawned"));
+        constexpr size_t WrapperBytes = 0x17b;
+        if (!IsExecutableGameAddress(const_cast<uint8_t*>(Wrapper)) ||
+            !ezVMT::Accessible(Wrapper, WrapperBytes)) return;
+        const auto Slot = PhoenixRespawn::NativeSlot({Wrapper, WrapperBytes});
+        auto* Default = SDK::AShooterPlayerController::GetDefaultObj();
+        if (!Slot || !Default) {
+            g_Hook::LogLifecycle("Respawn hook skipped: native dispatch layout is unsupported.");
+            return;
         }
-        */
-
-        // 另一种方法
-        void* targetAddr = g_Util::FindUFunction("Function Engine.PrimalPlayerController.ClientNotifyRespawned");
-
-        /*
-        if (targetAddr) {
-            if (MH_CreateHook(targetAddr, &hkClientNotifyRespawned, reinterpret_cast<LPVOID*>(&oClientNotifyRespawned)) == MH_OK) {
-                MH_EnableHook(targetAddr);
-                ClientNotifyRespawnedOK = true;
-            }
+        auto** VTable = *reinterpret_cast<void***>(Default);
+        if (!VTable || !ezVMT::Accessible(VTable + *Slot, sizeof(void*)) ||
+            !IsExecutableGameAddress(VTable[*Slot])) return;
+        // UE's exec wrapper retains argument parsing and stack advancement.
+        // This target accepts the actual NewPawn and IsFirstSpawn arguments.
+        void* Target = VTable[*Slot];
+        if (MH_CreateHook(Target, reinterpret_cast<void*>(hkClientNotifyRespawned),
+            reinterpret_cast<void**>(&oClientNotifyRespawned)) != MH_OK) return;
+        if (MH_EnableHook(Target) == MH_OK) ClientNotifyRespawnedOK = true;
+        else {
+            MH_RemoveHook(Target);
+            oClientNotifyRespawned = nullptr;
         }
-        */
-
-        g_Util::ADD_MH(targetAddr, &ClientNotifyRespawnedOK, &hkClientNotifyRespawned, &oClientNotifyRespawned);
     }
 
     void initClientChatMessage() {

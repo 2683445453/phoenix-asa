@@ -73,7 +73,7 @@ public:
 DUMPER7_ASSERTS_URigVMBlueprintGeneratedClass;
 
 // Class RigVM.RigVM
-// 0x0368 (0x0390 - 0x0028)
+// 0x0390 (0x03B8 - 0x0028)
 class URigVM : public UObject
 {
 public:
@@ -90,7 +90,7 @@ public:
 	TArray<struct FRigVMParameter>                Parameters;                                        // 0x0250(0x0010)(ZeroConstructor, NativeAccessSpecifierPrivate)
 	uint8                                         Pad_260[0xD8];                                     // 0x0260(0x00D8)(Fixing Size After Last Property [ Dumper-7 ])
 	uint32                                        CachedVMHash;                                      // 0x0338(0x0004)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPrivate)
-	uint8                                         Pad_33C[0x54];                                     // 0x033C(0x0054)(Fixing Struct Size After Last Property [ Dumper-7 ])
+	uint8                                         Pad_33C[0x7C];                                     // 0x033C(0x007C)(Fixing Struct Size After Last Property [ Dumper-7 ])
 
 public:
 	int32 AddRigVMFunction(class UScriptStruct* InRigVMStruct, const class FName& InMethodName);
@@ -213,7 +213,7 @@ DUMPER7_ASSERTS_URigVMMemoryStorageGeneratorClass;
 
 // Class RigVM.RigVMMemoryStorage
 // 0x0000 (0x0028 - 0x0028)
-class URigVMMemoryStorage final : public UObject
+class URigVMMemoryStorage : public UObject
 {
 public:
 	static class UClass* StaticClass()
@@ -232,11 +232,11 @@ public:
 DUMPER7_ASSERTS_URigVMMemoryStorage;
 
 // Class RigVM.RigVMNativized
-// 0x0028 (0x03B8 - 0x0390)
+// 0x0028 (0x03E0 - 0x03B8)
 class URigVMNativized final : public URigVM
 {
 public:
-	uint8                                         Pad_390[0x28];                                     // 0x0390(0x0028)(Fixing Struct Size After Last Property [ Dumper-7 ])
+	uint8                                         Pad_3B8[0x28];                                     // 0x03B8(0x0028)(Fixing Struct Size After Last Property [ Dumper-7 ])
 
 public:
 	static class UClass* StaticClass()

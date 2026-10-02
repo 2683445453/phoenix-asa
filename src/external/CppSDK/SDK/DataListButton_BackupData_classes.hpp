@@ -41,7 +41,7 @@ public:
 	struct FLinearColor                           UnSelectedPairColorBG;                             // 0x09D8(0x0010)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 
 public:
-	void OnPaint(struct FPaintContext& Context_OnPaint) const;
+	void OnPaint(struct FPaintContext& Context) const;
 
 public:
 	static class UClass* StaticClass()

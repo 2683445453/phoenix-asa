@@ -16,7 +16,7 @@
 SDK_NAMESPACE_START
 
 // BlueprintGeneratedClass Drill_HarvestImpactEmitter_Stone.Drill_HarvestImpactEmitter_Stone_C
-// 0x0000 (0x05D0 - 0x05D0)
+// 0x0000 (0x05C0 - 0x05C0)
 class ADrill_HarvestImpactEmitter_Stone_C final : public ADrill_HarvestImpactEmitter_Base_C
 {
 public:

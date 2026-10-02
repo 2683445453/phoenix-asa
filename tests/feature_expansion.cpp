@@ -4,6 +4,8 @@
 #include "../src/internal/Hack/DeinoGlideProbeRules.h"
 #include "../src/internal/Hack/DeinoActionRules.h"
 #include "../src/internal/Hack/DeinoFlightRules.h"
+#include "../src/internal/Hack/DeinoFlightPreview.h"
+#include "../src/internal/Hack/DeinoFlightUI.h"
 #include "../src/internal/Menu/FeatureShortcuts.h"
 #include "../src/internal/Config/ConfigManager.h"
 #include <cassert>
@@ -13,8 +15,43 @@
 #include <utility>
 
 int main() {
+    const auto [BeforeSeamMin,BeforeSeamMax]=PhoenixExpansion::MountedYawWindow(179.79);
+    const auto [AfterSeamMin,AfterSeamMax]=PhoenixExpansion::MountedYawWindow(-179.79);
+    assert(std::abs(BeforeSeamMax-BeforeSeamMin-340.0f)<0.001f && BeforeSeamMin<180.21f && 180.21f<BeforeSeamMax);
+    assert(std::abs(AfterSeamMax-AfterSeamMin-340.0f)<0.001f && AfterSeamMin<-180.21f && -180.21f<AfterSeamMax);
+    const auto [InvalidMin,InvalidMax]=PhoenixExpansion::MountedYawWindow(NAN);
+    assert(InvalidMin==-170.0f && InvalidMax==170.0f);
     using namespace PhoenixDeinoAction;
     using CombinedFlight=PhoenixDeinoFlight::Control;
+    PhoenixDeinoFlight::InputGate Focus;
+    CombinedFlight Background;
+    CombinedFlight FacingHover;
+    assert(FacingHover.Poll(false,false,true,false,100,500)==CombinedFlight::Action::Hover);
+    assert(!FacingHover.Hovering); // A failed RPC must not enable facing.
+    FacingHover.Hovering=true;
+    assert(FacingHover.Poll(false,false,true,false,101,500)==CombinedFlight::Action::None && FacingHover.Hovering);
+    assert(FacingHover.Poll(false,true,true,false,102,500)==CombinedFlight::Action::None && !FacingHover.Hovering);
+    FacingHover.Hovering=true; FacingHover.Jumped(103,800); assert(!FacingHover.Hovering);
+    FacingHover.Hovering=true;
+    assert(FacingHover.Poll(false,false,true,true,904,500)==CombinedFlight::Action::None && !FacingHover.Hovering);
+    FacingHover.Hovering=true;
+    assert(FacingHover.Poll(true,false,true,false,905,500)==CombinedFlight::Action::Jump && !FacingHover.Hovering);
+    FacingHover.Hovering=true;
+    assert(FacingHover.Poll(false,false,false,false,906,500)==CombinedFlight::Action::None && !FacingHover.Hovering);
+    assert(Focus.Poll(true,false));
+    assert(Background.Poll(false,false,true,false,0,10)==CombinedFlight::Action::Hover);
+    Background.Jumped(100,800);
+    // Opening a menu or losing focus preserves protection and masks external keys.
+    assert(!Focus.Poll(false,true));
+    assert(Background.Poll(false,false,true,false,500,10)==CombinedFlight::Action::None);
+    assert(Background.Poll(false,false,true,false,900,10)==CombinedFlight::Action::Hover);
+    assert(!Focus.Poll(true,true)); // Holding Space across the focus boundary cannot jump.
+    assert(!Focus.Poll(true,false)); // Release rearms; it does not launch.
+    assert(Background.Poll(false,false,true,false,910,10)==CombinedFlight::Action::Hover);
+    assert(Focus.Poll(true,true));
+    assert(Background.Poll(true,false,true,false,920,10)==CombinedFlight::Action::Jump);
+    assert(!Focus.Poll(false,false));
+    assert(Background.Poll(false,false,false,false,930,10)==CombinedFlight::Action::None);
     const auto Horizontal=PhoenixDeinoFlight::AirVector(0,30,5);
     assert(Horizontal.Valid && Horizontal.X==90000 && Horizontal.Y==0 && Horizontal.Z==500);
     const auto Right=PhoenixDeinoFlight::AirVector(90,1,0);
@@ -22,6 +59,81 @@ int main() {
     assert(PhoenixDeinoFlight::AirVector(720,1,30).Z==3000);
     assert(!PhoenixDeinoFlight::AirVector(0,100,5).Valid && !PhoenixDeinoFlight::AirVector(0,30.01,5).Valid);
     assert(!PhoenixDeinoFlight::AirVector(NAN,1,5).Valid && !PhoenixDeinoFlight::AirVector(0,1,INFINITY).Valid);
+    assert(PhoenixDeinoFlight::AirVector(0,1,300).Z==30000);
+    assert(!PhoenixDeinoFlight::AirVector(0,1,300.01).Valid);
+    assert(PhoenixDeinoFlight::AirVector(0,1,-300).Z==-30000);
+    assert(!PhoenixDeinoFlight::AirVector(0,1,-300.01).Valid);
+    using PhoenixDeinoFlight::AimVector;
+    for(double Yaw : {0.0,90.0,180.0,-70.0,1080.0})
+        for(double Pitch : {-90.0,-45.0,0.0,45.0,90.0,315.0})
+            for(double Speed : {1.0,30.0,300.0}) {
+                const auto V=AimVector(Yaw,Pitch,Speed);
+                assert(V.Valid && std::abs(std::hypot(std::hypot(V.X,V.Y),V.Z)-100*Speed)<1e-8);
+                const auto P=PhoenixDeinoFlight::PreviewVector(V,.8,10,true);
+                assert(P.Valid);
+                for(const auto& Point:P.Path) assert(std::isfinite(Point.H) && std::isfinite(Point.Z));
+            }
+    const auto Diagonal=AimVector(0,45,30),Wrapped=AimVector(0,315,30);
+    assert(std::abs(Diagonal.X-Diagonal.Z)<1e-8 && Diagonal.Y==0 && Diagonal.Z>0);
+    assert(std::abs(Wrapped.X-Diagonal.X)<1e-8 && std::abs(Wrapped.Z+Diagonal.Z)<1e-8);
+    const auto ViewRight=AimVector(90,0,30);
+    assert(std::abs(ViewRight.X)<1e-8 && ViewRight.Y==3000 && ViewRight.Z==0);
+    for(double Pitch : {-90.0,90.0}) {
+        const auto V=AimVector(20,Pitch,30);
+        assert(V.X==0 && V.Y==0 && std::abs(V.Z)==3000);
+        const auto P=PhoenixDeinoFlight::PreviewVector(V,.8,10,true);
+        assert(P.Valid && P.Distance==0 && (Pitch<0?P.Height<0:P.Height>0));
+    }
+    assert(!AimVector(NAN,0,30).Valid && !AimVector(0,INFINITY,30).Valid);
+    assert(!AimVector(0,0,NAN).Valid && !AimVector(0,0,0).Valid && !AimVector(0,0,301).Valid);
+    assert(!PhoenixDeinoFlight::PreviewVector({0,0,0,true},.8,10,true).Valid);
+    assert(!PhoenixDeinoFlight::PreviewVector({},.8,10,true).Valid);
+    assert(PhoenixDeinoFlight::PreviewVector(PhoenixDeinoFlight::AirVector(111,30,300),.8,10,true).Valid);
+    const auto DownPreview=PhoenixDeinoFlight::Preview(3,-5,.8,10,true);
+    assert(DownPreview.Valid && !DownPreview.ServerBaseline && DownPreview.Height<0 && DownPreview.Peak==0);
+    const auto Preview=PhoenixDeinoFlight::Predict(3,5,.8);
+    assert(Preview.Valid && Preview.Distance>0 && Preview.Distance<90*.8);
+    assert(PhoenixDeinoFlight::Predict(3,300,.8).Peak>Preview.Peak);
+    assert(PhoenixDeinoFlight::Predict(3,0,.1).Distance==0);
+    assert(!PhoenixDeinoFlight::Predict(3,5,NAN).Valid);
+    assert(!PhoenixDeinoFlight::Predict(3,5,.8,0).Valid);
+    const auto ServerProfile=PhoenixDeinoFlight::Preview(3,5,.8,10,true);
+    assert(ServerProfile.Valid && ServerProfile.ServerBaseline);
+    assert(std::abs(ServerProfile.Distance-30.924611527)<1e-7);
+    assert(ServerProfile.HorizontalMargin>6 && ServerProfile.HeightMargin>=1);
+    // Independent down-view group; neither its median nor its endpoint is used to fit.
+    for(double Actual : {33.543824917,28.716188702,30.470084075}) {
+        assert(std::abs(ServerProfile.Distance-Actual)<3);
+        assert(std::abs(ServerProfile.Distance-Actual)<std::abs(Preview.Distance-Actual));
+    }
+    assert(!PhoenixDeinoFlight::Preview(3,5,.8,10,false).ServerBaseline);
+    assert(!PhoenixDeinoFlight::Preview(3,5,.8,20,true).ServerBaseline);
+    assert(!PhoenixDeinoFlight::Preview(3,6,.8,10,true).ServerBaseline);
+    assert(!PhoenixDeinoFlight::Preview(4,5,.8,10,true).ServerBaseline);
+    assert(!PhoenixDeinoFlight::Preview(3,5,1,10,true).ServerBaseline);
+    assert(!PhoenixDeinoFlight::Preview(NAN,5,.8,10,true).Valid);
+    for(const auto& Point:ServerProfile.Path) assert(std::isfinite(Point.H) && std::isfinite(Point.Z));
+    PhoenixDeinoFlight::Calibration Cal;
+    assert(Cal.Add(3,5,.8,Preview.Distance*1.2,Preview.Height+1));
+    auto Calibrated=Preview; Cal.Apply(Calibrated,3,5,.8);
+    assert(std::abs(Calibrated.Distance-Preview.Distance*1.2)<1e-6);
+    assert(std::abs(Calibrated.Height-Preview.Height-1)<1e-6);
+    assert(!Cal.Matches(3,5,1) && !Cal.Add(3,5,.8,1e6,0));
+    PhoenixDeinoUI::View UI; UI.Available=true; UI.Time=100; UI.Keys={118,119,120,121};
+    PhoenixDeinoUI::Publish(UI);
+    assert(PhoenixDeinoUI::Input(118,true,false,0,false,false,101));
+    assert(PhoenixDeinoUI::Input(118,true,true,0,false,false,102));
+    assert(PhoenixDeinoUI::Take().Toggle); // repeats do not toggle again
+    assert(!PhoenixDeinoUI::Input(0,false,false,120,false,false,102));
+    assert(PhoenixDeinoUI::Input(0,false,false,120,true,false,103));
+    assert(PhoenixDeinoUI::Take().WheelH==120);
+    assert(!PhoenixDeinoUI::Input(118,true,false,0,false,false,301)); // stale focus/mount
+    UI.Panel=true; PhoenixDeinoUI::Publish(UI);
+    assert(PhoenixDeinoUI::Input(32,true,false,0,false,false,104));
+    assert(PhoenixDeinoUI::Input(9,true,false,0,false,false,104));
+    assert(PhoenixDeinoUI::Take().Field==1);
+    PhoenixDeinoUI::Clear();
+    assert(!PhoenixDeinoUI::Read().Available);
     CombinedFlight F;
     assert(F.Poll(true,false,true,false,0,10)==CombinedFlight::Action::None); // held on enable
     assert(F.Poll(false,false,true,false,1,10)==CombinedFlight::Action::Hover);
@@ -314,13 +426,19 @@ int main() {
     assert(!g_Config::bDeinoAirLatch && !g_Config::bDeinoGlideProbe);
     g_Config::bDeinoGlideProbe=true;
     g_Config::bDeinoPointPounceTest=true; g_Config::bDeinoPointZeroStart=true; g_Config::DeinoPointPounceDistance=300; g_Config::bDeinoAutoVectorTest=true; g_Config::DeinoCandidateJumpMultiplier=3.8f; g_Config::DeinoAutoVectorMultiplier=100; g_Config::DeinoCandidateHoverSeconds=2; g_Config::DeinoCandidateIntervalMs=50; g_Config::DeinoTakeoffProtectionSeconds=2.25f;
-    g_Config::bDeinoFlight=true; g_Config::DeinoAirHorizontalMultiplier=30; g_Config::DeinoAirUpSpeed=7; g_Config::DeinoHoverIntervalMs=10; g_Config::DeinoAirProtectionSeconds=1.2f;
+    g_Config::bDeinoNativeArc=true; g_Config::DeinoPreset3Up=-300; g_Config::DeinoPanelFKey=11; g_Config::DeinoUpStep=20;
+    g_Config::bDeinoFlight=true; g_Config::DeinoAirHorizontalMultiplier=30; g_Config::DeinoAirUpSpeed=-7; g_Config::DeinoHoverIntervalMs=10; g_Config::DeinoAirProtectionSeconds=1.2f;
+    g_Config::bDeinoAimJump=true; g_Config::DeinoAimJumpSpeed=90; g_Config::DeinoAimSpeedStep=7;
+    g_Config::bDeinoHoverFollowView=true;
     g_Config::bDeinoAutoJumpTest=true; g_Config::bDeinoLatchTrace=true;
     g_Config::DeinoAutoJumpSpeed=20; g_Config::DeinoAutoJumpUpSpeed=5;
     g_Config::bDeinoAirLatch=true; g_Config::DeinoAirLatchReleaseSpeed=45; g_Config::DeinoAirLatchReleaseUpSpeed=8;
     assert(!g_Config::bNativeMountPhysicsHook);
     g_Config::bNativeMountPhysicsHook=true;
     g_Config::NativeMountGroundSpeed=33; g_Config::NativeMountAirStep=12; g_Config::NativeMountHorizontalCap=90;
+    assert(!g_Config::bGargantarClient);
+    g_Config::bGargantarClient=g_Config::bGargantarReach=true;
+    g_Config::GargantarReachMeters=27; g_Config::GargantarFlightMultiplier=2;
     assert(Config.SaveConfig("expansion.ini"));
     { std::ifstream In(Dir/"expansion.ini"); std::string Saved((std::istreambuf_iterator<char>(In)),{});
       assert(Saved.find("bDeinoAirLatch")==std::string::npos && Saved.find("bDeinoPointZeroStart")==std::string::npos);
@@ -328,6 +446,8 @@ int main() {
       assert(Saved.find("DeinoAutoVectorMultiplier")==std::string::npos && Saved.find("DeinoPointPounceDistance")==std::string::npos);
       assert(Saved.find("bDeinoAutoVectorTest")==std::string::npos && Saved.find("bDeinoEndHoverTest")==std::string::npos); }
     g_Config::bNativeMountJump=g_Config::bNativeMountHover=false;
+    g_Config::bDeinoAimJump=false; g_Config::DeinoAimJumpSpeed=30; g_Config::DeinoAimSpeedStep=5;
+    g_Config::bDeinoHoverFollowView=false;
     g_Config::bDeinoAirLatch=false; g_Config::DeinoAirLatchReleaseSpeed=1; g_Config::DeinoAirLatchReleaseUpSpeed=0;
     g_Config::bDeinoGlideProbe=false;
     g_Config::bDeinoPointPounceTest=false; g_Config::bDeinoPointZeroStart=false; g_Config::DeinoPointPounceDistance=10; g_Config::bDeinoAutoVectorTest=false; g_Config::DeinoCandidateJumpMultiplier=1; g_Config::DeinoAutoVectorMultiplier=1; g_Config::DeinoTakeoffProtectionSeconds=.1f;
@@ -346,7 +466,9 @@ int main() {
     g_Config::bTekNoHeat = g_Config::bDeinonychusBigJump = g_Config::bFloatingStructures = false;
     g_Config::DeinonychusJumpMultiplier = 1;
     g_Config::RadarRangeMeters = 10; g_Config::RadarTeamColor[3] = 1;
+    g_Config::bGargantarClient=false; g_Config::GargantarReachMeters=5;
     assert(Config.LoadConfig("expansion.ini"));
+    assert(g_Config::bGargantarClient && g_Config::bGargantarReach && g_Config::GargantarReachMeters==27 && g_Config::GargantarFlightMultiplier==2);
     assert(g_Config::bJackalopeBigJump && g_Config::JackalopeJumpMultiplier == 2.5f);
     assert(!g_Config::bNativeMountJump && !g_Config::bNativeMountHover && !g_Config::bNativeMountUseImpulse);
     assert(!g_Config::bDeinoAirLatch && g_Config::DeinoAirLatchReleaseSpeed==30);
@@ -358,7 +480,11 @@ int main() {
     assert(!g_Config::bDeinoAutoVectorTest && g_Config::DeinoCandidateJumpMultiplier==1);
     assert(g_Config::DeinoCandidateHoverSeconds==0 && g_Config::DeinoCandidateIntervalMs==100);
     assert(g_Config::DeinoAutoVectorMultiplier==1);
-    assert(g_Config::bDeinoFlight && g_Config::DeinoAirHorizontalMultiplier==30 && g_Config::DeinoAirUpSpeed==7);
+    assert(g_Config::bDeinoNativeArc);
+    assert(g_Config::DeinoPreset3Up==-300 && g_Config::DeinoPanelFKey==11 && g_Config::DeinoUpStep==20);
+    assert(g_Config::bDeinoFlight && g_Config::DeinoAirHorizontalMultiplier==30 && g_Config::DeinoAirUpSpeed==-7);
+    assert(g_Config::bDeinoAimJump && g_Config::DeinoAimJumpSpeed==90 && g_Config::DeinoAimSpeedStep==7);
+    assert(g_Config::bDeinoHoverFollowView);
     assert(g_Config::DeinoHoverIntervalMs==10 && g_Config::DeinoAirProtectionSeconds==1.2f);
     assert(g_Config::DeinoAutoJumpSpeed==15 && g_Config::DeinoAutoJumpUpSpeed==4);
     assert(!g_Config::bNativeMountPhysicsHook);
@@ -375,6 +501,8 @@ int main() {
     assert(!g_Config::bFastAim && !g_Config::bAutoFillGacha && !g_Config::bRadar);
     assert(!g_Config::bTekNoHeat && !g_Config::bDeinonychusBigJump && !g_Config::bFloatingStructures);
     assert(g_Config::RadarRangeMeters == 1000 && g_Config::HusbandryIntervalSeconds == .5f);
+    assert(!g_Config::bDeinoAimJump && g_Config::DeinoAirUpSpeed==5); // older configs retain manual behavior
+    assert(!g_Config::bDeinoHoverFollowView);
     assert(!g_Config::bJackalopeBigJump && g_Config::JackalopeJumpMultiplier == 2);
     { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::JackalopeJumpMultiplier=999\n"; }
     assert(Config.LoadConfig("expansion.ini") && g_Config::JackalopeJumpMultiplier == 20);
@@ -388,10 +516,18 @@ int main() {
     assert(Config.LoadConfig("expansion.ini") && g_Config::DeinoPointPounceDistance==30);
     { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::DeinoPointPounceDistance=1\n"; }
     assert(Config.LoadConfig("expansion.ini") && g_Config::DeinoPointPounceDistance==30);
-    { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::DeinoAirHorizontalMultiplier=100\ng_Config::DeinoAirUpSpeed=100\ng_Config::DeinoHoverIntervalMs=1\ng_Config::DeinoAirProtectionSeconds=99\nbDeinoAutoVectorTest=1\n"; }
+    { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::DeinoAirHorizontalMultiplier=100\ng_Config::DeinoAirUpSpeed=400\ng_Config::DeinoHoverIntervalMs=1\ng_Config::DeinoAirProtectionSeconds=99\nbDeinoAutoVectorTest=1\n"; }
     assert(Config.LoadConfig("expansion.ini"));
-    assert(g_Config::DeinoAirHorizontalMultiplier==30 && g_Config::DeinoAirUpSpeed==30);
+    assert(g_Config::DeinoAirHorizontalMultiplier==30 && g_Config::DeinoAirUpSpeed==300);
     assert(g_Config::DeinoHoverIntervalMs==10 && g_Config::DeinoAirProtectionSeconds==5 && !g_Config::bDeinoAutoVectorTest);
+    { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::DeinoAirUpSpeed=-400\ng_Config::DeinoPreset1Up=-400\ng_Config::DeinoAimJumpSpeed=999\ng_Config::DeinoAimSpeedStep=99\n"; }
+    assert(Config.LoadConfig("expansion.ini"));
+    assert(g_Config::DeinoAirUpSpeed==-300 && g_Config::DeinoPreset1Up==-300);
+    assert(g_Config::DeinoAimJumpSpeed==300 && g_Config::DeinoAimSpeedStep==30);
+    { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::bDeinoPitchVertical=1\ng_Config::DeinoAirHorizontalMultiplier=3\n"; }
+    assert(Config.LoadConfig("expansion.ini") && g_Config::bDeinoAimJump && g_Config::DeinoAimJumpSpeed==90);
+    { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::bDeinoAimJump=0\ng_Config::bDeinoPitchVertical=1\ng_Config::DeinoAimJumpSpeed=-50\n"; }
+    assert(Config.LoadConfig("expansion.ini") && !g_Config::bDeinoAimJump && g_Config::DeinoAimJumpSpeed==1);
     { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::DeinoTakeoffProtectionSeconds=999\n"; }
     assert(Config.LoadConfig("expansion.ini") && g_Config::DeinoTakeoffProtectionSeconds==5);
     { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::DeinoTakeoffProtectionSeconds=-1\n"; }
@@ -405,6 +541,10 @@ int main() {
     assert(Config.LoadConfig("expansion.ini"));
     assert(g_Config::JackalopeChargeCapMultiplier == 20 && g_Config::JackalopeChargeSpeedMultiplier == 10);
     g_Config::bNoRecoil = g_Config::bFastBow = g_Config::bAutoClaimBabies = true;
+    { std::ofstream O(Dir/"expansion.ini"); O << "g_Config::GargantarReachMeters=999\ng_Config::GargantarHoldSeconds=-1\ng_Config::GargantarTransitVisualSeconds=nan\n"; }
+    assert(Config.LoadConfig("expansion.ini"));
+    assert(g_Config::GargantarReachMeters==50 && g_Config::GargantarHoldSeconds==.02f && g_Config::GargantarTransitVisualSeconds==.4f);
+    g_Config::bNoRecoil = g_Config::bFastBow = g_Config::bAutoClaimBabies = true;
     g_Config::bAutoExtractEmbryos = true;
     g_Config::bTekNoHeat = g_Config::bDeinonychusBigJump = g_Config::bFloatingStructures = true;
     g_Config::bRadar = true; PhoenixShortcuts::PendingLevelStat.store(0);
@@ -412,9 +552,14 @@ int main() {
     g_Config::bJackalopeChargeCap = g_Config::bJackalopeFastCharge = true;
     g_Config::bNativeMountJump=g_Config::bNativeMountHover=true;
     g_Config::bDeinoEndHoverTest=g_Config::bDeinoAutoVectorTest=g_Config::bDeinoEndJumpTest=true;
-    g_Config::bDeinoFlight=true;
+    g_Config::bDeinoFlight=true; g_Config::bDeinoHoverFollowView=true;
+    g_Config::bGargantarClient=g_Config::bGargantarReach=g_Config::bGargantarFlightSpeed=true;
+    g_Config::bGargantarFastHold=g_Config::bGargantarAttackInterval=g_Config::bGargantarTransitVisual=true;
     PhoenixShortcuts::StopAll();
+    assert(!g_Config::bGargantarClient && !g_Config::bGargantarReach && !g_Config::bGargantarFlightSpeed);
+    assert(!g_Config::bGargantarFastHold && !g_Config::bGargantarAttackInterval && !g_Config::bGargantarTransitVisual);
     assert(!g_Config::bDeinoFlight);
+    assert(!g_Config::bDeinoHoverFollowView);
     assert(!g_Config::bDeinoEndHoverTest && !g_Config::bDeinoAutoVectorTest && !g_Config::bDeinoEndJumpTest);
     assert(!g_Config::bNativeMountJump && !g_Config::bNativeMountHover && !g_Config::bDeinoAirLatch);
     assert(!g_Config::bJackalopeChargeCap && !g_Config::bJackalopeFastCharge);

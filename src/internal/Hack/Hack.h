@@ -11,6 +11,7 @@ namespace g_Hack {
     std::string GetFloatingStructureStatus();
     bool SuppressTekHeatEvent(SDK::UObject* Object, SDK::UFunction* Function);
     void FeatureExpansionTick(SDK::UWorld* World);
+    void MaintainMountedFullRotationCamera(SDK::AShooterPlayerCameraManager* Camera);
     void ResetFeatureExpansion();
     void ResetInstantThrowables();
     // 秒换弹（Hack/InstantReload.inl）
@@ -21,13 +22,19 @@ namespace g_Hack {
     std::string GetTekLauncherSlotStatus();
     bool IsHusbandryInventoryActive();
     std::string GetExpansionCombatStatus();
+    std::string GetGargantarClientStatus();
     std::string GetNativeMountStatus();
     void TraceDeinoActionEvent(SDK::UObject* Object,SDK::UFunction* Function,void* Parameters,bool After);
     bool SuppressDeinoFlightInput(SDK::UObject* Object,SDK::UFunction* Function);
     std::string GetDeinoFlightStatus();
+    std::string GetDeinoHoverFacingStatus();
     std::string GetDeinoAirLatchStatus();
     std::string GetDeinoGlideProbeStatus();
     std::string GetDeinoGlideProbePath();
+    void RequestSpiderZiplineFlip(bool DirectServerEvent);
+    void SpiderZiplineExperimentTick(SDK::UWorld* World);
+    void ResetSpiderZiplineExperiment();
+    std::string GetSpiderZiplineExperimentStatus();
     void NativeMountPhysicsHook(SDK::UMovementComponent* Movement);
     std::string GetHusbandryStatus();
     void RequestAllocateLevel(int Stat);

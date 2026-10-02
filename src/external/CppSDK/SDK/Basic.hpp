@@ -61,14 +61,14 @@ using namespace UC;
 */
 namespace Offsets
 {
-	// ASA 93.37.0 / CL 831297 / Steam build 25525861 (ArkAscended.exe SHA-256
-	// 7A08EF6EA5D2050708D02DC451632AD2A245C7D689A8065B2D90C16443C3CC96), 2026-09-26.
-	constexpr int32 GObjects          = 0x0CFD7200;
-	constexpr int32 AppendString      = 0x01841530;
-	constexpr int32 GetNameEntry      = 0x01842260;
-	constexpr int32 GNames            = 0x0D3B8C80;
-	constexpr int32 GWorld            = 0x0D36F948;
-	constexpr int32 ProcessEvent      = 0x01A8DC70;
+	// ASA CL 832029 / Steam build 25666227 (ArkAscended.exe SHA-256
+	// D3716C5DA74E56262832E000D47A5B4F96F8F802A5CAD6EACF7F11EA07953742), 2026-10-02.
+	constexpr int32 GObjects          = 0x0D04C220;
+	constexpr int32 AppendString      = 0x01846630;
+	constexpr int32 GetNameEntry      = 0x01847360;
+	constexpr int32 GNames            = 0x0D42F400;
+	constexpr int32 GWorld            = 0x0D3E5EC8;
+	constexpr int32 ProcessEvent      = 0x01A92D00;
 	constexpr int32 ProcessEventIdx   = 0x00000050;
 }
 

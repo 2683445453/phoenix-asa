@@ -121,14 +121,46 @@ int main() {
     assert(SlowFrame.X == 300); // Focus stalls cannot throw the camera kilometres away.
     assert(g_Hack::CameraControls::Step(0, 0, 1, 0, 0, NAN, 0.1, false).X == 0);
     assert(g_Hack::CameraControls::Step(0, 0, 1, 0, 0, 10, -1, false).X == 0);
+    g_Hack::NoteRequestGate NoteGate;
+    assert(!NoteGate.Begin());
+    assert(NoteGate.Request() && !NoteGate.Request()); // Coalesce clicks before the game tick.
+    assert(NoteGate.Begin() && !NoteGate.Begin());
+    assert(!NoteGate.Request()); // Reject clicks even during the final batch's dispatch.
+    NoteGate.Reset();
+    assert(!NoteGate.Begin()); // No late click survives completion.
+    assert(NoteGate.Request());
+    NoteGate.Reset(); // Cancellation also consumes a queued round.
+    assert(!NoteGate.Begin() && NoteGate.Request() && NoteGate.Begin());
+    NoteGate.Reset();
     g_Hack::NoteRequestBatch Notes;
-    Notes.Start({3, 1, 3, -1, 5}, 1000);
-    assert(Notes.Total() == 3 && Notes.Next(999) == std::nullopt);
-    assert(Notes.Next(1000) == 1 && Notes.Next(1001) == std::nullopt);
-    assert(Notes.Next(1250) == 3 && Notes.Next(1500) == 5);
-    assert(!Notes.Pending() && Notes.Next(10000) == std::nullopt); // Never loops back to zero.
-    Notes.Start({20, 21}, 11000); Notes.Cancel();
-    assert(!Notes.Pending() && Notes.Next(12000) == std::nullopt);
+    assert(!Notes.Pending() && Notes.NextBatch(0).empty());
+    Notes.Start({10, 3, 1, 3, -1, 5, 0, 9, 8, 7, 6, 4, 2, -99}, 1000);
+    assert(Notes.Total() == 11 && Notes.Sent() == 0 && Notes.NextBatch(999).empty());
+    assert((Notes.NextBatch(1000) == std::vector<int>{0, 1, 2, 3})); // Sorted, unique, nonnegative.
+    assert(Notes.Sent() == 4 && Notes.Pending());
+    assert(Notes.NextBatch(1000).empty()); // Repeated calls in one tick cannot bypass the cap.
+    assert(Notes.NextBatch(1099).empty() && Notes.Sent() == 4);
+    assert((Notes.NextBatch(1100) == std::vector<int>{4, 5, 6, 7}));
+    assert(Notes.NextBatch(1199).empty());
+    assert((Notes.NextBatch(1200) == std::vector<int>{8, 9, 10})); // The tail needs no padding/repeats.
+    assert(!Notes.Pending() && Notes.Sent() == Notes.Total() && Notes.NextBatch(10000).empty());
+    Notes.Start({10, 11, 12, 13, 14, 15, 16, 17, 18}, 11000);
+    assert(Notes.NextBatch(11000).size() == 4);
+    assert((Notes.NextBatch(20000) == std::vector<int>{14, 15, 16, 17})); // Low FPS never catches up.
+    assert(Notes.NextBatch(20000).empty() && Notes.NextBatch(20099).empty());
+    assert((Notes.NextBatch(20100) == std::vector<int>{18}));
+    assert(Notes.NextBatch(20200).empty()); // One round never resends an ID.
+    Notes.Start({20, 21, 22, 23, 24}, 21000);
+    assert(Notes.NextBatch(21000).size() == 4);
+    Notes.Cancel();
+    assert(!Notes.Pending() && Notes.Sent() == 0 && Notes.Total() == 0 && Notes.NextBatch(21000).empty());
+    Notes.Start({21, 20, 21}, 21001); // Explicit restart resets both progress and the deadline.
+    assert((Notes.NextBatch(21001) == std::vector<int>{20, 21}));
+    assert(!Notes.Pending());
+    Notes.Start({-1, -2, -1}, 23000);
+    assert(Notes.Total() == 0 && Notes.Sent() == 0 && !Notes.Pending() && Notes.NextBatch(23000).empty());
+    Notes.Start({}, 24000);
+    assert(Notes.Total() == 0 && Notes.NextBatch(24000).empty());
     using StructureType = g_ESP::Structures::Type;
     const std::pair<const char*, StructureType> StructureCases[] = {
         {"PrimalItemStructure_Turret_C", StructureType::AutoTurret},
@@ -194,6 +226,12 @@ int main() {
     assert(g_Hack::AutoLootBeaverDamAllowed("BeaverDam_C"));
     assert(g_Hack::AutoLootBeaverDamAllowed("SupplyCrateBaseBP_Instantaneous_DenLogs_Child2_C"));
     assert(!g_Hack::AutoLootBeaverDamAllowed("SupplyCrate_Level25_C"));
+    assert(g_Hack::AutoLootSpecialContainerAllowed("ArtifactCrate_5_C"));
+    assert(g_Hack::AutoLootSpecialContainerAllowed("ArtifactContainer_C"));
+    assert(g_Hack::AutoLootSpecialContainerAllowed("SupplyCrate_BuriedTreasure_ShoulderDragon_C"));
+    assert(g_Hack::AutoLootSpecialContainerAllowed("TreasureChest_C"));
+    assert(!g_Hack::AutoLootSpecialContainerAllowed("StorageBox_Large_C"));
+    assert(!g_Hack::AutoLootSpecialContainerAllowed("PrimalItemArtifactGeneric_C"));
     int Survivor = 1, Dino = 2, Stranger = 3, Spectator = 4;
     assert(g_Hack::AutoLootControlsHuman(&Survivor, &Survivor, nullptr, nullptr));
     assert(g_Hack::AutoLootControlsHuman(&Dino, &Survivor, &Dino, &Survivor));
@@ -202,11 +240,77 @@ int main() {
     assert(!g_Hack::AutoLootControlsHuman(&Spectator, &Survivor, &Dino, &Survivor));
     assert(!g_Hack::AutoLootControlsHuman(nullptr, &Survivor, nullptr, nullptr));
     assert(!g_Hack::AutoLootControlsHuman(&Dino, nullptr, &Dino, nullptr));
+    assert(g_Hack::AutoLootControlsHuman(&Dino, &Survivor, &Dino, nullptr, &Dino));
+    assert(!g_Hack::AutoLootControlsHuman(&Dino, &Survivor, &Dino, nullptr, &Stranger));
+    assert(!g_Hack::AutoLootControlsHuman(&Dino, &Survivor, &Dino, &Stranger, &Dino));
+    assert(!g_Hack::AutoLootControlsHuman(&Spectator, &Survivor, &Dino, nullptr, &Dino));
+    int NativeViewCalls = 0;
+    auto RejectNativeView = [&] { ++NativeViewCalls; return false; };
+    assert(g_Hack::AutoLootCanRequestContainer(true, RejectNativeView));
+    assert(NativeViewCalls == 0); // A mounted UI veto must not prevent the server request.
+    assert(!g_Hack::AutoLootCanRequestContainer(false, RejectNativeView));
+    assert(NativeViewCalls == 1);
+    assert(g_Hack::AutoLootCanRequestContainer(false, [] { return true; }));
+    assert(!g_Hack::AutoLootInventoryUIBlocks(true, false, &Dino, &Dino));
+    assert(g_Hack::AutoLootInventoryUIBlocks(true, true, &Dino, &Dino));
+    assert(g_Hack::AutoLootInventoryUIBlocks(true, false, &Stranger, &Dino));
+    assert(g_Hack::AutoLootInventoryUIBlocks(true, false, nullptr, nullptr));
+    assert(!g_Hack::AutoLootInventoryUIBlocks(false, false, nullptr, nullptr));
+    assert(!g_Hack::AutoLootInventoryViewBusy(&Dino, &Dino, nullptr, false));
+    assert(!g_Hack::AutoLootInventoryViewBusy(&Dino, nullptr, &Dino, true));
+    assert(g_Hack::AutoLootInventoryViewBusy(&Dino, nullptr, &Dino, false));
+    assert(g_Hack::AutoLootInventoryViewBusy(&Stranger, nullptr, &Dino, true));
+    assert(!g_Hack::AutoLootInventoryViewBusy(nullptr, &Dino, &Dino, true));
+    assert(g_Hack::AutoLootAccessRange(10, 500) == 15);
+    assert(g_Hack::AutoLootAccessRange(10, 0) == 10);
+    assert(g_Hack::AutoLootAccessRange(10, NAN) == 10);
+    assert(g_Hack::AutoLootAccessRange(10, -500) == 10);
     assert(g_Hack::AutoLootWithinRange(1000, 10));
     assert(!g_Hack::AutoLootWithinRange(1000.1, 10));
     assert(!g_Hack::AutoLootWithinRange(NAN, 10));
     assert(!g_Hack::AutoLootWithinRange(-1, 10));
     assert(!g_Hack::AutoLootWithinRange(100, NAN));
+    // A loaded inventory is transferred on the next 100 ms observation, even
+    // with a 3 s scan setting. Sync refreshes never duplicate the transfer RPC.
+    using LootAction = g_Hack::AutoLootTransferAction;
+    using LootSession = g_Hack::AutoLootTransferSession;
+    const auto LootTime = [](int Ms) { return LootSession::Clock::time_point(std::chrono::milliseconds(Ms)); };
+    LootSession Sync;
+    assert(Sync.Step(LootTime(0), 3) == LootAction::Wait);
+    Sync.Begin(LootTime(0), 3000);
+    assert(Sync.Step(LootTime(0), 0) == LootAction::Wait);
+    assert(Sync.Step(LootTime(99), 3) == LootAction::Wait);
+    assert(Sync.Step(LootTime(100), 3) == LootAction::Transfer);
+    assert(Sync.Step(LootTime(200), 3) == LootAction::Wait);
+    assert(Sync.Step(LootTime(1100), 3) == LootAction::Refresh);
+    assert(Sync.Step(LootTime(1200), 2) == LootAction::Complete);
+    assert(Sync.Step(LootTime(1300), 2) == LootAction::Wait);
+    Sync.Begin(LootTime(0), 750);
+    assert(Sync.Step(LootTime(0), 0) == LootAction::Wait);
+    assert(Sync.Step(LootTime(750), 0) == LootAction::Refresh);
+    assert(Sync.Step(LootTime(800), 0) == LootAction::Wait);
+    assert(Sync.Step(LootTime(1500), 0) == LootAction::Refresh);
+    assert(Sync.Step(LootTime(1600), 5) == LootAction::Transfer);
+    assert(Sync.Step(LootTime(2350), 5) == LootAction::Refresh);
+    assert(Sync.Step(LootTime(4600), 5) == LootAction::Timeout);
+    assert(Sync.Step(LootTime(5000), 5) == LootAction::Wait);
+    // A stalled initial sync expires independently of the transfer confirmation.
+    Sync.Begin(LootTime(0), 10);
+    assert(Sync.Step(LootTime(249), 0) == LootAction::Wait);
+    assert(Sync.Step(LootTime(349), 0) == LootAction::Refresh);
+    assert(Sync.Step(LootTime(6000), 0) == LootAction::Timeout);
+    Sync.Begin(LootTime(0), 750);
+    assert(Sync.Step(LootTime(6000), 1) == LootAction::Transfer); // Late sync wins over timeout.
+    assert(Sync.Step(LootTime(9000), 0) == LootAction::Complete); // Confirmation wins over timeout.
+    Sync.Begin(LootTime(0), 750);
+    assert(Sync.Step(LootTime(0), 10001) == LootAction::Wait);
+    assert(Sync.Step(LootTime(100), -1) == LootAction::Wait);
+    assert(g_Hack::AutoLootFailureDelayMs(0) == 500);
+    assert(g_Hack::AutoLootFailureDelayMs(1) == 500);
+    assert(g_Hack::AutoLootFailureDelayMs(2) == 1000);
+    assert(g_Hack::AutoLootFailureDelayMs(3) == 2000);
+    assert(g_Hack::AutoLootFailureDelayMs(4) == 4000);
+    assert(g_Hack::AutoLootFailureDelayMs(1000) == 4000);
     CheckImpact({}, {1000, 0, 0}, {}, 2000, 0, 3);
     CheckImpact({}, {3000, 0, 0}, {0, 600, 0}, 5000, -980, 3);
     CheckImpact({100, -400, 20}, {3000, 500, 500}, {-700, 250, -100}, 6000, -980, 3, 0.12);
@@ -295,6 +399,7 @@ int main() {
     std::filesystem::create_directories(Directory);
     auto& Manager = ConfigManager::Get(); Manager.Initialize(Directory.string());
     g_Config::bWeaponFireRate = g_Config::bProjectilePrediction = true;
+    g_Config::bCrossbowHoldRapidFire = true;
     g_Config::bAutoLootContainers = true;
     g_Config::WeaponFireRateMultiplier = 3.5f;
     g_Config::ProjectilePredictionMaxSeconds = 4.5f; g_Config::ProjectilePredictionDelayMs = 125;
@@ -326,6 +431,7 @@ int main() {
                << "g_Config::SkyArrowHeightMeters=100\n";
     }
     g_Config::bWeaponFireRate = g_Config::bProjectilePrediction = false;
+    g_Config::bCrossbowHoldRapidFire = false;
     g_Config::bAutoLootContainers = false;
     g_Config::WeaponFireRateMultiplier = 1;
     g_Config::ProjectilePredictionMaxSeconds = g_Config::ProjectilePredictionDelayMs = 0;
@@ -340,6 +446,7 @@ int main() {
     g_Config::bFreeCameraEnabled = true;
     assert(Manager.LoadConfig("extensions.ini"));
     assert(g_Config::bWeaponFireRate && g_Config::bProjectilePrediction);
+    assert(g_Config::bCrossbowHoldRapidFire);
     assert(g_Config::FreeCameraSpeedMeters == 22 && !g_Config::bFreeCameraEnabled);
     assert(g_Config::bAutoLootContainers);
     assert(g_Config::WeaponFireRateMultiplier == 3.5f);

@@ -1,8 +1,11 @@
-﻿#include "../src/internal/Menu/StartupPresentation.h"
+#include "../src/internal/Menu/StartupPresentation.h"
 // Actual ImGui menu rendering with game-side services stubbed; never loads or controls a game.
 #include "../src/external/Minimal-D3D12-Hook-ImGui/Main/hooks.h"
 #include "../src/internal/Menu/FeatureCatalog.h"
 #include "../src/internal/Hack/Hack.h"
+#include "../src/internal/Hack/NoteExperiment.h"
+#include "../src/internal/Hack/GeneScannerMarkers.h"
+#include "../src/internal/Menu/Misc_Menu.h"
 #include "../src/internal/Hack/TekSpear.h"
 #include "../src/internal/ESP/DrawESP.h"
 #include "../src/internal/AActor/Tick.h"
@@ -45,7 +48,23 @@ namespace g_TekSpear {
     std::string GetStatus(){return "等待装备泰克长矛";} std::string GetProjectileStatus(){return "识别 0 · 移动 0 · 接近 0";}
     void RequestRetarget(){} void RequestReset(){}
 }
+namespace g_GeneScannerMarkers {
+    std::string GetStatus() { return "Offline preview"; }
+    std::vector<MarkerInfo> GetCandidates() { return {}; }
+}
 namespace g_Hack {
+    NoteExperimentView NoteExperimentTestView;
+    bool NoteExperimentTestOpen = false;
+    int NoteExperimentTestClosed = 0, NoteExperimentTestRequests = 0, NoteExperimentTestStops = 0;
+    NoteExperimentScope NoteExperimentTestScope = NoteExperimentScope::TidesOfFortune;
+    int NoteExperimentTestSelected = -1;
+    void SetNoteExperimentOpen(bool Open) { NoteExperimentTestOpen = Open; if (!Open) ++NoteExperimentTestClosed; }
+    void RefreshNoteExperiment() {}
+    void RequestNoteExperiment(NoteExperimentScope Scope, int SelectedIndex, std::uint64_t) {
+        ++NoteExperimentTestRequests; NoteExperimentTestScope = Scope; NoteExperimentTestSelected = SelectedIndex;
+    }
+    void CancelNoteExperiment() { ++NoteExperimentTestStops; }
+    NoteExperimentView GetNoteExperimentView() { return NoteExperimentTestView; }
 #define STATUS(Name) std::string Name(){return LanguageManager::Get().IsEnglish()?"Offline preview · waiting for game state":"离线预览 · 等待游戏状态";}
     STATUS(GetDinoHarvestRangeStatus) STATUS(GetAutoHarvestStatus) STATUS(GetWeaponFireRateStatus) STATUS(GetNoteXPBuffStatus)
     STATUS(GetUploadTerminalStatus) STATUS(GetAutoFeedStatus) STATUS(GetDaeodonHealingStatus)
@@ -55,13 +74,15 @@ namespace g_Hack {
     STATUS(GetFreeCameraStatus) STATUS(GetTekEquipmentStatus) STATUS(GetArmorSwapStatus)
     STATUS(GetAutoBuffSoupStatus) STATUS(GetFireExtinguishStatus)
     STATUS(GetInstantReloadStatus) STATUS(GetInstantChargeStatus) STATUS(GetTekLauncherSlotStatus)
-    STATUS(GetFloatingStructureStatus)
+    STATUS(GetFloatingStructureStatus) STATUS(GetGargantarClientStatus)
     STATUS(GetExpansionCombatStatus) STATUS(GetHusbandryStatus)
     STATUS(GetNativeMountStatus) STATUS(GetDeinoAirLatchStatus)
+    STATUS(GetDeinoFlightStatus) STATUS(GetDeinoHoverFacingStatus) STATUS(GetSpiderZiplineExperimentStatus)
     STATUS(GetDeinoGlideProbeStatus) STATUS(GetDeinoGlideProbePath)
     STATUS(GetGrinderDepositStatus) STATUS(GetBlueprintDepositStatus) STATUS(GetAutoDropStatus) STATUS(GetUnderwaterWeaponStatus)
 #undef STATUS
     void RequestNoteXPBuff(){} void CancelNoteXPBuff(){} void RequestOpenUploadTerminal(){}
+    void RequestSpiderZiplineFlip(bool) {}
     void RequestAllocateLevel(int){}
     bool CanAllocateLevel(){return false;}
     void RequestEnableNearbyDaeodonHealing(){} void DumpServerInfo(){}
@@ -131,6 +152,81 @@ void Frame(g_DrawImGui::Topic T,bool Help,int W,int H,const char* Image=nullptr)
 void DrawOnce(){
     RenderItems.clear();ToggleIds.clear();ImGui::NewFrame();g_DrawImGui::MyImGuiDraw(nullptr,0,0);ImGui::Render();
     assert(ImGui::GetCurrentContext()->CurrentWindowStack.Size==0);
+}
+void NoteExperimentCases(const char* Locale) {
+    using namespace g_DrawImGui;
+    using namespace g_Hack;
+    auto& View = NoteExperimentTestView;
+    View = {}; NoteExperimentTestRequests = NoteExperimentTestStops = NoteExperimentTestClosed = 0;
+    View.Entries = {{1746, "Tides note one", true, false, true},
+        {1747, "Tides cinematic", true, true, true}, {12, "Island note", true, false, false}};
+    Frame(Topic::Utilities, false, 1366, 900);
+    auto Click = [](const char* Label, ImGuiWindow* Window = nullptr, ImGuiID KnownId = 0) {
+        RenderItem Target; bool Found = false;
+        for (const auto& [Id, Item] : RenderItems) if ((KnownId ? Id == KnownId : Item.Label == Label) && (!Window || Item.Window == Window)) {
+            Target = Item; Found = true; break;
+        }
+        if (!Found || !Target.Window || !Target.Window->ClipRect.Contains(Target.Bounds.GetCenter()))
+            std::cerr << "Note experiment control unavailable: " << Label << " (found=" << Found << ")\n";
+        assert(Found && Target.Window && Target.Window->ClipRect.Contains(Target.Bounds.GetCenter()));
+        const auto Center = Target.Bounds.GetCenter(); auto& IO = ImGui::GetIO();
+        IO.AddMousePosEvent(Center.x, Center.y); DrawOnce();
+        IO.AddMouseButtonEvent(0, true); DrawOnce();
+        IO.AddMouseButtonEvent(0, false); DrawOnce(); DrawOnce(); IO.AddMousePosEvent(-100, -100);
+    };
+    Click(Tr(U8("笔记重复解锁实验")));
+    Frame(Topic::Utilities, false, 1366, 900);
+    const auto WindowName = std::string(Tr(U8("笔记重复解锁实验"))) + "###noteExperiment";
+    auto* Window = ImGui::FindWindowByName(WindowName.c_str());
+    assert(Window && Window->Active && NoteExperimentTestOpen);
+    ImGui::SetWindowSize(Window, {960, 820}, ImGuiCond_Always);
+    ImGui::SetScrollY(Window, 0); Frame(Topic::Utilities, false, 1366, 900);
+    assert(RenderedText.find("Tides note one") != std::string::npos);
+    assert(RenderedText.find("Tides cinematic") != std::string::npos);
+    assert(RenderedText.find("Island note") == std::string::npos);
+    assert(RenderedText.find(Tr(U8("经验值：未就绪"))) == std::string::npos);
+    assert(RenderedText.find(Tr(U8("经验变化：未就绪"))) != std::string::npos);
+    Click(Tr(U8("当前范围发送一轮")), Window); assert(NoteExperimentTestRequests == 0);
+    View.Before.Valid = true;
+    Frame(Topic::Utilities, false, 1366, 900);
+    assert(RenderedText.find(Tr(U8("Buff 列表：未就绪"))) != std::string::npos);
+    assert(RenderedText.find(Tr(U8("未检测到 Buff"))) == std::string::npos);
+    View.Ready = true;
+    View.Before.Valid = View.Before.HasExperience = View.Before.HasBuffs = true;
+    View.Before.Experience = 123.5f; View.Before.Buffs = {{"Explorer XP Buff", 9, 55.f, true}};
+    View.After.Valid = View.After.HasExperience = View.After.HasBuffs = true;
+    View.After.Experience = 148.5f; View.After.Buffs = {{"Explorer XP Buff", 9, 650.f, true}};
+    View.LogPath = "C:/preview/note-experiment.log";
+    Frame(Topic::Utilities, false, 1366, 900, (std::string("note-experiment-") + Locale).c_str());
+    assert(RenderedText.find("123.50") != std::string::npos && RenderedText.find("148.50") != std::string::npos);
+    assert(RenderedText.find("+25.00") != std::string::npos);
+    Click("1746"); Click(Tr(U8("重发所选笔记")), Window);
+    assert(NoteExperimentTestRequests == 1 && NoteExperimentTestScope == NoteExperimentScope::Selected && NoteExperimentTestSelected == 1746);
+    Click(Tr(U8("当前范围发送一轮")), Window);
+    assert(NoteExperimentTestRequests == 2 && NoteExperimentTestScope == NoteExperimentScope::TidesOfFortune);
+    // BeginCombo registers its item ID but does not emit an ItemInfo label in this ImGui version.
+    const auto RangeComboId = ImHashStr("##select", 0, ImHashStr(Tr(U8("实验范围")), 0, Window->ID));
+    Click("##select", Window, RangeComboId); Click(Tr(U8("所有经验笔记")));
+    Frame(Topic::Utilities, false, 1366, 900);
+    assert(RenderedText.find("Island note") != std::string::npos && RenderedText.find("Tides cinematic") == std::string::npos);
+    Click(Tr(U8("当前范围发送一轮")), Window);
+    assert(NoteExperimentTestRequests == 3 && NoteExperimentTestScope == NoteExperimentScope::AllXPNotes);
+    Click("##select", Window, RangeComboId); Click(Tr(U8("命运之潮")));
+    View.Observing = true; DrawOnce();
+    Click(Tr(U8("重发所选笔记")), Window); assert(NoteExperimentTestRequests == 3);
+    Click(Tr(U8("停止实验")), Window); assert(NoteExperimentTestStops == 1);
+    g_MDX12::g_MenuState::g_isOpen = false; DrawOnce();
+    assert(!Window->Active && NoteExperimentTestOpen && NoteExperimentTestClosed == 0);
+    g_MDX12::g_MenuState::g_isOpen = true;
+    Frame(Topic::Utilities, false, 520, 720, (std::string("note-experiment-narrow-") + Locale).c_str());
+    assert(Window->Active && Window->Size.x <= 520 && Window->Size.y <= 720);
+    auto Close = RenderItems.find(Window->GetID("#CLOSE")); assert(Close != RenderItems.end());
+    const auto Center = Close->second.Bounds.GetCenter(); auto& IO = ImGui::GetIO();
+    IO.AddMousePosEvent(Center.x, Center.y); DrawOnce();
+        IO.AddMouseButtonEvent(0, true); DrawOnce();
+    IO.AddMouseButtonEvent(0, false); DrawOnce(); DrawOnce(); IO.AddMousePosEvent(-100, -100); DrawOnce();
+    assert(!NoteExperimentTestOpen && NoteExperimentTestClosed == 1 && !Window->Active);
+    View = {};
 }
 void AssertIntroAboveMenu(ImGuiWindow* Intro){
     auto* Main=ImGui::FindWindowByName("phoenix###phoenixMain");assert(Main&&Intro&&Intro->Active);
@@ -229,7 +325,70 @@ void HarvestCases(const char* Locale){
     HarvestScroll(1,520,720,Name("narrow-bottom").c_str());
     Frame(Topic::Harvest,true,1366,900);HarvestScroll(0,1366,900,nullptr);
 }
-int main(){
+void ControlHelpCases() {
+    using namespace g_DrawImGui;
+    auto& IO=ImGui::GetIO(); IO.DisplaySize={1366,900};
+    bool Enabled=false; float Speed=10; ImVec2 TogglePos{},SliderPos{};
+    g_Config::bShowFeatureHelp=true;
+    auto Draw=[&]() {
+        ImGui::NewFrame(); HoverHelp::BeginFrame(); HoverHelp::Guide="Unrelated page instructions";
+        ImGui::SetNextWindowPos({300,100}); ImGui::SetNextWindowSize({420,400});
+        ImGui::Begin("Control help QA",nullptr,ImGuiWindowFlags_NoSavedSettings);
+        DrawCustomCheckbox("Feature",&Enabled,"Feature-specific usage");
+        TogglePos=ImGui::GetItemRectMin(); TogglePos.x+=10;TogglePos.y+=10;
+        ImGui::TextUnformatted("Status"); HelpText("Unrelated status instructions");
+        {
+            ParameterFade Fade("Parameters",true);
+            assert(g_ParameterDepth==1);
+            DrawCustomSliderFloat("Camera speed",&Speed,1,100,"%.0f",1,"m/s");
+            SliderPos=ImGui::GetItemRectMin(); SliderPos.x+=20;SliderPos.y+=10;
+            HelpText("Speed affects only camera travel");
+        }
+        assert(g_ParameterDepth==0);
+        ImGui::End(); ImGui::Render();
+        assert(GImGui->CurrentWindowStack.Size==0);
+    };
+    IO.MousePos={-100,-100}; Draw();
+    IO.MousePos=TogglePos; for(int I=0;I<4;++I)Draw();
+    assert(HoverHelp::Text.find("Feature-specific usage")!=std::string::npos);
+    assert(HoverHelp::Text.find("Unrelated")==std::string::npos);
+    IO.MousePos=SliderPos; for(int I=0;I<4;++I)Draw();
+    assert(HoverHelp::Text.find("Speed affects only camera travel")!=std::string::npos);
+    assert(HoverHelp::Text.find("Feature-specific usage")==std::string::npos);
+    assert(HoverHelp::Text.find("Unrelated")==std::string::npos);
+    IO.MousePos={-100,-100};
+}
+void ChoiceGroupCases() {
+    using namespace g_DrawImGui;
+    auto& IO=ImGui::GetIO(); IO.DisplaySize={1366,900}; IO.MousePos={-100,-100};
+    bool First=true,Second=false,Other=false,Changed=false;
+    auto Draw=[&]() {
+        RenderItems.clear();ImGui::NewFrame();HoverHelp::BeginFrame();
+        ImGui::SetNextWindowPos({300,100});ImGui::SetNextWindowSize({420,300});
+        ImGui::Begin("Choice group QA",nullptr,ImGuiWindowFlags_NoSavedSettings);
+        Changed=DrawChoiceGroup("Types",{{"First",false,nullptr,&First},{"Second",false,nullptr,&Second}});
+        DrawCustomCheckbox("Unrelated feature",&Other);
+        ImGui::End();ImGui::Render();assert(g_ParameterDepth==0);
+    };
+    auto Click=[&](const char* Label,ImGuiID Known=0) {
+        RenderItem Target;bool Found=false;
+        for(const auto& [Id,Item]:RenderItems) if(Known?Id==Known:Item.Label==Label){Target=Item;Found=true;break;}
+        assert(Found&&Target.Window->ClipRect.Contains(Target.Bounds.GetCenter()));
+        const auto P=Target.Bounds.GetCenter(); IO.AddMousePosEvent(P.x,P.y);Draw();
+        IO.AddMouseButtonEvent(0,true);Draw();IO.AddMouseButtonEvent(0,false);Draw();
+        const bool Result=Changed;Draw();return Result;
+    };
+    Draw();Draw();
+    auto* Window=ImGui::FindWindowByName("Choice group QA");assert(Window);
+    const auto Id=ImHashStr("##choices",0,ImHashStr("Types",0,Window->ID));
+    Click("",Id);assert(First&&!Second&&!Other);
+    assert(Click(Tr(U8("全选"))));assert(First&&Second&&!Other);
+    assert(Click(Tr(U8("全不选"))));assert(!First&&!Second&&!Other);
+    assert(Click("Second"));assert(!First&&Second&&!Other);
+    IO.AddKeyEvent(ImGuiKey_Escape,true);Draw();IO.AddKeyEvent(ImGuiKey_Escape,false);Draw();
+    Draw();assert(!First&&Second&&!Other);IO.MousePos={-100,-100};
+}
+int main(int Argc, char** Argv){
     using namespace g_DrawImGui;
     ImGui::CreateContext();auto& IO=ImGui::GetIO();IO.IniFilename=nullptr;IO.DeltaTime=1.f/60;
     IO.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf",18);
@@ -242,6 +401,25 @@ int main(){
     SetupCustomImGuiStyle();g_Config::bInitWelcome=true;g_Config::bShowWelcome=false;
     g_Hook::ActorTickOK=g_Hook::PostRenderOK=g_Hook::UpdateCameraOK=true;
     g_Hook::PhysicsRotationOK=g_Hook::TakeDamageOK=g_Hook::ClientNotifyRespawnedOK=g_Hook::ShotgunSpreadOK=true;
+    if (Argc > 1 && std::string(Argv[1]) == "--overlay-only") {
+        LanguageManager::Get().Initialize("language");
+        for (const auto* Locale : {"CN.ini","EN.ini"}) {
+            assert(LanguageManager::Get().LoadLanguage(Locale));
+            const bool English = LanguageManager::Get().IsEnglish();
+            g_Config::bOverlayESP = false;
+            Frame(Topic::Overlay,false,1366,900,English ? "overlay-off-en" : "overlay-off-cn");
+            assert(RenderedText.find(Tr(U8("人物／生物骨骼"))) == std::string::npos);
+            g_Config::bOverlayESP = true;
+            Frame(Topic::Overlay,false,1366,900,English ? "overlay-on-en" : "overlay-on-cn");
+            assert(RenderedText.find(Tr(U8("人物／生物骨骼"))) != std::string::npos);
+            if (English) assert(RenderedText.find("Character skeleton") != std::string::npos);
+            Frame(Topic::Overlay,true,520,720,English ? "overlay-narrow-en" : "overlay-narrow-cn");
+        }
+        std::cout << "Independent overlay CN/EN, hidden parameters, narrow layout and ImGui stacks passed.\n";
+        ImGui::DestroyContext(); return 0;
+    }
+    ControlHelpCases();
+    ChoiceGroupCases();
     StartupCases();
     Frame(Topic::Home,false,1366,900,"home");
     Frame(Topic::Aim,false,1366,900,"aim-off");
@@ -253,6 +431,13 @@ int main(){
     for(auto& A:PhoenixShortcuts::Actions)*A.Enabled=true;
     g_Config::bAutoFeed=g_Config::bAutoEatDrink=g_Config::bAutoMedicalBrew=g_Config::bAutoEnergyBrew=true;
     g_Config::bDrawStructures=g_Config::bEnableOOF=g_Config::bDrawWater=true;
+    g_Config::bOverlayESP = false;
+    Frame(Topic::Overlay,false,1366,900,"overlay-off-cn");
+    assert(RenderedText.find(Tr(U8("人物／生物骨骼"))) == std::string::npos);
+    g_Config::bOverlayESP = true;
+    Frame(Topic::Overlay,false,1366,900,"overlay-on-cn");
+    assert(RenderedText.find(Tr(U8("人物／生物骨骼"))) != std::string::npos);
+    Frame(Topic::Overlay,false,520,720,"overlay-narrow-cn");
     for(const auto& F:Features){Frame(F.TopicId,false,1366,900);Frame(F.TopicId,true,1366,900);}
     Frame(Topic::Care,false,1366,900,"care-off-cn");
     g_Config::bAutoClaimBabies = g_Config::bAutoFeedBabies = g_Config::bAutoFillGacha = true;
@@ -268,12 +453,16 @@ int main(){
     Frame(Topic::Harvest,true,520,720,"narrow");
     Frame(Topic::Home,false,1366,900);
     HarvestCases("cn");
+    NoteExperimentCases("cn");
     static float Color[4]={.04f,.52f,1,.8f};
     LanguageManager::Get().Initialize("language");
     assert(LanguageManager::Get().LoadLanguage("EN.ini"));assert(LanguageManager::Get().IsEnglish());
     assert(std::string(Tr(U8("自动丢弃所选物资")))=="Auto drop selected resources");
     assert(std::string(LanguageManager::Misc_Menu::FreeCameraEnabled)=="Local Free Camera (default Z)");
+    Frame(Topic::Overlay,false,1366,900,"overlay-on-en");
+    assert(RenderedText.find("Character skeleton") != std::string::npos);
     HarvestCases("en");
+    NoteExperimentCases("en");
     for(const auto& F:Features) Frame(F.TopicId,true,1366,900);
     Frame(Topic::Care,true,1366,900,"care-en");
     assert(RenderedText.find("Care search range")!=std::string::npos);
@@ -284,6 +473,7 @@ int main(){
     Frame(Topic::Weapons,true,1366,900,"weapons-en");
     assert(LanguageManager::Get().LoadLanguage("CN.ini"));
     Frame(Topic::Weapons,true,1366,900,"weapons-cn");
+    Frame(Topic::Weapons,true,520,720,"weapons-narrow-cn");
     CheckToggleIds = false;
     // Fade the old page fully out before replacing it, then fade in the new one.
     SelectTopic(Topic::Fishing);bool SawOut=false,SawIn=false;

@@ -13,7 +13,19 @@ $testLines = @('@echo off', ('call "' + $testDev + '" -no_logo -arch=x64'),
     'if errorlevel 1 exit /b 1', 'release\feature-expansion\feature_expansion.exe',
     'if errorlevel 1 exit /b 1',
     'cl /nologo /std:c++20 /EHsc /W4 /utf-8 tests\feature_expansion_patch.cpp /Fe:release\feature-expansion\feature_expansion_patch.exe /Fo:release\feature-expansion\',
-    'if errorlevel 1 exit /b 1', 'release\feature-expansion\feature_expansion_patch.exe')
+    'if errorlevel 1 exit /b 1', 'release\feature-expansion\feature_expansion_patch.exe',
+    'if errorlevel 1 exit /b 1',
+    'cl /nologo /std:c++20 /EHsc /W4 /utf-8 tests\gargantar_attack_patch.cpp /Fe:release\feature-expansion\gargantar_attack_patch.exe /Fo:release\feature-expansion\',
+    'if errorlevel 1 exit /b 1', 'release\feature-expansion\gargantar_attack_patch.exe',
+    'if errorlevel 1 exit /b 1',
+    'cl /nologo /std:c++20 /EHsc /W4 /utf-8 tests\deino_native_arc_lookup.cpp /Fe:release\feature-expansion\deino_native_arc_lookup.exe /Fo:release\feature-expansion\',
+    'if errorlevel 1 exit /b 1', 'release\feature-expansion\deino_native_arc_lookup.exe',
+    'if errorlevel 1 exit /b 1',
+    'cl /nologo /std:c++20 /EHsc /W4 /utf-8 tests\deino_native_arc_load.cpp /Fe:release\feature-expansion\deino_native_arc_load.exe /Fo:release\feature-expansion\',
+    'if errorlevel 1 exit /b 1', 'release\feature-expansion\deino_native_arc_load.exe',
+    'if errorlevel 1 exit /b 1',
+    'cl /nologo /std:c++20 /EHsc /W4 /utf-8 tests\deino_hover_facing.cpp /Fe:release\feature-expansion\deino_hover_facing.exe /Fo:release\feature-expansion\',
+    'if errorlevel 1 exit /b 1', 'release\feature-expansion\deino_hover_facing.exe')
 Set-Content -LiteralPath $testRunner -Value $testLines -Encoding ascii
 Push-Location -LiteralPath $testRoot
 try { & cmd.exe /c $testRunner; if ($LASTEXITCODE -ne 0) { throw 'Feature expansion checks failed.' } }

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "../../external/Minimal-D3D12-Hook-ImGui/Main/hooks.h"
 #include "../Config/Configs.h"
 #include "ConfigImGui.h"
@@ -21,17 +21,21 @@ namespace g_DrawImGui {
         BeginTabRegion("CombatDetail");
         ImGui::BeginDisabled(!g_Hook::UpdateCameraOK && !g_Hook::PostRenderOK);
         if (IsTopic(Topic::Aim)) {
-                DrawCustomCheckbox(Tr(U8("自动锁定（魔术子弹）")), &g_Config::bAimbotEnabled);
+                DrawCustomCheckbox(Tr(U8("自动锁定（魔术子弹）")), &g_Config::bAimbotEnabled, U8("自动选择锁定圆内的敌方目标并修正武器射击方向，镜头仍由你控制。先选目标类型与头部／身体，再设置距离和锁定圆。遮挡或超出武器射程时暂停修正。"));
                 if (auto Fade=ParameterFade("##parameters_Aimbot_Menu.cpp_1", g_Config::bAimbotEnabled); Fade) {
                 HelpText(Tr(U8("锁定圆内头部／身体到圆心连线最短的目标，镜头由你控制。")));
                 ImGui::TextWrapped(U8("%s"), g_Aimbot::GetAimbotStatus().c_str());
-                DrawCustomCheckbox(Tr(U8("瞄准敌对玩家")), &g_Config::bAimPlayers);
-                DrawCustomCheckbox(Tr(U8("瞄准野生龙")), &g_Config::bAimWildDinos);
-                DrawCustomCheckbox(Tr(U8("瞄准敌对驯养龙")), &g_Config::bAimTamedDinos);
-                DrawCustomCheckbox(Tr(U8("瞄准 Boss")), &g_Config::bAimBosses);
+                DrawChoiceGroup(U8("目标类型"), {
+                    {Tr(U8("瞄准敌对玩家")), false, nullptr, &g_Config::bAimPlayers},
+                    {Tr(U8("瞄准野生龙")), false, nullptr, &g_Config::bAimWildDinos},
+                    {Tr(U8("瞄准敌对驯养龙")), false, nullptr, &g_Config::bAimTamedDinos},
+                    {Tr(U8("瞄准 Boss")), false, nullptr, &g_Config::bAimBosses}
+                });
                 HelpText(Tr(U8("同部落的玩家、驯养生物始终视为友方，不会被自瞄锁定；野生龙按开关决定，Boss 单独筛选。")));
-                DrawCustomCheckbox(Tr(U8("锁定头部")), &g_Config::bAimHead);
-                DrawCustomCheckbox(Tr(U8("锁定身体")), &g_Config::bAimBody);
+                DrawChoiceGroup(U8("锁定部位"), {
+                    {Tr(U8("锁定头部")), false, nullptr, &g_Config::bAimHead},
+                    {Tr(U8("锁定身体")), false, nullptr, &g_Config::bAimBody}
+                });
                 HelpText(Tr(U8("两项都开时按离圆心最近的部位选择；只开头部不回退身体。")));
                 if (!g_Config::bAimHead && !g_Config::bAimBody)
                     ImGui::TextWrapped(Tr(U8("头部与身体均已关闭，暂停锁定与自动开火。")));
@@ -59,16 +63,19 @@ namespace g_DrawImGui {
 
         }
         if (IsTopic(Topic::Weapons)) {
+            Title(Tr(U8("操控与瞄准")));
             DrawCustomCheckbox(Tr(U8("快速开镜")), &g_Config::bFastAim);
             DrawCustomCheckbox(Tr(U8("消除开火后座抖动与瞄准漂移")), &g_Config::bNoRecoil);
             DrawCustomCheckbox(Tr(U8("疾跑时开枪与近战挥砍")), &g_Config::bSprintAttack);
             HelpText(Tr(U8("允许当前武器在疾跑时开火和近战攻击，并保留本地疾跑速度；切换武器、打开菜单或关闭功能时恢复。联机实际移动与攻击仍以服务器判定为准。")));
-            DrawCustomCheckbox(Tr(U8("弓秒蓄力（木弓／复合弓／泰克复合弓）")), &g_Config::bFastBow);
+            Title(Tr(U8("蓄力与装填")));
+            DrawCustomCheckbox(Tr(U8("弓秒蓄力（木弓／复合弓／泰克复合弓）")), &g_Config::bFastBow, U8("缩短所选弓种的满蓄力时间；按住左键拉弓，松开出箭。下方可分别选择木弓、复合弓和泰克弓。"));
             if (auto Fade = ParameterFade("##InstantBowCharge", g_Config::bFastBow); Fade) {
-                ImGui::TextDisabled("%s", Tr(U8("生效弓种")));
-                DrawCustomCheckbox(Tr(U8("木弓")), &g_Config::bFastBowWood);
-                DrawCustomCheckbox(Tr(U8("复合弓")), &g_Config::bFastBowCompound);
-                DrawCustomCheckbox(Tr(U8("泰克复合弓")), &g_Config::bFastBowTek);
+                DrawChoiceGroup(U8("生效弓种"), {
+                    {Tr(U8("木弓")), false, nullptr, &g_Config::bFastBowWood},
+                    {Tr(U8("复合弓")), false, nullptr, &g_Config::bFastBowCompound},
+                    {Tr(U8("泰克复合弓")), false, nullptr, &g_Config::bFastBowTek}
+                });
                 HelpText(Tr(U8("把当前手持弓的“满蓄力所需拉弓时间”压到最低，按下左键即接近满蓄力弹速；仍走原生松键出箭与服务器结算。泰克弓即时命中模式由蓝图直接结算，不受影响。")));
                 DrawCustomCheckbox(Tr(U8("强制满蓄力直接出箭（仅本地主机）")), &g_Config::bFastBowForceShot);
                 HelpText(Tr(U8("按下左键即调用原生开火流程直接出箭，跳过松键等待。只在本地主机（拥有 authority）生效：远程服务器收不到本机开火通知，故一律保留原生流程。仍按原生扣弹、冷却与命中结算。")));
@@ -76,15 +83,16 @@ namespace g_DrawImGui {
                     ImGui::TextWrapped(Tr(U8("当前客户端未匹配武器开火接口，此项尚未生效。")));
                 ImGui::TextWrapped(U8("%s"), g_Hack::GetInstantChargeStatus().c_str());
             }
-            DrawCustomCheckbox(Tr(U8("本地主机换弹时长调整（实验）")), &g_Config::bInstantReload);
+            DrawCustomCheckbox(Tr(U8("本地主机换弹时长调整（实验）")), &g_Config::bInstantReload, U8("在本地主机调整所选武器的换弹时长，不自动补充弹药。远程服务器保持原生装填；泰克榴弹发射器选项仅提供只读诊断。"));
             if (auto Fade = ParameterFade("##InstantReload", g_Config::bInstantReload); Fade) {
                 ImGui::PushID("InstantReloadFilters");
-                ImGui::TextDisabled("%s", Tr(U8("生效武器类型")));
-                DrawCustomCheckbox(Tr(U8("泵动式霰弹枪")), &g_Config::bInstantReloadPumpShotgun);
-                DrawCustomCheckbox(Tr(U8("泰克榴弹发射器只读诊断")), &g_Config::bInstantReloadLauncher);
-                DrawCustomCheckbox(Tr(U8("制式步枪")), &g_Config::bInstantReloadRifle);
-                DrawCustomCheckbox(Tr(U8("制式弩")), &g_Config::bInstantReloadCrossbow);
-                DrawCustomCheckbox(Tr(U8("其他枪械")), &g_Config::bInstantReloadOther);
+                DrawChoiceGroup(U8("生效武器类型"), {
+                    {Tr(U8("泵动式霰弹枪")), false, nullptr, &g_Config::bInstantReloadPumpShotgun},
+                    {Tr(U8("泰克榴弹发射器只读诊断")), false, nullptr, &g_Config::bInstantReloadLauncher},
+                    {Tr(U8("制式步枪")), false, nullptr, &g_Config::bInstantReloadRifle},
+                    {Tr(U8("制式弩")), false, nullptr, &g_Config::bInstantReloadCrossbow},
+                    {Tr(U8("其他枪械")), false, nullptr, &g_Config::bInstantReloadOther}
+                });
                 HelpText(Tr(U8("仅本地主机修改换弹时长字段，实际装填效果待验证；不自动补满弹夹。远程秒换弹不可用，保持原生装填。泰克榴弹发射器仅提供只读诊断。")));
                 DrawCustomCheckbox(Tr(U8("换弹不消耗弹药（仅本地主机）")), &g_Config::bInstantReloadProtectAmmo);
                 HelpText(Tr(U8("只在拥有 authority 时下发：远程服务器自行扣减背包弹药，本地关闭扣弹会让弹药视图与服务器不一致。")));
@@ -96,12 +104,14 @@ namespace g_DrawImGui {
                 }
                 ImGui::PopID();
             }
+            Title(Tr(U8("泰克装备")));
             DrawCustomCheckbox(Tr(U8("泰克步枪不过热（狙击枪仅本地主机）")), &g_Config::bTekNoHeat);
             HelpText(Tr(U8("泰克步枪已验证可在远程服持续造成伤害。泰克狙击枪的热量由服务器维护，仅在本地主机拥有 authority 时可取消；远程服不会伪造本地连发。")));
             DrawCustomCheckbox(Tr(U8("泰克胸甲喷射冷却调整")), &g_Config::bTekChestJetNoCooldown);
             DrawCustomCheckbox(Tr(U8("泰克手套冲刺冷却调整")), &g_Config::bTekGloveDashNoCooldown);
             if (g_Config::bTekNoHeat || g_Config::bTekChestJetNoCooldown || g_Config::bTekGloveDashNoCooldown)
                 ImGui::TextWrapped("%s", g_Hack::GetTekEquipmentStatus().c_str());
+            Title(Tr(U8("骑乘与水下")));
             DrawCustomCheckbox(Tr(U8("骑乘持枪本地解锁")), &g_Config::bMountedWeapons);
             DrawCustomCheckbox(Tr(U8("骑乘持枪视角 360°")), &g_Config::bMountedFullRotation);
             DrawCustomCheckbox(Tr(U8("骑乘武器第三人称")), &g_Config::bMountedThirdPerson);
@@ -112,19 +122,25 @@ namespace g_DrawImGui {
             HelpText(Tr(U8("对已加载的即时枪械和泰克相枪启用原生水下装备、开火标记；背包内已加载武器可在水下切换。关闭、换武器、死亡、换图或卸载时恢复修改。未加载的模组武器需先在陆地装备一次。保留弹药、冷却和命中流程；远程服务器仍可能拒绝开火或伤害，以实际扣弹和目标受伤为准。")));
             if (auto Fade=ParameterFade("##parameters_Aimbot_Menu.cpp_3", g_Config::bUnderwaterWeapons); Fade) ImGui::TextWrapped("%s",g_Hack::GetUnderwaterWeaponStatus().c_str());
             DrawAnimatedSeparator();
-                DrawCustomCheckbox(Tr(U8("枪械射速修改")), &g_Config::bWeaponFireRate);
+                Title(Tr(U8("射速与弹道")));
+                DrawCustomCheckbox(Tr(U8("制式弩按住速射（10ms，本地主机）")), &g_Config::bCrossbowHoldRapidFire);
+                HelpText(Tr(U8("独立于射速倍率。本地主机按住左键时每 10ms 尝试原生射击；单发弹夹打空后调用原生弹药转移，直接从背包补箭，弹药用尽即停止。实际频率仍受帧率和武器状态限制。")));
+                if (g_Config::bCrossbowHoldRapidFire && !g_Config::bWeaponFireRate)
+                    ImGui::TextWrapped(U8("%s"), g_Hack::GetWeaponFireRateStatus().c_str());
+                DrawCustomCheckbox(Tr(U8("枪械射速修改")), &g_Config::bWeaponFireRate, U8("调整所选枪械的本地开火间隔，倍率越大间隔越短。先选择生效武器类型，再调射速倍率；实际射击受服务器和武器状态限制。"));
                 if (auto Fade=ParameterFade("##parameters_Aimbot_Menu.cpp_4", g_Config::bWeaponFireRate); Fade) {
                     ImGui::PushID("FireRateFilters");
                     DrawCustomSliderFloat(Tr(U8("射速倍率")), &g_Config::WeaponFireRateMultiplier, 0.25f, 100.0f, "%.2f", 0.25f, "x");
-                    ImGui::TextDisabled("%s", Tr(U8("生效枪械类型")));
-                    DrawCustomCheckbox(Tr(U8("泰克步枪")), &g_Config::bFireRateTekRifle);
-                    DrawCustomCheckbox(Tr(U8("制式步枪")), &g_Config::bFireRateRifle);
-                    DrawCustomCheckbox(Tr(U8("霰弹枪")), &g_Config::bFireRateShotgun);
-                    DrawCustomCheckbox(Tr(U8("狙击枪")), &g_Config::bFireRateSniper);
-                    DrawCustomCheckbox(Tr(U8("手枪")), &g_Config::bFireRatePistol);
-                    DrawCustomCheckbox(Tr(U8("弓弩（含泰克弓）")), &g_Config::bFireRateBow);
-                    DrawCustomCheckbox(Tr(U8("其他枪械")), &g_Config::bFireRateOther);
-                    HelpText(Tr(U8("按当前武器的类名归类（泰克步枪、制式步枪、霰弹枪、狙击枪、手枪、弓弩与其他），未勾选的类型保持原生射速。模组武器继承原版枪械类时也会被正确归类。")));
+                        DrawChoiceGroup(U8("生效枪械类型"), {
+                        {Tr(U8("泰克步枪")), false, nullptr, &g_Config::bFireRateTekRifle},
+                        {Tr(U8("制式步枪")), false, nullptr, &g_Config::bFireRateRifle},
+                        {Tr(U8("霰弹枪")), false, nullptr, &g_Config::bFireRateShotgun},
+                        {Tr(U8("狙击枪")), false, nullptr, &g_Config::bFireRateSniper},
+                        {Tr(U8("手枪")), false, nullptr, &g_Config::bFireRatePistol},
+                        {Tr(U8("弓（含泰克弓）")), false, nullptr, &g_Config::bFireRateBow},
+                        {Tr(U8("其他枪械")), false, nullptr, &g_Config::bFireRateOther}
+                    });
+                    HelpText(Tr(U8("按当前武器的类名归类；制式弩由上方独立开关控制，不受射速倍率影响。未勾选的类型保持原生射速。")));
                     HelpText(Tr(U8("调整即时命中和投射物枪械的本地开火间隔。联机效果须核对实际扣弹和伤害；关闭、换枪或暂停时恢复。")));
                     ImGui::TextWrapped(U8("%s"), g_Hack::GetWeaponFireRateStatus().c_str());
                     ImGui::PopID();
@@ -137,6 +153,7 @@ namespace g_DrawImGui {
                     if (!g_Hook::ProjectileModifiersOK)
                         ImGui::TextWrapped(Tr(U8("当前客户端版本未匹配投射物倍率接口，功能保持关闭。")));
                 }
+                Title(Tr(U8("专用武器与自动射击")));
                 DrawCustomCheckbox(Tr(U8("相枪按住左键保持目标")), &g_Config::bTekPistolHoldTarget);
                 HelpText(Tr(U8("按住后不切换目标；死亡、遮挡或离开圆时暂停修正，松开后重新选取。")));
                 DrawCustomCheckbox(Tr(U8("霰弹枪弹丸集中")), &g_Config::bShotgunConverge);
@@ -190,10 +207,11 @@ namespace g_DrawImGui {
                 if (auto Fade=ParameterFade("##parameters_Aimbot_Menu.cpp_9", g_Config::bTekSpearAutoBlock); Fade) {
                     g_Config::TekSpearTargetCount = g_TekSpear::TargetLimit(g_Config::TekSpearTargetCount);
                     ImGui::SliderInt(Tr(U8("锁定目标个数")), &g_Config::TekSpearTargetCount, 1, g_TekSpear::MaxLockedTargets, Tr(U8("%d 个")));
-                    ImGui::TextDisabled("%s", Tr(U8("招架目标类型")));
-                    DrawCustomCheckbox(Tr(U8("玩家")), &g_Config::bSpearAimPlayers);
-                    DrawCustomCheckbox(Tr(U8("生物")), &g_Config::bSpearAimCreatures);
-                    DrawCustomCheckbox(Tr(U8("Boss")), &g_Config::bSpearAimBosses);
+                        DrawChoiceGroup(U8("招架目标类型"), {
+                        {Tr(U8("玩家")), false, nullptr, &g_Config::bSpearAimPlayers},
+                        {Tr(U8("生物")), false, nullptr, &g_Config::bSpearAimCreatures},
+                        {Tr(U8("Boss")), false, nullptr, &g_Config::bSpearAimBosses}
+                    });
                     HelpText(Tr(U8("同部落玩家及其驯养生物始终视为友方，不会进入招架锁定；此处仅筛选敌对玩家、生物与 Boss。")));
                     DrawCustomCheckbox(Tr(U8("自动正对攻击者，招架后回正")), &g_Config::bTekSpearAutoFace);
                     DrawCustomSliderFloat(Tr(U8("招架目标锁定距离")), &g_Config::TekSpearTargetRangeMeters,

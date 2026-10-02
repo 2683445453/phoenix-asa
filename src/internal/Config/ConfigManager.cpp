@@ -136,6 +136,7 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
         file << "[Misc]\n";
         CONFIG_FLOAT(g_Config::FreeCameraSpeedMeters);
         CONFIG_BOOL(g_Config::bAutoFeed);
+        CONFIG_BOOL(g_Config::bAutoGeneScannerMarker);
         CONFIG_FLOAT(g_Config::AutoFeedRangeMeters);
         CONFIG_FLOAT(g_Config::AutoFeedIntervalSeconds);
         CONFIG_STRING(g_Config::AutoFeedDinoFilter, 256);
@@ -148,6 +149,7 @@ bool ConfigManager::SaveConfig(const std::string& filename) {
         CONFIG_BOOL(g_Config::bFireRatePistol);
         CONFIG_BOOL(g_Config::bFireRateBow);
         CONFIG_BOOL(g_Config::bFireRateOther);
+        CONFIG_BOOL(g_Config::bCrossbowHoldRapidFire);
         CONFIG_BOOL(g_Config::bProjectilePrediction);
         CONFIG_FLOAT(g_Config::ProjectilePredictionMaxSeconds);
         CONFIG_FLOAT(g_Config::ProjectilePredictionDelayMs);
@@ -542,6 +544,13 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
 #undef PHX_BOOL
 #undef PHX_FLOAT
 #undef PHX_COLOR
+        if(!data.contains("g_Config::bDeinoAimJump")) {
+            if(const auto It=data.find("g_Config::bDeinoPitchVertical"); It!=data.end()) {
+                ReadValue(It->second,g_Config::bDeinoAimJump);
+                if(!data.contains("g_Config::DeinoAimJumpSpeed"))
+                    g_Config::DeinoAimJumpSpeed=std::clamp(g_Config::DeinoAirHorizontalMultiplier*30.0f,1.0f,300.0f);
+            }
+        }
         // Old experiment keys are ignored; reset dormant runtime fields.
 #define PHX_BOOL(Name, Default) g_Config::Name = Default;
 #define PHX_FLOAT(Name, Default, Min, Max) g_Config::Name = Default;
@@ -579,6 +588,7 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
         // 其他功能
         LOAD_FLOAT(g_Config::FreeCameraSpeedMeters);
         LOAD_BOOL(g_Config::bAutoFeed);
+        LOAD_BOOL(g_Config::bAutoGeneScannerMarker);
         LOAD_FLOAT(g_Config::AutoFeedRangeMeters);
         LOAD_FLOAT(g_Config::AutoFeedIntervalSeconds);
         LOAD_STRING(g_Config::AutoFeedDinoFilter, 256);
@@ -591,6 +601,7 @@ bool ConfigManager::LoadConfig(const std::string& filename) {
         LOAD_BOOL(g_Config::bFireRatePistol);
         LOAD_BOOL(g_Config::bFireRateBow);
         LOAD_BOOL(g_Config::bFireRateOther);
+        LOAD_BOOL(g_Config::bCrossbowHoldRapidFire);
         LOAD_BOOL(g_Config::bProjectilePrediction);
         LOAD_FLOAT(g_Config::ProjectilePredictionMaxSeconds);
         LOAD_FLOAT(g_Config::ProjectilePredictionDelayMs);

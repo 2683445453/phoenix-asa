@@ -16,7 +16,7 @@
 SDK_NAMESPACE_START
 
 // BlueprintGeneratedClass ThatchDoorPlacementEmitter.ThatchDoorPlacementEmitter_C
-// 0x0000 (0x05C8 - 0x05C8)
+// 0x0000 (0x05B8 - 0x05B8)
 class AThatchDoorPlacementEmitter_C final : public APrimalEmitterSpawnable
 {
 public:

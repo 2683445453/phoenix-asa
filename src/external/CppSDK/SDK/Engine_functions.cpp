@@ -19926,8 +19926,9 @@ void AActor::ReregisterAllComponents()
 // bool                                    bIsReliable                                            (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 // bool                                    bForceSendToLocalPlayer                                (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 // bool                                    bIgnoreRelevancy                                       (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+// bool                                    bAllowAsPlayerServer                                   (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 
-void AActor::ServerSendExecCommandToEveryone(class FName CommandName, const struct FBPNetExecParams& ExecParams, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy)
+void AActor::ServerSendExecCommandToEveryone(class FName CommandName, const struct FBPNetExecParams& ExecParams, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy, bool bAllowAsPlayerServer)
 {
 	static class UFunction* Func = nullptr;
 
@@ -19941,6 +19942,7 @@ void AActor::ServerSendExecCommandToEveryone(class FName CommandName, const stru
 	Parms.bIsReliable = bIsReliable;
 	Parms.bForceSendToLocalPlayer = bForceSendToLocalPlayer;
 	Parms.bIgnoreRelevancy = bIgnoreRelevancy;
+	Parms.bAllowAsPlayerServer = bAllowAsPlayerServer;
 
 	auto Flgs = Func->FunctionFlags;
 	Func->FunctionFlags |= 0x400;
@@ -19960,8 +19962,9 @@ void AActor::ServerSendExecCommandToEveryone(class FName CommandName, const stru
 // bool                                    bIsReliable                                            (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 // bool                                    bForceSendToLocalPlayer                                (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 // bool                                    bIgnoreRelevancy                                       (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+// bool                                    bAllowAsPlayerServer                                   (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 
-void AActor::ServerSendExecCommandToPlayer(class APrimalPlayerController* ToPC, class FName CommandName, const struct FBPNetExecParams& ExecParams, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy)
+void AActor::ServerSendExecCommandToPlayer(class APrimalPlayerController* ToPC, class FName CommandName, const struct FBPNetExecParams& ExecParams, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy, bool bAllowAsPlayerServer)
 {
 	static class UFunction* Func = nullptr;
 
@@ -19976,6 +19979,7 @@ void AActor::ServerSendExecCommandToPlayer(class APrimalPlayerController* ToPC, 
 	Parms.bIsReliable = bIsReliable;
 	Parms.bForceSendToLocalPlayer = bForceSendToLocalPlayer;
 	Parms.bIgnoreRelevancy = bIgnoreRelevancy;
+	Parms.bAllowAsPlayerServer = bAllowAsPlayerServer;
 
 	auto Flgs = Func->FunctionFlags;
 	Func->FunctionFlags |= 0x400;
@@ -19993,8 +19997,9 @@ void AActor::ServerSendExecCommandToPlayer(class APrimalPlayerController* ToPC, 
 // bool                                    bIsReliable                                            (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 // bool                                    bForceSendToLocalPlayer                                (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 // bool                                    bIgnoreRelevancy                                       (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+// bool                                    bAllowAsPlayerServer                                   (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 
-void AActor::ServerSendSimpleExecCommandToEveryone(class FName CommandName, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy)
+void AActor::ServerSendSimpleExecCommandToEveryone(class FName CommandName, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy, bool bAllowAsPlayerServer)
 {
 	static class UFunction* Func = nullptr;
 
@@ -20007,6 +20012,7 @@ void AActor::ServerSendSimpleExecCommandToEveryone(class FName CommandName, bool
 	Parms.bIsReliable = bIsReliable;
 	Parms.bForceSendToLocalPlayer = bForceSendToLocalPlayer;
 	Parms.bIgnoreRelevancy = bIgnoreRelevancy;
+	Parms.bAllowAsPlayerServer = bAllowAsPlayerServer;
 
 	auto Flgs = Func->FunctionFlags;
 	Func->FunctionFlags |= 0x400;
@@ -28004,7 +28010,7 @@ void USkeletalMeshComponent::BPRefreshBoneTransforms()
 
 
 // Function Engine.SkeletalMeshComponent.BPSetBoneModifiers
-// (Final, RequiredAPI, Native, Public, HasOutParams, BlueprintCallable)
+// (RequiredAPI, Native, Public, HasOutParams, BlueprintCallable)
 // Parameters:
 // const TArray<struct FBoneModifierNamed>&NamedBoneModifiers                                     (ConstParm, Parm, OutParm, ZeroConstructor, ReferenceParm, NativeAccessSpecifierPublic)
 

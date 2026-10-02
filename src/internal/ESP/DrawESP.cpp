@@ -7,6 +7,7 @@
 #include "../CheatData/DynamicData.hpp"
 #include "ESP.h"
 #include "StructureESP.h"
+#include "OverlayGeometry.h"
 #include "../Legit/Aimbot/Aimbot.h"
 #include "../Config/Configs.h"
 #include "../Config/InterfaceRules.h"
@@ -216,6 +217,12 @@ namespace g_DrawESP {
         int32_t index = -1;
         int32_t serial = -1;
     };
+    struct CachedLootItem {
+        g_ESP::LootItemInfo info;
+        CachedItemTexture icon;
+    };
+    constexpr size_t MaximumLootIcons = 24;
+    CachedItemTexture CaptureTexture(SDK::UTexture2D* Icon);
 
     struct ESPEntry {
         uintptr_t      actorKey = 0;
@@ -232,7 +239,9 @@ namespace g_DrawESP {
         CachedItemTexture weaponIcon{};
         std::array<Shadow::Color, 5> armorQualityColors{};
         Shadow::Color weaponQualityColor{};
-        std::vector<std::string> lootContents;
+        std::vector<CachedLootItem> lootContents;
+        int lootMoreCount = 0;
+        std::chrono::steady_clock::time_point nextLootRefresh{};
         std::chrono::steady_clock::time_point nextEquipmentRefresh{};
         g_ESP::Structures::Type structureType = g_ESP::Structures::Type::Other;
         bool structureTypeKnown = false;
@@ -984,7 +993,8 @@ namespace g_DrawESP {
     struct SpyglassLootSnapshot {
         int32_t ObjectIndex = -1;
         std::chrono::steady_clock::time_point Received{};
-        std::vector<std::string> Items;
+        std::vector<CachedLootItem> Items;
+        int MoreCount = 0;
     };
     struct SpyglassPendingRequest {
         SDK::UObject* Actor = nullptr;
@@ -1003,6 +1013,19 @@ namespace g_DrawESP {
 
     struct SpyglassArrayView { const uint8_t* Data; int32_t Num; int32_t Max; };
     static_assert(sizeof(SpyglassArrayView) == 16);
+
+    SDK::FProperty* FindLootField(SDK::UStruct* Type, const char* Name, const char* PropertyType) {
+        for (SDK::FField* Field = Type->ChildProperties; Field; Field = Field->Next) {
+            auto* Property = static_cast<SDK::FProperty*>(Field);
+            if (!Property->ClassPrivate) continue;
+            std::string FieldName = Field->Name.ToString();
+            FieldName.resize(FieldName.find('_') == std::string::npos ? FieldName.size() : FieldName.find('_'));
+            FieldName.erase(std::remove(FieldName.begin(), FieldName.end(), ' '), FieldName.end());
+            if (EqualsResourceFieldName(FieldName, Name) &&
+                EqualsResourceFieldName(Property->ClassPrivate->Name.ToString(), PropertyType)) return Property;
+        }
+        return nullptr;
+    }
 
     void CaptureSpyglassRequest(SDK::UObject* Buff, SDK::UFunction* Function, void* Parameters) {
         if (!g_Config::bStructureShowLootContents || !Buff || !Parameters ||
@@ -1069,18 +1092,38 @@ namespace g_DrawESP {
         SpyglassLootSnapshot Snapshot{};
         Snapshot.ObjectIndex = Target->Index;
         Snapshot.Received = std::chrono::steady_clock::now();
-        for (int32_t I = 0; I < Array.Num && Snapshot.Items.size() < 4; ++I) {
+        auto* IconProperty = FindLootField(ItemStruct, "Icon", "ObjectProperty");
+        if (!IconProperty) IconProperty = FindLootField(ItemStruct, "ItemIcon", "ObjectProperty");
+        auto* BlueprintProperty = FindLootField(ItemStruct, "IsBlueprint", "BoolProperty");
+        if (!BlueprintProperty) BlueprintProperty = FindLootField(ItemStruct, "bIsBlueprint", "BoolProperty");
+        if (!BlueprintProperty) BlueprintProperty = FindLootField(ItemStruct, "Blueprint", "BoolProperty");
+        for (int32_t I = 0; I < Array.Num && Snapshot.Items.size() < MaximumLootIcons; ++I) {
             const uint8_t* Item = Array.Data + static_cast<size_t>(I) * ItemStruct->Size;
             const auto& ItemName = *reinterpret_cast<const SDK::FString*>(Item + NameProperty->Offset);
             int32_t Quantity = 0;
             std::memcpy(&Quantity, Item + QuantityProperty->Offset, sizeof(Quantity));
             if (Quantity <= 0 || Quantity > 1000000 || !ItemName.IsValid()) continue;
             std::string Name = ItemName.ToString();
-            if (!Name.empty() && Name.size() <= 256)
-                Snapshot.Items.push_back(Name + " x" + std::to_string(Quantity));
+            if (Name.empty() || Name.size() > 256) continue;
+            CachedLootItem Loot{};
+            Loot.info.Name = std::move(Name);
+            Loot.info.Quantity = Quantity;
+            if (IconProperty && IconProperty->Offset >= 0 &&
+                IconProperty->Offset + sizeof(SDK::UObject*) <= static_cast<size_t>(ItemStruct->Size)) {
+                SDK::UTexture2D* Icon = nullptr;
+                std::memcpy(&Icon, Item + IconProperty->Offset, sizeof(Icon));
+                Loot.icon = CaptureTexture(Icon);
+            }
+            if (BlueprintProperty && BlueprintProperty->Offset >= 0) {
+                const auto* Bool = static_cast<SDK::FBoolProperty*>(BlueprintProperty);
+                const size_t Offset = BlueprintProperty->Offset + Bool->ByteOffset;
+                if (Offset < static_cast<size_t>(ItemStruct->Size) && Bool->FieldMask)
+                    Loot.info.Kind = (Item[Offset] & Bool->FieldMask)
+                        ? g_ESP::LootItemKind::Blueprint : g_ESP::LootItemKind::Item;
+            }
+            Snapshot.Items.push_back(std::move(Loot));
         }
-        if (Array.Num > static_cast<int32_t>(Snapshot.Items.size()) && !Snapshot.Items.empty())
-            Snapshot.Items.push_back(LanguageManager::Get().TranslateCopy("…更多物品"));
+        Snapshot.MoreCount = std::max(0, Array.Num - static_cast<int>(Snapshot.Items.size()));
         {
             std::lock_guard<std::mutex> Guard(s_spyglassLootMutex);
             if (s_spyglassLoot.size() > 512) s_spyglassLoot.clear();
@@ -1172,15 +1215,8 @@ namespace g_DrawESP {
         return nullptr;
     }
 
-    CachedItemTexture CaptureItemTexture(SDK::UPrimalItem* Item) {
+    CachedItemTexture CaptureTexture(SDK::UTexture2D* Icon) {
         CachedItemTexture Result{};
-        if (!Item) return Result;
-        SDK::UTexture2D* Icon = Item->GetItemIconJIT();
-        if (!Icon) Icon = Item->ItemIcon;
-        if (!Icon && Item->Class) {
-            if (const char* Name = ItemTextureFallback(Item->Class->GetName()))
-                Icon = SDK::UObject::FindObjectFast<SDK::UTexture2D>(Name);
-        }
         if (!Icon) return Result;
         const int32_t Index = Icon->Index;
         if (TryGetLiveObjectSerial(Icon, Index, &Result.serial) &&
@@ -1191,6 +1227,17 @@ namespace g_DrawESP {
             Result.index = Index;
         }
         return Result;
+    }
+
+    CachedItemTexture CaptureItemTexture(SDK::UPrimalItem* Item) {
+        if (!Item) return {};
+        SDK::UTexture2D* Icon = Item->GetItemIconJIT();
+        if (!Icon) Icon = Item->ItemIcon;
+        if (!Icon && Item->Class) {
+            if (const char* Name = ItemTextureFallback(Item->Class->GetName()))
+                Icon = SDK::UObject::FindObjectFast<SDK::UTexture2D>(Name);
+        }
+        return CaptureTexture(Icon);
     }
 
     SDK::UTexture2D* LiveItemTexture(const CachedItemTexture& Ref) {
@@ -2725,6 +2772,8 @@ namespace g_DrawESP {
 
 #include "FeatureExpansionESP.inl"
 
+    #include "IndependentOverlay.inl"
+
     void DrawESP(SDK::UCanvas* Canvas)
     {
         if (!Canvas) return;
@@ -2754,7 +2803,8 @@ namespace g_DrawESP {
              g_Config::bDrawName || g_Config::bDrawDistance || g_Config::bDrawTorpor ||
              g_Config::bDrawRagdoll || g_Config::bEnableOOF || g_Config::bMinimalESP || g_Config::bRadar ||
              g_Config::bDrawArmorQuality || g_Config::bDrawHeldWeapon);
-        if (!CharacterVisuals && !g_Config::bCombatESP && !g_Config::bDrawTurretAmmo && !g_Config::bDrawStructures && !g_Config::bDrawDroppedItems && !g_Config::bDrawWater) {
+        if (!g_Config::bOverlayESP && !CharacterVisuals && !g_Config::bCombatESP && !g_Config::bDrawTurretAmmo && !g_Config::bDrawStructures && !g_Config::bDrawDroppedItems && !g_Config::bDrawWater) {
+            s_overlayRigs.clear();
             RestoreAllActorHighlights();
             s_entries.clear();
             waterCandidates.clear();
@@ -2870,6 +2920,15 @@ namespace g_DrawESP {
             EncodeFullHealthStencil(SDK::EStencilAlliance::NPC);
         constexpr uint8_t FleeingDinoStencil =
             EncodeFullHealthStencil(SDK::EStencilAlliance::NPCFleeing);
+
+        DrawIndependentOverlay(Canvas, LocalPC, LocalChar);
+        if (!CharacterVisuals && !g_Config::bCombatESP && !g_Config::bDrawTurretAmmo &&
+            !g_Config::bDrawStructures && !g_Config::bDrawDroppedItems && !g_Config::bDrawWater) {
+            RestoreAllActorHighlights();
+            s_entries.clear();
+            waterCandidates.clear();
+            return;
+        }
 
         for (const CachedESPActorRef& ActorRef : s_cachedESPActors) {
 			if (ActorRef.ObjectIndex < 0 ||
@@ -3366,7 +3425,11 @@ namespace g_DrawESP {
                 entry.owner.clear();
                 const bool IsTurret = Structure->IsA(SDK::APrimalStructureTurret::StaticClass());
                 entry.ammo.clear();
-                entry.lootContents.clear();
+                if (!g_Config::bStructureShowLootContents || g_Config::bCombatESP) {
+                    entry.lootContents.clear();
+                    entry.lootMoreCount = 0;
+                    entry.nextLootRefresh = {};
+                }
                 if ((g_Config::bCombatESP && !IsTurret) ||
                     (!g_Config::bDrawStructures && !(IsTurret && (g_Config::bDrawTurretAmmo || g_Config::bCombatESP))) || Structure->bIsPreviewStructure ||
                     !std::isfinite(Structure->Health) || Structure->Health <= 0.0f) continue;
@@ -3398,41 +3461,61 @@ namespace g_DrawESP {
                     entry.ammo = LanguageManager::Get().TranslateCopy("弹量：") + (Ammo >= 0 ? std::to_string(Ammo) : "?");
                 }
                 if (g_Config::bStructureShowLootContents && !g_Config::bCombatESP &&
-                    (entry.structureType == g_ESP::Structures::Type::SupplyDrop ||
+                    ActorRefreshNow >= entry.nextLootRefresh &&
+                    (Structure->IsA(SDK::APrimalStructureItemContainer::StaticClass()) ||
+                     entry.structureType == g_ESP::Structures::Type::SupplyDrop ||
                      entry.structureType == g_ESP::Structures::Type::LootCrate ||
-                     entry.structureType == g_ESP::Structures::Type::BuriedTreasure) &&
-                    Structure->IsA(SDK::APrimalStructureItemContainer::StaticClass())) {
-                    auto* Inventory = static_cast<SDK::APrimalStructureItemContainer*>(Structure)->MyInventoryComponent;
+                     entry.structureType == g_ESP::Structures::Type::BuriedTreasure)) {
+                    entry.nextLootRefresh = ActorRefreshNow + std::chrono::milliseconds(500);
+                    entry.lootContents.clear();
+                    entry.lootMoreCount = 0;
+                    auto* Inventory = Structure->IsA(SDK::APrimalStructureItemContainer::StaticClass())
+                        ? static_cast<SDK::APrimalStructureItemContainer*>(Structure)->MyInventoryComponent : nullptr;
+                    auto* GameData = SDK::UPrimalGameData::BPGetGameData();
                     int32_t Serial = -1;
-                    if (Inventory && TryGetLiveObjectSerial(Inventory, Inventory->Index, &Serial)) {
+                    if (Inventory && TryGetLiveObjectSerial(Inventory, Inventory->Index, &Serial) &&
+                        !(Inventory->Flags & SDK::EObjectFlags::BeginDestroyed) &&
+                        !(Inventory->Flags & SDK::EObjectFlags::FinishDestroyed)) {
                         const int32_t Count = Inventory->InventoryItems.Num();
-                        if (Count > 0 && Count <= 10000) {
+                        if (Count > 0 && Count <= 10000 && Inventory->InventoryItems.IsValid()) {
                             int Shown = 0, Inspected = 0;
                             for (auto* Item : Inventory->InventoryItems) {
                                 if (++Inspected > 64) break;
                                 if (!Item || !TryGetLiveObjectSerial(Item, Item->Index, &Serial) ||
+                                    (Item->Flags & SDK::EObjectFlags::BeginDestroyed) ||
+                                    (Item->Flags & SDK::EObjectFlags::FinishDestroyed) ||
                                     Item->ItemQuantity <= 0) continue;
-                                std::string ItemName = Item->DescriptiveNameBase.IsValid()
+                                std::string ItemName = Item->CustomItemName.IsValid() ? Item->CustomItemName.ToString() : "";
+                                if (ItemName.empty()) ItemName = Item->DescriptiveNameBase.IsValid()
                                     ? Item->DescriptiveNameBase.ToString()
                                     : (Item->Class ? Item->Class->GetName() : "");
                                 if (ItemName.empty()) continue;
-                                entry.lootContents.push_back(ItemName + " x" + std::to_string(Item->ItemQuantity));
-                                if (++Shown == 3) break;
+                                CachedLootItem Loot{};
+                                Loot.info.Name = std::move(ItemName);
+                                Loot.info.Quantity = Item->ItemQuantity;
+                                Loot.info.Kind = Item->bIsBlueprint ? g_ESP::LootItemKind::Blueprint : g_ESP::LootItemKind::Item;
+                                Loot.info.QualityColor = ResolveItemQuality(Item, GameData).color;
+                                Loot.icon = CaptureItemTexture(Item);
+                                entry.lootContents.push_back(std::move(Loot));
+                                if (++Shown == MaximumLootIcons) break;
                             }
-                            if (Shown && Count > Shown) entry.lootContents.push_back(LanguageManager::Get().TranslateCopy("…更多物品"));
+                            if (Shown) entry.lootMoreCount = std::max(0, Count - Shown);
                         }
                     }
                 }
                 if (g_Config::bStructureShowLootContents && entry.lootContents.empty() &&
-                    (entry.structureType == g_ESP::Structures::Type::SupplyDrop ||
+                    (Structure->IsA(SDK::APrimalStructureItemContainer::StaticClass()) ||
+                     entry.structureType == g_ESP::Structures::Type::SupplyDrop ||
                      entry.structureType == g_ESP::Structures::Type::LootCrate ||
                      entry.structureType == g_ESP::Structures::Type::BuriedTreasure)) {
                     std::lock_guard<std::mutex> Guard(s_spyglassLootMutex);
                     auto Cached = s_spyglassLoot.find(key);
                     if (Cached != s_spyglassLoot.end()) {
                         if (Cached->second.ObjectIndex == Structure->Index &&
-                            ActorRefreshNow - Cached->second.Received < std::chrono::seconds(8))
+                            ActorRefreshNow - Cached->second.Received < std::chrono::seconds(8)) {
                             entry.lootContents = Cached->second.Items;
+                            entry.lootMoreCount = Cached->second.MoreCount;
+                        }
                         else s_spyglassLoot.erase(Cached);
                     }
                 }
@@ -3720,7 +3803,12 @@ namespace g_DrawESP {
                         Info.WeaponColor = ExpansionColor(g_Config::HeldWeaponColor);
                     }
                     Info.Ammo = entry.ammo;
-                    Info.LootItems = entry.lootContents;
+                    for (const auto& Cached : entry.lootContents) {
+                        auto Item = Cached.info;
+                        Item.Icon = LiveItemTexture(Cached.icon);
+                        Info.LootItems.push_back(std::move(Item));
+                    }
+                    Info.LootMoreCount = entry.lootMoreCount;
                     Info.AmmoColor = ExpansionColor(g_Config::TurretAmmoColor);
                     Info.Name = entry.shouldDrawName ? entry.name : "";
                     if (entry.actorType == ActorType::PrimalStructure) {

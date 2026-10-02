@@ -1,10 +1,11 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cctype>
 #include <cmath>
-#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace g_Hack {
@@ -33,21 +34,45 @@ namespace g_Hack {
         }
     };
 
+    // One atomic state covers both queued clicks and an active game-thread round.
+    // A click on the final batch cannot remain queued for a second round.
+    class NoteRequestGate {
+        enum class State { Idle, Queued, Running };
+        std::atomic<State> Current{State::Idle};
+    public:
+        bool Request() {
+            auto Expected = State::Idle;
+            return Current.compare_exchange_strong(Expected, State::Queued);
+        }
+        bool Begin() {
+            auto Expected = State::Queued;
+            return Current.compare_exchange_strong(Expected, State::Running);
+        }
+        void Reset() { Current.store(State::Idle); }
+    };
+
     class NoteRequestBatch {
         std::vector<int> Notes;
         std::size_t Cursor = 0;
         uint64_t NextAt = 0;
     public:
+        static constexpr std::size_t MaxPerBatch = 4;
+        static constexpr uint64_t IntervalMs = 100;
+
         void Start(std::vector<int> Values, uint64_t Now) {
             Values.erase(std::remove_if(Values.begin(), Values.end(), [](int I) { return I < 0; }), Values.end());
             std::sort(Values.begin(), Values.end());
             Values.erase(std::unique(Values.begin(), Values.end()), Values.end());
             Notes = std::move(Values); Cursor = 0; NextAt = Now;
         }
-        std::optional<int> Next(uint64_t Now) {
-            if (!Pending() || Now < NextAt) return std::nullopt;
-            NextAt = Now + 250;
-            return Notes[Cursor++];
+        std::vector<int> NextBatch(uint64_t Now) {
+            if (!Pending() || Now < NextAt) return {};
+            const auto Count = (std::min)(MaxPerBatch, Notes.size() - Cursor);
+            std::vector<int> Batch(Notes.begin() + Cursor, Notes.begin() + Cursor + Count);
+            Cursor += Count;
+            // Schedule from the actual dispatch time: stalls never accumulate bursts.
+            NextAt = Now + IntervalMs;
+            return Batch;
         }
         bool Pending() const { return Cursor < Notes.size(); }
         std::size_t Sent() const { return Cursor; }

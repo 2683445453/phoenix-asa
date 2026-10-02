@@ -25,7 +25,7 @@ namespace g_DrawImGui {
         StructureList, Lua, InterfaceSettings, Configs, Language, Shortcuts };
     enum class Topic { Home, Aim, Weapons, Indicators, Spear, Objects, Typography, Structures, World,
         Harvest, Resources, Diagnostics, Loot, Survival, Fishing, Gacha, Craft, Repair, Taming,
-        Travel, Utilities, Inventory, Creatures, StructureList, Scripts, Interface, Shortcuts, System, Configs, Language, Care };
+        Travel, Utilities, Inventory, Creatures, StructureList, Scripts, Interface, Shortcuts, System, Configs, Language, Care, Scanner, Overlay };
     extern bool g_UseSidebarNavigation;
     extern MenuPage g_ActiveMenuPage;
     inline Topic g_ActiveTopic = Topic::Home;
@@ -76,17 +76,35 @@ namespace g_DrawImGui {
     }
 #include "HoverHelp.h"
     inline void Title(const char* Text) { if(g_TitleFont) ImGui::PushFont(g_TitleFont); ImGui::TextUnformatted(Tr(Text)); if(g_TitleFont) ImGui::PopFont(); HoverHelp::Remember(); }
+    inline int g_ParameterDepth = 0;
     struct ParameterFade {
         float Alpha=0;
+        ImVec2 Start{};
+        float Indent=0;
         explicit ParameterFade(const char* Id,bool Enabled) {
             auto* Store=ImGui::GetStateStorage();const auto Key=ImGui::GetID(Id);
             Alpha=PhoenixMotion::Approach(Store->GetFloat(Key,0),Enabled?1.f:0.f,ImGui::GetIO().DeltaTime,.12f);
             Store->SetFloat(Key,Alpha);
-            if(Alpha>0) {ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*Alpha);ImGui::BeginDisabled(!Enabled);}
+            if(Alpha>0) {
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha,ImGui::GetStyle().Alpha*Alpha);
+                ImGui::BeginDisabled(!Enabled);
+                Start=ImGui::GetCursorScreenPos();
+                Indent=std::min(18.f, std::max(0.f, ImGui::GetContentRegionAvail().x-100.f));
+                ImGui::Indent(Indent);
+                if(g_ParameterDepth++ == 0) ImGui::TextDisabled("%s",Tr(U8("参数设置")));
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(8,4));
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(8,7));
+            }
         }
         ParameterFade(const ParameterFade&)=delete;
         explicit operator bool() const {return Alpha>0;}
-        ~ParameterFade(){if(Alpha>0){ImGui::EndDisabled();ImGui::PopStyleVar();}}
+        ~ParameterFade(){if(Alpha>0){
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(Start.x+3,Start.y),
+                ImVec2(Start.x+3,ImGui::GetCursorScreenPos().y-4),
+                ImGui::GetColorU32(ThemeColors::GLASS_BORDER),2);
+            --g_ParameterDepth; ImGui::PopStyleVar(2); ImGui::Unindent(Indent);
+            ImGui::EndDisabled();ImGui::PopStyleVar();
+        }}
     };
     template<typename... T> inline void HelpText(const char* Format, T... Args) { HoverHelp::Add(Format,Args...); }
     struct CustomComboItem { const char* label=nullptr; bool selected=false; float* color_ptr=nullptr; bool* checkbox_ptr=nullptr; };
@@ -107,13 +125,23 @@ namespace g_DrawImGui {
         float E=1-(1-T)*(1-T);const ImVec4 Base=ThemeColors::SURFACE;
         ImVec4 Face{Base.x+.06f*E,Base.y+.06f*E,Base.z+.06f*E,1};
         ImGui::PushStyleColor(ImGuiCol_Button,Face);ImGui::PushStyleColor(ImGuiCol_ButtonHovered,Face);
-        const bool Pressed=ImGui::Button(Label,Size);ImGui::PopStyleColor(2);HoverHelp::Remember();return Pressed;
+        const bool Pressed=ImGui::Button(Label,Size);ImGui::PopStyleColor(2);HoverHelp::Control(Label,U8("点击执行此操作。"));return Pressed;
     }
-    inline bool DrawCustomCheckbox(const char* Label, bool* Value) {
+    inline bool DrawCustomCheckbox(const char* Label, bool* Value, const char* Description=nullptr) {
+        // Feature switches remain prominent; subordinate choices use compact square checks.
+        struct CheckboxStyle {
+            CheckboxStyle() {
+                const bool Parameter=g_ParameterDepth>0;
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,Parameter?ImVec2(4,2):ImVec2(10,7));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,Parameter?3.f:8.f);
+                ImGui::PushStyleColor(ImGuiCol_FrameBg,Parameter?ThemeColors::BG:ImVec4(.10f,.18f,.28f,1));
+            }
+            ~CheckboxStyle(){ImGui::PopStyleColor();ImGui::PopStyleVar(2);}
+        } ScopedStyle;
         if (ImGui::CalcTextSize(Label,nullptr,true).x+ImGui::GetFrameHeight()+ImGui::GetStyle().ItemInnerSpacing.x <= ImGui::GetContentRegionAvail().x)
-            { const bool Changed=ImGui::Checkbox(Label,Value); HoverHelp::Remember(); return Changed; }
-        ImGui::PushID(Label);bool Changed=ImGui::Checkbox("##toggle",Value); HoverHelp::Remember();
-        ImGui::SameLine();ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(Label,ImGui::FindRenderedTextEnd(Label));ImGui::PopTextWrapPos(); if(ImGui::IsItemHovered()) HoverHelp::Remember();
+            { const bool Changed=ImGui::Checkbox(Label,Value); HoverHelp::Control(Label,Description?Description:g_ParameterDepth?U8("勾选启用此子选项，取消勾选将停用。主功能开启时应用。"):U8("点击开启或关闭此功能；下方参数用于调整此功能，关闭后保留参数值。")); return Changed; }
+        ImGui::PushID(Label);bool Changed=ImGui::Checkbox("##toggle",Value); HoverHelp::Control(Label,Description?Description:g_ParameterDepth?U8("勾选启用此子选项，取消勾选将停用。主功能开启时应用。"):U8("点击开启或关闭此功能；下方参数用于调整此功能，关闭后保留参数值。"));
+        ImGui::SameLine();ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(Label,ImGui::FindRenderedTextEnd(Label));ImGui::PopTextWrapPos(); if(ImGui::IsItemHovered()) HoverHelp::Control(Label,Description?Description:g_ParameterDepth?U8("勾选启用此子选项，取消勾选将停用。主功能开启时应用。"):U8("点击开启或关闭此功能；下方参数用于调整此功能，关闭后保留参数值。"));
         if (!(GImGui->CurrentItemFlags&ImGuiItemFlags_Disabled) && ImGui::IsItemClicked()) {*Value=!*Value;Changed=true;}
         ImGui::PopID();return Changed;
     }
@@ -127,7 +155,8 @@ namespace g_DrawImGui {
             if(Step>0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !ImGui::TempInputIsActive(ImGui::GetItemID())) *V=Min+std::round((*V-Min)/Step)*Step;
             *V=PhoenixInterface::FiniteClamp(*V,Min,Max,Min);
         }
-        HoverHelp::Remember(); HelpText(Tr(U8("Ctrl + 点击输入精确数值；方向键微调。范围 %.2f – %.2f")),Min,Max);
+        HoverHelp::Control(Label,U8("拖动调整此参数；Ctrl + 点击输入精确数值，方向键微调。"));
+        HelpText(Tr(U8("Ctrl + 点击输入精确数值；方向键微调。范围 %.2f – %.2f")),Min,Max);
         ImGui::PopID(); return Changed;
     }
     inline void DrawCustomColorPicker(const char* Id,float* Color,bool Active,const char* Text) {
@@ -160,35 +189,50 @@ namespace g_DrawImGui {
             for(int I=0;I<static_cast<int>(Items.size());++I) { if(ImGui::Selectable(Items[I],I==*Current)) { *Current=I;Changed=true; } if(I==*Current) ImGui::SetItemDefaultFocus(); }
             ImGui::EndCombo();
         }
-        ImGui::PopID();return Changed;
+        HoverHelp::Control(Label,U8("点击展开并选择一项，选中后立即应用此参数。")); ImGui::PopID();return Changed;
     }
     inline bool DrawCustomCombo(const char* Label,int* Current,const char* Items[],int Count,const char* Suffix=nullptr) { return DrawCustomCombo(Label,Current,std::vector<const char*>(Items,Items+Count),Suffix); }
     inline bool DrawCustomMultiCombo(const char* Label,std::vector<CustomComboItem>& Items,const char* Placeholder=nullptr) {
         int Count=0; for(auto& I:Items) { if(I.checkbox_ptr) I.selected=*I.checkbox_ptr; Count+=I.selected; }
-        std::string Preview=Count?std::to_string(Count)+Tr(U8(" 项已选择")):(Placeholder?Placeholder:Tr(U8("选择类型")));
-        bool Changed=false; ImGui::SetNextItemWidth(-FLT_MIN);
-        if(ImGui::BeginCombo(Label,Preview.c_str())) {
+        std::string Preview;
+        for(const auto& I:Items) if(I.selected && I.label) { if(!Preview.empty()) Preview+=", "; Preview+=I.label; }
+        if(!Count) Preview=Placeholder?Placeholder:Tr(U8("未选择"));
+        bool Changed=false; ImGui::PushID(Label);
+        ImGui::TextUnformatted(Label,ImGui::FindRenderedTextEnd(Label));
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if(ImGui::BeginCombo("##choices",Preview.c_str())) {
+            auto SetAll=[&](bool Selected) { for(auto& I:Items) { Changed |= I.selected!=Selected; I.selected=Selected; if(I.checkbox_ptr)*I.checkbox_ptr=Selected; } };
+            if(ImGui::SmallButton(Tr(U8("全选")))) SetAll(true);
+            ImGui::SameLine(); if(ImGui::SmallButton(Tr(U8("全不选")))) SetAll(false);
+            ImGui::Separator();
             for(size_t N=0;N<Items.size();++N) { auto& I=Items[N]; ImGui::PushID(static_cast<int>(N));
                 if(ImGui::Checkbox(I.label,&I.selected)) { if(I.checkbox_ptr)*I.checkbox_ptr=I.selected; Changed=true; }
+                HoverHelp::Control(I.label,U8("勾选启用此子选项，取消勾选将停用。主功能开启时应用。"));
                 if(I.selected && I.color_ptr) { ImGui::SameLine();DrawCustomColorPicker("color",I.color_ptr,true,nullptr); }
                 ImGui::PopID();
             } ImGui::EndCombo();
-        } return Changed;
+        } HoverHelp::Control(Label,U8("点击展开并勾选需要的类型，可同时选择多项。全选与全不选只调整此组筛选，不开启主功能。")); ImGui::PopID(); return Changed;
+    }
+    inline bool DrawChoiceGroup(const char* Label,std::initializer_list<CustomComboItem> Choices) {
+        std::vector<CustomComboItem> Items(Choices);
+        return DrawCustomMultiCombo(Tr(Label),Items);
     }
     inline std::string KeyName(unsigned Key) {
         if(!Key) return Tr(U8("未绑定")); std::string Name;
         if(Key&PhoenixInterface::Ctrl)Name+="Ctrl + "; if(Key&PhoenixInterface::Alt)Name+="Alt + "; if(Key&PhoenixInterface::Shift)Name+="Shift + ";
         Name+=g_Util::GetKeyName(Key&0xff);return Name;
     }
-    inline void DrawKeyBindButton(const char* Label,UINT& Key) {
+    inline void DrawKeyBindButton(const char* Label,UINT& Key,const char* Description=nullptr) {
         Label = Tr(Label);
         ImGui::PushID(Label); ImGui::TextUnformatted(Label); ImGui::SameLine();
         const bool Recording=g_MDX12::g_MenuState::g_pCurrentBindingKey==&Key;
         if(ImGui::Button(Recording?Tr(U8("按组合键… Esc 取消")):KeyName(Key).c_str())) {
             PhoenixShortcuts::BindingError.clear(); g_MDX12::g_MenuState::g_pCurrentBindingKey=&Key;
         }
+        HoverHelp::Control(Label,Description?Description:U8("点击开始绑定，再按按键或组合键；Esc 取消。重复绑定会提示冲突。"));
         if(&Key!=&PhoenixShortcuts::MenuKey && &Key!=&PhoenixShortcuts::StopKey) {
             ImGui::SameLine(); if(ImGui::SmallButton(Tr(U8("清除")))) { PhoenixShortcuts::Assign(Key,0); g_MDX12::g_MenuState::g_pCurrentBindingKey=nullptr; }
+            HoverHelp::Control(Label,U8("清除此功能的快捷键，功能开关与参数保持当前设置。"));
         }
         ImGui::PopID();
     }

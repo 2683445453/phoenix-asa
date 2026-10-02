@@ -5,7 +5,7 @@ namespace {
     // give two patches ownership of the same field. 22 owns jump speed.
     // 31..34 own the Jackalope's base and charged jump speed parameters.
     // 35/36 own the reflected X/Y members of the Jackalope charge time range.
-    ExpansionPatch ExpansionPatches[37];
+    ExpansionPatch ExpansionPatches[39];
     std::string ExpansionCombatStatus = "等待人物就绪";
     std::string HusbandryStatus = "自动照料未启用";
     auto& RequestedLevelStat = PhoenixShortcuts::PendingLevelStat;
@@ -14,6 +14,47 @@ namespace {
     std::atomic<uint64_t> MountedNativeChecks{0};
     std::atomic<unsigned> MountedNativeEquipGate{0}, MountedCharacterEquipGate{0};
     uint64_t NextMountedNativeCheck = 0;
+    uint8_t* MountedYawClampTest = nullptr;
+    bool SetMountedNativeYawClampBypass(bool Enabled) {
+        // ASA CL 832029: the rider-weapon branch tests AllowMountedWeaponry and
+        // clamps view yaw to mount yaw +/- 90 degrees when it returns true.
+        // Replace only that TEST AL,AL with XOR AL,AL, preserving the existing
+        // branch and all weapon equip/fire checks elsewhere in the function.
+        if (!Enabled && !MountedYawClampTest) return true;
+        if (Enabled && !MountedYawClampTest) {
+            auto* Base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+            if (!Base) return false;
+            constexpr uintptr_t SiteRva = 0x66CDB95;
+            constexpr uint8_t Before[] = {
+                0x48,0x8B,0x00,0x45,0x33,0xC0,0x33,0xD2,0x48,0x8B,0xCB,
+                0xFF,0x90,0xE0,0x23,0x00,0x00
+            };
+            constexpr uint8_t After[] = {0xC0,0x0F,0x84,0xC9,0x01,0x00,0x00};
+            auto* Site = Base + SiteRva;
+            MEMORY_BASIC_INFORMATION Memory{};
+            if (VirtualQuery(Site, &Memory, sizeof(Memory)) != sizeof(Memory) ||
+                Memory.State != MEM_COMMIT ||
+                std::memcmp(Site - sizeof(Before), Before, sizeof(Before)) ||
+                Site[0] != 0x84 ||
+                std::memcmp(Site + 1, After, sizeof(After))) return false;
+            MountedYawClampTest = Site;
+        }
+        auto* Site = MountedYawClampTest;
+        if (!Site) return false;
+        if (Site[0] == (Enabled ? 0x30 : 0x84)) {
+            if (!Enabled) MountedYawClampTest = nullptr;
+            return true;
+        }
+        if (Site[0] != (Enabled ? 0x84 : 0x30)) return false;
+        DWORD PreviousProtect = 0;
+        if (!VirtualProtect(Site, 1, PAGE_EXECUTE_READWRITE, &PreviousProtect)) return false;
+        *Site = Enabled ? 0x30 : 0x84; // single-byte instruction change
+        FlushInstructionCache(GetCurrentProcess(), Site, 1);
+        DWORD Ignored = 0;
+        VirtualProtect(Site, 1, PreviousProtect, &Ignored);
+        if (!Enabled) MountedYawClampTest = nullptr;
+        return true;
+    }
     ExtensionObject ExpansionCameraHuman, ExpansionCamera;
     bool ExpansionOriginalFirstPerson = false;
     void RestoreExpansionCamera() {
@@ -29,6 +70,7 @@ namespace {
         return false;
     }
 #include "NativeMount.inl"
+#include "GargantarClient.inl"
 #include "DeinoActionTrace.inl"
 #include "DeinoAirLatch.inl"
 #include "DeinoGlideProbe.inl"
@@ -271,6 +313,7 @@ std::string GetNativeMountStatus() {
 void TraceDeinoActionEvent(SDK::UObject* O,SDK::UFunction* F,void* P,bool After) { ObserveDeinoAction(O,F,P,After); }
 bool SuppressDeinoFlightInput(SDK::UObject* O,SDK::UFunction* F) { return SuppressFlightInput(O,F); }
 std::string GetDeinoFlightStatus() { std::scoped_lock L(ExtensionStatusMutex); return LanguageManager::Get().TranslateCopy(DeinoFlightStatus); }
+std::string GetDeinoHoverFacingStatus() { std::scoped_lock L(ExtensionStatusMutex); return LanguageManager::Get().TranslateCopy(DeinoHoverFacingStatus); }
 std::string GetDeinoAirLatchStatus() { std::scoped_lock L(ExtensionStatusMutex); return LanguageManager::Get().TranslateCopy(DeinoAirLatchStatus); }
 std::string GetDeinoGlideProbeStatus() { std::scoped_lock L(ExtensionStatusMutex); return LanguageManager::Get().TranslateCopy(DeinoGlideProbeStatus); }
 std::string GetDeinoGlideProbePath() { std::scoped_lock L(ExtensionStatusMutex); return DeinoGlideProbePath; }
@@ -313,11 +356,14 @@ void NativeMountPhysicsHook(SDK::UMovementComponent* Movement) {
     NativeMountResult("已在运动Hook写入一次速度；服务器接受情况待确认");
 }
 std::string GetExpansionCombatStatus() { std::scoped_lock L(ExtensionStatusMutex); return LanguageManager::Get().TranslateCopy(ExpansionCombatStatus); }
+std::string GetGargantarClientStatus() { std::scoped_lock L(ExtensionStatusMutex); return LanguageManager::Get().TranslateCopy(GargantarStatus); }
 std::string GetHusbandryStatus() { std::scoped_lock L(ExtensionStatusMutex); return LanguageManager::Get().TranslateCopy(HusbandryStatus); }
 bool CanAllocateLevel() { return ExpansionSurvivorAvailable.load(); }
 void RequestAllocateLevel(int Stat) { if (CanAllocateLevel() && Stat >= 0 && Stat < 12) RequestedLevelStat.store(Stat); }
 bool IsHusbandryInventoryActive() { return Husbandry.Target.Pointer != nullptr; }
 void ResetFeatureExpansion() {
+    ResetGargantarClient();
+    SetMountedNativeYawClampBypass(false);
     ResetDeinoFlight();
     FinishDeinoGlideProbe("reset_or_unload");
     ResetDeinoAirLatch();
@@ -347,6 +393,8 @@ void FeatureExpansionTick(SDK::UWorld* World) {
         ExpansionPatches[Slot].Set(O, Name, Value, Multiply);
     };
     auto* W = Ready && IsUsableObject(Human->CurrentWeapon) ? Human->CurrentWeapon : nullptr;
+    const bool MountedYawNativeReady = SetMountedNativeYawClampBypass(
+        Ready && W && Mount && g_Config::bMountedFullRotation);
     if (W && g_Config::bFastAim) { Set(0,W,"TargetingDelayTime",0); Set(1,W,"TargetingFOVInterpSpeed",100); }
     if (W && g_Config::bNoRecoil) {
         Set(2,W,"GlobalFireCameraShakeScale",0); Set(3,W,"GlobalFireCameraShakeScaleTargeting",0);
@@ -383,10 +431,16 @@ void FeatureExpansionTick(SDK::UWorld* World) {
             MountedNativeLastGate.store(Result); MountedNativeChecks.fetch_add(1);
         }
     }
-    if (W && Mount && g_Config::bMountedFullRotation && IsUsableObject(PC->PlayerCameraManager)) {
-        Set(13,PC->PlayerCameraManager,"ViewYawMin",0); Set(14,PC->PlayerCameraManager,"ViewYawMax",359.999f);
+    if (Ready && W && Mount && g_Config::bMountedFullRotation && IsUsableObject(PC->PlayerCameraManager)) {
+        const auto [YawMin,YawMax] = PhoenixExpansion::MountedYawWindow(PC->GetControlRotation().Yaw);
+        Set(13,PC->PlayerCameraManager,"ViewYawMin",YawMin); Set(14,PC->PlayerCameraManager,"ViewYawMax",YawMax);
         Set(15,PC->PlayerCameraManager,"ViewPitchMin",-89); Set(16,PC->PlayerCameraManager,"ViewPitchMax",89);
         Set(17,Mount,"bLimitRiderYawOnLatched",0);
+        // Passenger seats impose a second yaw clamp specifically while a
+        // simple weapon is equipped. The camera manager limits alone cannot
+        // override it. Patch the active seat definition and restore on exit.
+        ExpansionPatches[37].Set(Human,"CurrentPassengerSeatDefinition",0,false,"bLimitCameraYaw");
+        ExpansionPatches[38].Set(Human,"CurrentPassengerSeatDefinition",0,false,"SimpleWeaponEquipped_LimitCameraYaw");
     }
     if (Ready && Mount && g_Config::bMountedThirdPerson) {
         if (ExpansionCameraHuman.Get() != Human) {
@@ -408,6 +462,7 @@ void FeatureExpansionTick(SDK::UWorld* World) {
     }
     else RestoreExpansionCamera();
     auto* Movement = Ready && Mount && IsUsableObject(Mount->CharacterMovement) ? Mount->CharacterMovement : nullptr;
+    TickGargantarClient(Mount,Ready);
     // Remote-client experiment: change prediction only on the locally possessed
     // mount. Keep server movement/correction untouched and restore via patches.
     const bool ClientSpeedExperiment = Movement && !Authority &&
@@ -452,8 +507,13 @@ void FeatureExpansionTick(SDK::UWorld* World) {
         }
     }
     TickNativeMount(PC,Mount,Movement,Ready);
-    TickDeinoGlideProbe(PC,Mount,Movement,Ready);
-    TickDeinoFlight(PC,Mount,Movement,Ready);
+    // Preserve only the already-bound flight when menus/focus block new input.
+    // Other feature readiness and movement patches retain their existing gates.
+    const bool FlightReady=Ready || (g_Config::bDeinoFlight && SurvivorAvailable &&
+        IsUsableObject(Mount) && !Mount->IsDead() && DeinoFlight.Dino.Get()==Mount);
+    auto* FlightMovement=FlightReady && Mount && IsUsableObject(Mount->CharacterMovement) ? Mount->CharacterMovement : nullptr;
+    TickDeinoGlideProbe(PC,Mount,FlightMovement,FlightReady,Ready);
+    TickDeinoFlight(PC,Mount,FlightMovement,FlightReady,Ready);
     TickDeinoAirLatch(PC,Mount,Movement,Ready && !g_Config::bDeinoFlight && !g_Config::bDeinoAutoJumpTest && !g_Config::bDeinoGlideProbe &&
         (!g_Config::bDeinoLatchTrace || (DeinoGlideProbe.Window.Started && DeinoGlideProbe.Mode==3)));
     // 手雷物品“免举起”位段维护（独立于武器扩展补丁，卸载/断开时恢复）。
@@ -466,6 +526,7 @@ void FeatureExpansionTick(SDK::UWorld* World) {
     bool Applied = ExpansionCameraHuman.Get() != nullptr;
     for (const auto& P : ExpansionPatches) Applied |= P.Offset >= 0 && P.Seen;
     ExtensionStatus(ExpansionCombatStatus, !Ready ? "人物或界面未就绪，临时修改已恢复" : !Wanted ? "武器与坐骑扩展未启用" :
+        Mount && W && g_Config::bMountedFullRotation && !MountedYawNativeReady ? "当前游戏版本的骑乘视角原生补丁不匹配" :
         !Applied ? "当前对象或主机权限不匹配，未应用修改" : ClientSpeedExperiment ?
         "客户端移速实验：已调整本地步行参数；实际加速与回拉待服务器采样确认" : Authority ?
         "本地主机：已应用匹配的武器与坐骑设置" : "远程联机：仅应用本地武器与视角设置，蓄力、移速和飞行由服务器决定");
@@ -478,6 +539,20 @@ void FeatureExpansionTick(SDK::UWorld* World) {
             PC->ServerRequestLevelUp(Status, static_cast<SDK::EPrimalCharacterStatusValue>(Stat));
     }
     HusbandryTick(World, PC, Human, Ready);
+}
+
+void MaintainMountedFullRotationCamera(SDK::AShooterPlayerCameraManager* Camera) {
+    // The native camera update can replace the rider's yaw limits after
+    // FeatureExpansionTick. Preserve the active override for the next input
+    // sample without reviving a patch that was restored this frame.
+    if (!IsUsableObject(Camera) || !IsUsableObject(Camera->PCOwner) ||
+        ExpansionPatches[13].Owner.Get() != Camera ||
+        !ExpansionPatches[13].Seen) return;
+    const auto [YawMin,YawMax] = PhoenixExpansion::MountedYawWindow(Camera->PCOwner->GetControlRotation().Yaw);
+    ExpansionPatches[13].Set(Camera,"ViewYawMin",YawMin);
+    ExpansionPatches[14].Set(Camera,"ViewYawMax",YawMax);
+    ExpansionPatches[15].Set(Camera,"ViewPitchMin",-89);
+    ExpansionPatches[16].Set(Camera,"ViewPitchMax",89);
 }
 
 void ResetInstantThrowables() {

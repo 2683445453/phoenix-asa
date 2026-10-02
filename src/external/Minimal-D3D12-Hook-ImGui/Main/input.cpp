@@ -3,6 +3,7 @@
 #include "WindowProcedureRoutes.h"
 #include "../../../internal/Menu/FeatureShortcuts.h"
 #include "../../../internal/Hack/Hack.h"
+#include "../../../internal/Hack/DeinoFlightUI.h"
 #include "../../../internal/Lua/LuaManager.h"
 
 #include "../MinHook/include/MinHook.h"
@@ -307,6 +308,18 @@ namespace g_MDX12 {
     }
 
     namespace rawinputhook {
+        bool FlightWheelCaptured() {
+            const auto V=PhoenixDeinoUI::Read();
+            DWORD PID=0; GetWindowThreadProcessId(GetForegroundWindow(),&PID);
+            return g_Config::bDeinoFlight && !g_MenuState::g_isOpen && PID==GetCurrentProcessId() &&
+                PhoenixDeinoUI::Fresh(V,GetTickCount64()) && (V.Panel ||
+                (V.Keys[2] && (GetAsyncKeyState(V.Keys[2])&0x8000)) || (V.Keys[3] && (GetAsyncKeyState(V.Keys[3])&0x8000)));
+        }
+        void FilterFlightWheel(RAWINPUT* R) {
+            if(R && R->header.dwType==RIM_TYPEMOUSE && (R->data.mouse.usButtonFlags&RI_MOUSE_WHEEL)) {
+                R->data.mouse.usButtonFlags&=~RI_MOUSE_WHEEL; R->data.mouse.usButtonData=0;
+            }
+        }
         UINT WINAPI hkGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader) {
             g_Hook::CallbackScope Guard;
 
@@ -318,7 +331,10 @@ namespace g_MDX12 {
                 return 0;
             }
 
-            return g_HookFunctions::g_oGetRawInputData ? g_HookFunctions::g_oGetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader) : 0;
+            const UINT Result=g_HookFunctions::g_oGetRawInputData ? g_HookFunctions::g_oGetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader) : 0;
+            if(Result!=UINT(-1) && Result>=sizeof(RAWINPUT) && uiCommand==RID_INPUT && pData && FlightWheelCaptured())
+                FilterFlightWheel(static_cast<RAWINPUT*>(pData));
+            return Result;
         }
 
         UINT WINAPI hkGetRawInputBuffer(PRAWINPUT pData, PUINT pcbSize, UINT cbSizeHeader) {
@@ -336,7 +352,15 @@ namespace g_MDX12 {
                 return 0;
             }
 
-            return g_HookFunctions::g_oGetRawInputBuffer ? g_HookFunctions::g_oGetRawInputBuffer(pData, pcbSize, cbSizeHeader) : 0;
+            const UINT Result=g_HookFunctions::g_oGetRawInputBuffer ? g_HookFunctions::g_oGetRawInputBuffer(pData, pcbSize, cbSizeHeader) : 0;
+            if(Result!=UINT(-1) && pData && FlightWheelCaptured()) {
+                auto* R=pData;
+                for(UINT I=0;I<Result;++I) {
+                    FilterFlightWheel(R);
+                    R=reinterpret_cast<RAWINPUT*>((reinterpret_cast<uintptr_t>(R)+R->header.dwSize+7u)&~uintptr_t(7u));
+                }
+            }
+            return Result;
         }
 
         void Init() {
@@ -448,6 +472,7 @@ namespace g_MDX12 {
             static bool BindingHeld = false;
             static unsigned BindingVk = 0;
             if (uMsg == WM_KILLFOCUS) {
+                PhoenixDeinoUI::Clear();
                 std::fill(std::begin(Consumed), std::end(Consumed), false);
                 g_menuKeyDown = false; BindingHeld = false;
                 g_MenuState::g_pCurrentBindingKey = nullptr;
@@ -533,6 +558,16 @@ namespace g_MDX12 {
                 return 0;
             }
 
+            if (!g_MenuState::g_isOpen && Foreground && g_Config::bDeinoFlight) {
+                const auto V=PhoenixDeinoUI::Read();
+                const int Wheel=uMsg==WM_MOUSEWHEEL?static_cast<short>(HIWORD(wParam)):0;
+                const bool H=V.Keys[2] && (GetAsyncKeyState(V.Keys[2])&0x8000), U=V.Keys[3] && (GetAsyncKeyState(V.Keys[3])&0x8000);
+                if(PhoenixDeinoUI::Input((KeyDown||KeyUp)?Vk:0,KeyDown,Repeated,Wheel,H,U,GetTickCount64())) {
+                    if(KeyDown && Vk<256) Consumed[Vk]=true;
+                    return 0;
+                }
+                if((uMsg==WM_CHAR || uMsg==WM_SYSCHAR) && V.Panel && PhoenixDeinoUI::Fresh(V,GetTickCount64()) && (wParam==9 || wParam==32)) return 0;
+            }
             if (!g_MenuState::g_isOpen &&
                 (uMsg == WM_KEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP) &&
                 g_Hack::HandleFreeCameraKey(static_cast<unsigned int>(wParam),

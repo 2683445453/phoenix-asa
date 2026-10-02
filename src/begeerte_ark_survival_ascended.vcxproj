@@ -118,6 +118,7 @@
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\D3D12Overlay.inl" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\SwapChainQueueTracker.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\UnloadBarrier.h" />
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\RespawnNotification.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\WindowProcedureRoutes.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\mdx12_api.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\MinHook\include\MinHook.h" />
@@ -145,11 +146,15 @@
     <ClInclude Include="internal\ESP\StructureESP.h" />
     <ClInclude Include="internal\ESP\ESPStyle.inl" />
     <ClInclude Include="internal\Hack\FireRateRules.h" />
+    <ClInclude Include="internal\Hack\GeneScannerMarkers.h" />
     <ClInclude Include="internal\Hack\BuffSoupRules.h" />
     <ClInclude Include="internal\Hack\FireExtinguishRules.h" />
     <ClInclude Include="internal\Hack\AutoLootRules.h" />
     <ClInclude Include="internal\Hack\CameraControls.h" />
     <ClInclude Include="internal\Hack\WorldUtilityRules.h" />
+    <ClInclude Include="internal\Hack\NoteExperiment.h" />
+    <ClInclude Include="internal\Hack\NoteExperiment.inl" />
+    <ClInclude Include="internal\Menu\NoteExperimentWindow.inl" />
     <ClInclude Include="internal\Hack\GachaOpenScheduler.h" />
     <ClInclude Include="internal\Hack\GachaOpen.inl" />
     <ClInclude Include="internal\Hack\FreeCamera.inl" />
@@ -162,6 +167,8 @@
     <ClInclude Include="internal\Legit\Aimbot\ProjectilePrediction.h" />
     <ClInclude Include="internal\Legit\Aimbot\ProjectileAim.inl" />
     <ClInclude Include="internal\Hack\Hack.h" />
+    <ClInclude Include="internal\Hack\GargantarClient.inl" />
+    <ClInclude Include="internal\Hack\GargantarAttackPatch.inl" />
     <ClInclude Include="internal\Hack\TekSpear.h" />
     <ClInclude Include="internal\Hack\TekSpearRules.h" />
     <ClInclude Include="internal\Language\LanguageManager.h" />
@@ -247,6 +254,7 @@
     <ClCompile Include="internal\ESP\DrawESP.cpp" />
     <ClCompile Include="internal\ESP\ESP.cpp" />
     <ClCompile Include="internal\Hack\Hack.cpp" />
+    <ClCompile Include="internal\Hack\GeneScannerMarkers.cpp" />
     <ClCompile Include="internal\Hack\TekSpear.cpp" />
     <ClCompile Include="internal\Language\LanguageManager.cpp" />
     <ClCompile Include="internal\Legit\Aimbot\Aimbot.cpp" />

@@ -5,6 +5,7 @@
 #include "../Util/Util.h"
 #include "../Lua/LuaManager.h"
 #include "../Hack/Hack.h"
+#include "../Hack/GeneScannerMarkers.h"
 #include "../../external/CppSDK/SDK.hpp"
 #include "../Legit/Aimbot/Aimbot.h"
 #include <atomic>
@@ -131,7 +132,8 @@ namespace g_AActor {
             g_Hack::AutoSwapBrokenEquipment();
         }
 
-        g_Util::DropOrUseItem();
+		g_Util::DropOrUseItem();
+		g_GeneScannerMarkers::Tick(world);
 
 		LuaManager::Get().Lua_OnWorldTick();
 		RecordWorldTickDuration(std::chrono::steady_clock::now() - WorkStarted);

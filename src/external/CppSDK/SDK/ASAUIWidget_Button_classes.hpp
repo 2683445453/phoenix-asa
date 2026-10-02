@@ -10,8 +10,8 @@
 
 #include "Basic.hpp"
 
-#include "CoreUObject_structs.hpp"
 #include "Engine_structs.hpp"
+#include "CoreUObject_structs.hpp"
 #include "ShooterGame_classes.hpp"
 #include "SlateCore_structs.hpp"
 
@@ -63,23 +63,23 @@ public:
 	bool                                          ForceScaleText;                                    // 0x0940(0x0001)(Edit, BlueprintVisible, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 
 public:
-	void UpdateInputIcon();
-	void UpdateButton();
-	void UpdateBracketAndTextColors();
-	void SetButtonText(const class FText& TheText);
-	void SetActive(bool newActive);
-	void PreConstruct(bool IsDesignTime);
-	void OnWidgetGamepadActiveChangedBP(bool bIsGamepadActive);
-	void Fix_PS_Icons();
-	void ExecuteUbergraph_ASAUIWidget_Button(int32 EntryPoint);
-	void Destruct();
-	void Construct();
-	void BndEvt__ASAUIWidget_Button_Style1_Button_K2Node_ComponentBoundEvent_5_OnButtonHoverEvent__DelegateSignature();
-	void BndEvt__ASAUIWidget_Button_Style1_Button_K2Node_ComponentBoundEvent_4_OnButtonHoverEvent__DelegateSignature();
-	void BndEvt__ASAUIWidget_Button_Style1_Button_K2Node_ComponentBoundEvent_3_OnButtonReleasedEvent__DelegateSignature();
-	void BndEvt__ASAUIWidget_Button_Style1_Button_K2Node_ComponentBoundEvent_0_OnButtonPressedEvent__DelegateSignature();
-	void BndEvt__ASAUIWidget_Button_1_BackButton_K2Node_ComponentBoundEvent_2_OnButtonClickedEvent__DelegateSignature();
 	void BndEvt__ASAUIWidget_Button_1_BackButton_K2Node_ComponentBoundEvent_1_OnButtonClickedEvent__DelegateSignature();
+	void BndEvt__ASAUIWidget_Button_1_BackButton_K2Node_ComponentBoundEvent_2_OnButtonClickedEvent__DelegateSignature();
+	void BndEvt__ASAUIWidget_Button_Style1_Button_K2Node_ComponentBoundEvent_0_OnButtonPressedEvent__DelegateSignature();
+	void BndEvt__ASAUIWidget_Button_Style1_Button_K2Node_ComponentBoundEvent_3_OnButtonReleasedEvent__DelegateSignature();
+	void BndEvt__ASAUIWidget_Button_Style1_Button_K2Node_ComponentBoundEvent_4_OnButtonHoverEvent__DelegateSignature();
+	void BndEvt__ASAUIWidget_Button_Style1_Button_K2Node_ComponentBoundEvent_5_OnButtonHoverEvent__DelegateSignature();
+	void Construct();
+	void Destruct();
+	void ExecuteUbergraph_ASAUIWidget_Button(int32 EntryPoint);
+	void Fix_PS_Icons();
+	void OnWidgetGamepadActiveChangedBP(bool bIsGamepadActive);
+	void PreConstruct(bool IsDesignTime);
+	void SetActive(bool newActive);
+	void SetButtonText(const class FText& theText);
+	void UpdateBracketAndTextColors();
+	void UpdateButton();
+	void UpdateInputIcon();
 
 public:
 	static class UClass* StaticClass()

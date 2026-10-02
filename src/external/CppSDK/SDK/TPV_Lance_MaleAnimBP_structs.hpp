@@ -16,7 +16,7 @@
 SDK_NAMESPACE_START
 
 // ScriptStruct TPV_Lance_MaleAnimBP.TPV_Lance_MaleAnimBP_C.AnimBlueprintGeneratedConstantData
-// 0x0000 (0xD7E8 - 0xD7E8)
+// 0x0000 (0xD7B8 - 0xD7B8)
 struct TPV_Lance_MaleAnimBP::FAnimBlueprintGeneratedConstantData final : public BaseHumanAnimBP::FAnimBlueprintGeneratedConstantData
 {
 };

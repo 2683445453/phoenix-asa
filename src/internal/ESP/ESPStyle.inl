@@ -60,10 +60,7 @@ void DrawEntityInfo(SDK::UCanvas* Canvas, const BoxRect& Box, const EntityInfo& 
         Rows.back().IconQualityColors[0] = Info.WeaponQualityColor;
     }
     if (!Info.Ammo.empty()) Rows.push_back({Info.Ammo, Info.AmmoColor, DetailScale});
-    if (!g_Config::bMinimalESP) {
-        for (const auto& Item : Info.LootItems)
-            Rows.push_back({LanguageManager::Get().TranslateCopy("物品：") + Item, Info.DetailColor, DetailScale});
-    }
+    const bool HasLoot = !g_Config::bMinimalESP && !Info.LootItems.empty();
     std::string Summary = Info.ShowDistance ? std::format("{:.0f}m", Info.Distance) : "";
     if (Info.ShowHealth) {
         if (!Summary.empty()) Summary += "  ·  ";
@@ -73,7 +70,7 @@ void DrawEntityInfo(SDK::UCanvas* Canvas, const BoxRect& Box, const EntityInfo& 
         Info.ShowHealth && Info.MaxHealth > 0 ? std::clamp(Info.Health / Info.MaxHealth, 0.0f, 1.0f) : -1.0f});
     if (!g_Config::bMinimalESP && Info.ShowTorpor && Info.MaxTorpor > 0) Rows.push_back({"眩晕 " + CompactValue(Info.Torpor) + " / " + CompactValue(Info.MaxTorpor),
         Info.TorporColor, DetailScale, std::clamp(Info.Torpor / Info.MaxTorpor, 0.0f, 1.0f)});
-    if (Rows.empty()) return;
+    if (Rows.empty() && !HasLoot) return;
     const float PadX = PixelsX(6), PadY = PixelsY(5), Gap = PixelsY(3), BarH = PixelsY(3);
     const float MaxWidth = std::min(PixelsX(280), Canvas->ClipX - PadX * 4);
     if (MaxWidth <= 0) return;
@@ -89,7 +86,23 @@ void DrawEntityInfo(SDK::UCanvas* Canvas, const BoxRect& Box, const EntityInfo& 
         Row.Size.y = std::max(Row.Size.y, IconCount ? IconPixelsY : 0.0f);
         Height += Row.Size.y + Gap + (Row.Bar >= 0 ? BarH + Gap : 0);
     }
-    Height -= Gap;
+    if (!Rows.empty()) Height -= Gap;
+    // Compact inventory grid participates in the same collision/placement bounds.
+    const float BadgeScale = InfoFontScale(Font, 1.0f, false) * 0.75f;
+    const float BadgeHeight = MeasureInfo(Font, BadgeScale, "x99").y;
+    const bool MissingLootIcon = HasLoot && std::any_of(Info.LootItems.begin(), Info.LootItems.end(),
+        [](const auto& Item) { return !Item.Icon; });
+    const float CellWidth = std::max(IconPixelsX, PixelsX(MissingLootIcon ? 56.0f : 28.0f));
+    const float LootIconHeight = std::max(IconPixelsY, MissingLootIcon ? 2 * BadgeHeight : PixelsY(20));
+    const float CellHeight = LootIconHeight + BadgeHeight + Gap;
+    const int LootColumns = std::max(1, std::min(8, static_cast<int>((MaxWidth - 2 * PadX + Gap) / (CellWidth + Gap))));
+    const size_t LootCount = HasLoot ? std::min<size_t>(24, Info.LootItems.size()) : 0;
+    const size_t LootRows = (LootCount + LootColumns - 1) / LootColumns;
+    if (HasLoot) {
+        Width = std::max(Width, std::min<size_t>(LootColumns, LootCount) * (CellWidth + Gap) - Gap + 2 * PadX);
+        Height += (Rows.empty() ? 0 : Gap) + LootRows * CellHeight - Gap;
+        if (Info.LootMoreCount > 0) Height += BadgeHeight + Gap;
+    }
     std::vector<Layout::Rect> Occupied;
     for (const auto& R : s_occupiedTopLabels) Occupied.push_back({R.minX, R.minY, R.maxX - R.minX, R.maxY - R.minY});
     const Layout::Rect Target{Box.topLeft.x, Box.topLeft.y, Box.bottomRight.x - Box.topLeft.x, Box.bottomRight.y - Box.topLeft.y};
@@ -136,5 +149,50 @@ void DrawEntityInfo(SDK::UCanvas* Canvas, const BoxRect& Box, const EntityInfo& 
             Draw->AddRectFilled({X + PadX, CursorY}, {(Width - 2 * PadX) * Row.Bar, BarH}, Color);
             CursorY += BarH + Gap;
         }
+    }
+    if (HasLoot) {
+        const SDK::FVector2D Zero{0.0, 0.0}, One{1.0, 1.0};
+        for (size_t I = 0; I < LootCount; ++I) {
+            const auto& Item = Info.LootItems[I];
+            const float CellX = X + PadX + (I % LootColumns) * (CellWidth + Gap);
+            const float CellY = CursorY + (I / LootColumns) * CellHeight;
+            const float IconX = CellX + (CellWidth - IconPixelsX) * 0.5f;
+            const auto& C = Item.QualityColor;
+            if (Canvas->DefaultTexture && C.a > 0)
+                Canvas->K2_DrawTexture(Canvas->DefaultTexture, {IconX, CellY}, {IconPixelsX, IconPixelsY},
+                    Zero, One, {C.r, C.g, C.b, Info.Alpha * 0.8f}, SDK::EBlendMode::BLEND_Translucent, 0, Zero);
+            if (Item.Icon) {
+                const float InsetX = C.a > 0 ? PixelsX(2) : 0, InsetY = C.a > 0 ? PixelsY(2) : 0;
+                Canvas->K2_DrawTexture(Item.Icon, {IconX + InsetX, CellY + InsetY},
+                    {IconPixelsX - 2 * InsetX, IconPixelsY - 2 * InsetY}, Zero, One,
+                    {1,1,1,Info.Alpha}, SDK::EBlendMode::BLEND_Translucent, 0, Zero);
+            }
+            else {
+                auto NameColor = Info.DetailColor; NameColor.a *= Info.Alpha;
+                const auto Name = FitInfoText(Font, BadgeScale, Item.Name, CellWidth);
+                Draw->AddText(Font, BadgeScale, {0,0,0,Info.Alpha}, {0,0,0,Info.Alpha},
+                    {CellX, CellY + BadgeHeight}, NameColor, Name);
+            }
+            if (Item.Kind != LootItemKind::Item) {
+                const std::string Badge = Item.Kind == LootItemKind::Blueprint ? "BP" : "?";
+                const auto Size = MeasureInfo(Font, BadgeScale, Badge);
+                const Shadow::Color BadgeColor = Item.Kind == LootItemKind::Blueprint
+                    ? Shadow::Color{0.08f,0.45f,0.75f,Info.Alpha} : Shadow::Color{0.55f,0.35f,0.06f,Info.Alpha};
+                Draw->AddRectFilled({CellX, CellY}, {Size.x + PixelsX(2), Size.y}, BadgeColor);
+                Draw->AddText(Font, BadgeScale, {0,0,0,Info.Alpha}, {0,0,0,Info.Alpha},
+                    {CellX + PixelsX(1), CellY}, {1,1,1,Info.Alpha}, Badge);
+            }
+            if (Item.Quantity > 1) {
+                const auto Quantity = "x" + CompactValue(static_cast<float>(Item.Quantity));
+                const auto Size = MeasureInfo(Font, BadgeScale, Quantity);
+                Draw->AddText(Font, BadgeScale, {0,0,0,Info.Alpha}, {0,0,0,Info.Alpha},
+                    {CellX + (CellWidth - Size.x) * 0.5f, CellY + LootIconHeight},
+                    {1,1,1,Info.Alpha}, Quantity);
+            }
+        }
+        if (Info.LootMoreCount > 0)
+            Draw->AddText(Font, BadgeScale, {0,0,0,Info.Alpha}, {0,0,0,Info.Alpha},
+                {X + PadX, CursorY + LootRows * CellHeight}, {1,1,1,Info.Alpha},
+                "+" + std::to_string(Info.LootMoreCount) + " " + LanguageManager::Get().TranslateCopy("…更多物品"));
     }
 }

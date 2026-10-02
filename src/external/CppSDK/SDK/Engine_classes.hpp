@@ -23,9 +23,9 @@
 #include "AudioPlatformConfiguration_structs.hpp"
 #include "DeveloperSettings_structs.hpp"
 #include "DeveloperSettings_classes.hpp"
+#include "MeshDescription_classes.hpp"
 #include "Chaos_structs.hpp"
 #include "IrisStub_classes.hpp"
-#include "MeshDescription_classes.hpp"
 #include "AudioExtensions_structs.hpp"
 #include "AudioExtensions_classes.hpp"
 #include "SlateCore_structs.hpp"
@@ -2293,9 +2293,9 @@ public:
 	void RemoveTickPrerequisiteActor(class AActor* PrerequisiteActor);
 	void RemoveTickPrerequisiteComponent(class UActorComponent* PrerequisiteComponent);
 	void ReregisterAllComponents();
-	void ServerSendExecCommandToEveryone(class FName CommandName, const struct FBPNetExecParams& ExecParams, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy);
-	void ServerSendExecCommandToPlayer(class APrimalPlayerController* ToPC, class FName CommandName, const struct FBPNetExecParams& ExecParams, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy);
-	void ServerSendSimpleExecCommandToEveryone(class FName CommandName, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy);
+	void ServerSendExecCommandToEveryone(class FName CommandName, const struct FBPNetExecParams& ExecParams, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy, bool bAllowAsPlayerServer);
+	void ServerSendExecCommandToPlayer(class APrimalPlayerController* ToPC, class FName CommandName, const struct FBPNetExecParams& ExecParams, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy, bool bAllowAsPlayerServer);
+	void ServerSendSimpleExecCommandToEveryone(class FName CommandName, bool bIsReliable, bool bForceSendToLocalPlayer, bool bIgnoreRelevancy, bool bAllowAsPlayerServer);
 	void SetActorEnableCollision(bool bNewActorEnableCollision);
 	void SetActorHiddenInGame(bool bNewHidden);
 	void SetActorRelativeScale3D(const struct FVector& NewRelativeScale);
@@ -42167,7 +42167,7 @@ DUMPER7_ASSERTS_UOnlineSession;
 
 // Class Engine.PackedLevelActor
 // 0x0000 (0x0538 - 0x0538)
-class APackedLevelActor final : public ALevelInstance
+class APackedLevelActor : public ALevelInstance
 {
 public:
 	static class UClass* StaticClass()

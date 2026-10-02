@@ -17,7 +17,7 @@
 SDK_NAMESPACE_START
 
 // RigVMBlueprintGeneratedClass Human_Rider_CtrlRig.Human_Rider_CtrlRig_C
-// 0x04C0 (0x0F90 - 0x0AD0)
+// 0x07D0 (0x12A0 - 0x0AD0)
 class UHuman_Rider_CtrlRig_C final : public UControlRig
 {
 public:
@@ -59,6 +59,26 @@ public:
 	double                                        LegLengthHipZOffset;                               // 0x0F80(0x0008)(Edit, BlueprintVisible, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	bool                                          bUseHandIKBones;                                   // 0x0F88(0x0001)(Edit, BlueprintVisible, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	bool                                          bIsRidingOnShip;                                   // 0x0F89(0x0001)(Edit, BlueprintVisible, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	uint8                                         Pad_F8A[0x6];                                      // 0x0F8A(0x0006)(Fixing Size After Last Property [ Dumper-7 ])
+	struct FTransform                             RiderSocketTransform;                              // 0x0F90(0x0060)(Edit, BlueprintVisible, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          bStabilizeRider;                                   // 0x0FF0(0x0001)(Edit, BlueprintVisible, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	uint8                                         Pad_FF1[0xF];                                      // 0x0FF1(0x000F)(Fixing Size After Last Property [ Dumper-7 ])
+	struct FTransform                             PelvisCurrentTransform;                            // 0x1000(0x0060)(Edit, BlueprintVisible, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          bStabilizeRiderInitialized;                        // 0x1060(0x0001)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	uint8                                         Pad_1061[0x7];                                     // 0x1061(0x0007)(Fixing Size After Last Property [ Dumper-7 ])
+	double                                        StabilizeRiderAlpha;                               // 0x1068(0x0008)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	double                                        StabilizeRiderAmount;                              // 0x1070(0x0008)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	double                                        StabilizeRiderMaxOffset;                           // 0x1078(0x0008)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	struct FTransform                             RiderSocketTransformSmoothed;                      // 0x1080(0x0060)(Edit, BlueprintVisible, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	struct FTransform                             RiderTransform;                                    // 0x10E0(0x0060)(Edit, BlueprintVisible, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	struct FTransform                             LeftKneeTransform;                                 // 0x1140(0x0060)(Edit, BlueprintVisible, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	struct FTransform                             RightKneeTransform;                                // 0x11A0(0x0060)(Edit, BlueprintVisible, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	struct FTransform                             PelvisTransform;                                   // 0x1200(0x0060)(Edit, BlueprintVisible, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	struct FVector                                ReactiveRider_SpringInterpResult;                  // 0x1260(0x0018)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	struct FVector                                ReactiveRider_PelvisCurrent;                       // 0x1278(0x0018)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          UseReactiveRidersSpring;                           // 0x1290(0x0001)(Edit, BlueprintVisible, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          IsFemale;                                          // 0x1291(0x0001)(Edit, BlueprintVisible, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          MoveRiderBasedOnSize;                              // 0x1292(0x0001)(Edit, BlueprintVisible, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 
 public:
 	static class UClass* StaticClass()

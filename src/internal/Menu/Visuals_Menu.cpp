@@ -197,6 +197,32 @@ namespace g_DrawImGui {
         BeginTabRegion("VisualsRegion");
         ImGui::BeginDisabled(!g_Hook::PostRenderOK);
 
+        if (IsTopic(Topic::Overlay)) {
+            DrawCustomCheckbox(Tr(U8("启用独立透视")), &g_Config::bOverlayESP);
+            HelpText(Tr(U8("屏幕叠加绘制，不依赖游戏原生轮廓；以下参数独立保存。")));
+            if (auto Fade = ParameterFade("##OverlayParameters", g_Config::bOverlayESP); Fade) {
+                Title(Tr(U8("显示对象")));
+                DrawCustomCheckbox(Tr(U8("人物")), &g_Config::bOverlayPlayers);
+                DrawCustomCheckbox(Tr(U8("生物")), &g_Config::bOverlayCreatures);
+                DrawCustomCheckbox(Tr(U8("建筑")), &g_Config::bOverlayStructures);
+                DrawCustomCheckbox(Tr(U8("仅显示非友军")), &g_Config::bOverlayEnemyOnly);
+                DrawAnimatedSeparator();
+                Title(Tr(U8("骨骼与线框")));
+                DrawCustomCheckbox(Tr(U8("人物／生物骨骼")), &g_Config::bOverlaySkeleton);
+                DrawCustomCheckbox(Tr(U8("人物／生物方框")), &g_Config::bOverlayCharacterBox);
+                DrawCustomCheckbox(Tr(U8("建筑三维线框")), &g_Config::bOverlayStructureBox);
+                DrawCustomCheckbox(Tr(U8("名称")), &g_Config::bOverlayName);
+                DrawCustomCheckbox(Tr(U8("距离")), &g_Config::bOverlayDistance);
+                DrawCustomSliderFloat(Tr(U8("人物／生物显示距离")), &g_Config::OverlayCharacterDistance, 1, 2000, "%.0f", 10, "m");
+                DrawCustomSliderFloat(Tr(U8("建筑显示距离")), &g_Config::OverlayStructureDistance, 1, 2000, "%.0f", 10, "m");
+                DrawCustomSliderFloat(Tr(U8("独立透视线宽")), &g_Config::OverlayLineWidth, .5f, 5, "%.1f", .25f, "px");
+                DrawCustomSliderFloat(Tr(U8("独立透视字号")), &g_Config::OverlayFontPixels, 10, 32, "%.0f", 1, "px");
+                DrawMultiColorPicker(Tr(U8("非友军 / 友军 / 建筑")), true,
+                    {{"##OverlayEnemy", g_Config::OverlayEnemyColor}, {"##OverlayTeam", g_Config::OverlayTeamColor}, {"##OverlayStructure", g_Config::OverlayStructureColor}});
+                HelpText(Tr(U8("建筑线框为模型世界包围盒；不沿墙面描边。近处优先，骨骼每帧最多 32 个目标，只绘制有效投影线段。")));
+            }
+        }
+
         const auto SharedColorRow = [&](const char* Label, bool* Enabled, float* Enemy, float* Friendly) {
             ImGui::PushID(Label);
             DrawCustomCheckbox(Label, Enabled);
@@ -218,7 +244,7 @@ namespace g_DrawImGui {
         ImGui::SameLine();
         DrawCustomCheckbox(Tr(U8("生物")), &g_Config::bESPCreatures);
         ImGui::SameLine();
-        DrawCustomCheckbox(Tr(U8("建筑")), &g_Config::bDrawStructures);
+        DrawCustomCheckbox(Tr(U8("建筑")), &g_Config::bDrawStructures, U8("显示客户端已加载建筑的信息。设置显示距离，并可按建筑类型筛选；未加载建筑无法显示。"));
         HelpText(Tr(U8("勾选的对象共用功能开关；敌方与友军颜色分别设置。")));
         DrawCustomCheckbox(Tr(U8("生物敌意模型颜色")), &g_Config::bShowCreatureAggro);
         HelpText(Tr(U8("原生模型描边：白色平静、黄色逃离、红色敌意或敌方驯养；攻击你或坐骑时另显示文字。")));
@@ -276,25 +302,28 @@ namespace g_DrawImGui {
         if (IsTopic(Topic::Structures)) {
         DrawColorPickerRow(Tr(U8("炮塔弹量")), &g_Config::bDrawTurretAmmo, "TurretAmmo", g_Config::TurretAmmoColor);
         Title(Tr(U8("建筑筛选")));
-        DrawCustomCheckbox(Tr(U8("显示建筑")), &g_Config::bDrawStructures);
+        DrawCustomCheckbox(Tr(U8("显示建筑")), &g_Config::bDrawStructures, U8("显示客户端已加载建筑的信息。设置显示距离，并可按建筑类型筛选；未加载建筑无法显示。"));
         if (auto Fade=ParameterFade("##parameters_Visuals_Menu.cpp_10", g_Config::bDrawStructures); Fade) {
             DrawCustomSliderFloat(Tr(U8("建筑显示距离")), &g_Config::StructureMaxDistance, 1.0f, 10000.0f, "%.0f", 1.0f, "m");
             DrawColorPickerRow(Tr(U8("名称下显示建筑归属")), &g_Config::bStructureShowOwner, "StructureOwnerCol", g_Config::StructureOwnerColor);
-            DrawCustomCheckbox(Tr(U8("按建筑类型筛选")), &g_Config::bStructureTypeFilter);
+            DrawCustomCheckbox(Tr(U8("按建筑类型筛选")), &g_Config::bStructureTypeFilter, U8("按所选类型过滤建筑显示；全不选将隐藏所有建筑。关闭此筛选时不限制建筑类型，名称筛选仍生效。"));
             if (auto Fade=ParameterFade("##parameters_Visuals_Menu.cpp_11", g_Config::bStructureTypeFilter); Fade) {
-                DrawCustomCheckbox(Tr(U8("自动炮台")), &g_Config::bStructureAutoTurret);
-                DrawCustomCheckbox(Tr(U8("重型自动炮台")), &g_Config::bStructureHeavyTurret);
-                DrawCustomCheckbox(Tr(U8("泰克炮台")), &g_Config::bStructureTekTurret);
-                DrawCustomCheckbox(Tr(U8("发电机")), &g_Config::bStructureGenerator);
-                DrawCustomCheckbox(Tr(U8("泰克发电机")), &g_Config::bStructureTekGenerator);
-                DrawCustomCheckbox(Tr(U8("风力发电机")), &g_Config::bStructureWindTurbine);
-                DrawCustomCheckbox(Tr(U8("补给箱／空投")), &g_Config::bStructureSupplyDrop);
-                DrawCustomCheckbox(Tr(U8("洞穴／海底战利品箱")), &g_Config::bStructureLootCrate);
-                DrawCustomCheckbox(Tr(U8("藏宝箱／埋藏宝箱")), &g_Config::bStructureBuriedTreasure);
-                DrawCustomCheckbox(Tr(U8("其他建筑")), &g_Config::bStructureOther);
+                DrawChoiceGroup(U8("建筑类型"), {
+                    {Tr(U8("自动炮台")), false, nullptr, &g_Config::bStructureAutoTurret},
+                    {Tr(U8("重型自动炮台")), false, nullptr, &g_Config::bStructureHeavyTurret},
+                    {Tr(U8("泰克炮台")), false, nullptr, &g_Config::bStructureTekTurret},
+                    {Tr(U8("发电机")), false, nullptr, &g_Config::bStructureGenerator},
+                    {Tr(U8("泰克发电机")), false, nullptr, &g_Config::bStructureTekGenerator},
+                    {Tr(U8("风力发电机")), false, nullptr, &g_Config::bStructureWindTurbine},
+                    {Tr(U8("补给箱／空投")), false, nullptr, &g_Config::bStructureSupplyDrop},
+                    {Tr(U8("洞穴／海底战利品箱")), false, nullptr, &g_Config::bStructureLootCrate},
+                    {Tr(U8("藏宝箱／埋藏宝箱")), false, nullptr, &g_Config::bStructureBuriedTreasure},
+                    {Tr(U8("其他建筑")), false, nullptr, &g_Config::bStructureOther}
+                });
                 HelpText(Tr(U8("仅显示勾选类型；全部取消则不显示建筑。建筑列表的名称筛选同时生效。")));
             }
             DrawCustomCheckbox(Tr(U8("显示已同步的箱内物品")), &g_Config::bStructureShowLootContents);
+            HelpText(Tr(U8("箱内物品按紧凑网格显示；BP 表示蓝图，? 表示类型未知。无图标时显示名称，最多展示 24 项，其余显示数量。")));
             HelpText(Tr(U8("优先显示客户端已同步物品；装有 A 镜且正查看箱子时，也读取其客户端返回，短暂显示在建筑标签中。")));
             HelpText(Tr(U8("建筑变色还受上方模型显示距离限制；关闭名称时一并隐藏归属。")));
         }

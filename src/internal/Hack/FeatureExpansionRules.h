@@ -3,8 +3,15 @@
 #include <cmath>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace PhoenixExpansion {
+    // Keep the camera clamp centered on the current view. A fixed nearly-full
+    // range still traps yaw at its world-space seam (observed at 179.79 deg).
+    inline std::pair<float,float> MountedYawWindow(double ControlYaw) {
+        const double Center = std::isfinite(ControlYaw) ? std::remainder(ControlYaw,360.0) : 0.0;
+        return {static_cast<float>(Center-170.0),static_cast<float>(Center+170.0)};
+    }
     enum class Use { None, Claim, Imprint, Ride, Activate, Extract, RemoveBola };
     inline std::string Normalize(std::string Text) {
         std::string Result;

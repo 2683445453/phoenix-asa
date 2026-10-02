@@ -11,6 +11,8 @@
 #include "DeinoGlideProbeRules.h"
 #include "DeinoActionRules.h"
 #include "DeinoFlightRules.h"
+#include "DeinoFlightPreview.h"
+#include "DeinoFlightUI.h"
 #include "AutoCraftScheduler.h"
 #include "GachaOpenScheduler.h"
 #include "FireRateRules.h"
@@ -22,6 +24,7 @@
 #include "AutoLootRules.h"
 #include "CameraControls.h"
 #include "WorldUtilityRules.h"
+#include "NoteExperiment.h"
 #include "InventoryTransferRules.h"
 #include "BackpackRules.h"
 #include "TekSpear.h"
@@ -427,16 +430,21 @@ namespace g_Hack {
 
             SDK::UPrimalItem* BestItem = nullptr;
             float BestScore = -1.0f;
-            for (int32_t Index = 0; Index < Inventory->InventoryItems.Num(); ++Index) {
-                SDK::UPrimalItem* Item = Inventory->InventoryItems[Index];
-                if (!IsSafeAutoConsumable(Item, TargetValue)) continue;
+            auto Consider = [&](const SDK::TArray<SDK::UPrimalItem*>& Items) {
+                for (int32_t Index = 0; Index < Items.Num(); ++Index) {
+                    SDK::UPrimalItem* Item = Items[Index];
+                    if (!IsSafeAutoConsumable(Item, TargetValue)) continue;
 
-                const float Score = GetConsumableRestoreAmount(Item, TargetValue);
-                if (Score > BestScore) {
-                    BestScore = Score;
-                    BestItem = Item;
+                    const float Score = GetConsumableRestoreAmount(Item, TargetValue);
+                    if (Score > BestScore) {
+                        BestScore = Score;
+                        BestItem = Item;
+                    }
                 }
-            }
+            };
+            Consider(Inventory->InventoryItems);
+            // Include the survivor's quick bar as well as regular inventory.
+            Consider(Inventory->ItemSlots);
             return BestItem;
         }
 
@@ -470,10 +478,10 @@ namespace g_Hack {
         SDK::UPrimalItem* FindRequestedBrew(SDK::UPrimalInventoryComponent* Inventory,
             SDK::EPrimalCharacterStatusValue TargetValue) {
             if (!Inventory) return nullptr;
-            for (int32_t Index = 0; Index < Inventory->InventoryItems.Num(); ++Index) {
-                SDK::UPrimalItem* Item = Inventory->InventoryItems[Index];
+            for (SDK::UPrimalItem* Item : Inventory->InventoryItems)
                 if (IsRequestedBrew(Item, TargetValue)) return Item;
-            }
+            for (SDK::UPrimalItem* Item : Inventory->ItemSlots)
+                if (IsRequestedBrew(Item, TargetValue)) return Item;
             return nullptr;
         }
 
@@ -1413,6 +1421,28 @@ namespace g_Hack {
         SDK::AShooterCharacter* GetLocalConsumableCharacter(SDK::UWorld* World) {
             SDK::AShooterPlayerController* PC = GetLocalShooterController(World);
             if (!IsUsableObject(PC)) return nullptr;
+
+            // On a possessed mount, use its actual rider. Validate the weak
+            // reference's serial before dereferencing it: Get() alone can
+            // return a different object after the survivor is replaced.
+            SDK::APrimalDinoCharacter* Mount = nullptr;
+            if (IsUsableObject(PC->Pawn) &&
+                PC->Pawn->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
+                Mount = static_cast<SDK::APrimalDinoCharacter*>(PC->Pawn);
+            }
+            if (Mount && Mount->Controller == PC) {
+                const auto& RiderRef = Mount->Rider;
+                SDK::AShooterCharacter* Rider = RiderRef.Get();
+                int32_t LiveSerial = 0;
+                if (RiderRef.ObjectSerialNumber > 0 &&
+                    TryGetLiveObjectSerial(Rider, RiderRef.ObjectIndex, &LiveSerial) &&
+                    LiveSerial == RiderRef.ObjectSerialNumber &&
+                    IsUsableObject(Rider) &&
+                    Rider->IsA(SDK::AShooterCharacter::StaticClass()) &&
+                    !Rider->IsA(SDK::APrimalDinoCharacter::StaticClass())) {
+                    return Rider;
+                }
+            }
 
             // Possession moves to the mount while riding. The controller's
             // player character remains the survivor whose inventory and stats
@@ -8208,6 +8238,7 @@ namespace g_Hack {
 #include "GachaOpen.inl"
 #include "InventoryDeposit.inl"
 #include "FeatureExpansion.inl"
+#include "SpiderZiplineExperiment.inl"
 #include "TekEquipment.inl"
 #include "PlacementExperiment.inl"
 #include "WeaponWaterAccess.inl"
@@ -8216,6 +8247,7 @@ namespace g_Hack {
 #include "BackpackTools.inl"
 #include "SessionSnapshot.inl"
 #include "GcmLocalFlight.inl"
+#include "NoteExperiment.inl"
 #include "WorldUtilities.inl"
 #include "InstantReload.inl"
 

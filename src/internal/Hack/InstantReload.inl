@@ -263,7 +263,10 @@ namespace {
         // 仅 authority 的普通枪械应用时长字段；实际动画/装填效果另行实测。
         ApplyReloadConfigPatch(ReloadDurationPerAmmoCountPatch, Weapon, "ReloadDurationPerAmmoCount", 0.0f);
         ApplyReloadConfigPatch(NoAnimReloadDurationPatch, Weapon, "NoAnimReloadDuration", 0.0f);
-        if (Authority && g_Config::bInstantReloadProtectAmmo)
+        // 制式弩速射依赖 ReloadWeapon 从备用弹药真实转移一支箭；
+        // 与「换弹不消耗弹药」同时开启时仍保持扣箭。
+        if (Authority && g_Config::bInstantReloadProtectAmmo &&
+            !(InstantReload.Family == WeaponFamily::Crossbow && g_Config::bCrossbowHoldRapidFire))
             DontTakeAmmoOnReloadPatch.ApplyBool(Weapon, "WeaponConfig", "bDontTakeAmmoOnReload", true);
         else
             DontTakeAmmoOnReloadPatch.Restore();

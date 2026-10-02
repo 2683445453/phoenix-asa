@@ -91,7 +91,9 @@ bool StartDeinoGlideProbe(SDK::APrimalDinoCharacter* D,uint64_t Now) {
         R.File<<"# dino_event_hook="<<HookMatches<<"; schema=3; client_only; positions=cm; velocities=cm/s; missing=nan; max_duration_ms=120000\n";
         R.File<<"# movement_config,big_jump,"<<g_Config::bDeinoFlight<<",jump_multiplier,"<<g_Config::DeinonychusJumpMultiplier
             <<",integrated_flight,"<<g_Config::bDeinoFlight<<",horizontal_multiplier,"<<g_Config::DeinoAirHorizontalMultiplier
-            <<",up_mps,"<<g_Config::DeinoAirUpSpeed<<",hover_ms,"<<g_Config::DeinoHoverIntervalMs<<"; flight_revision=2\n";
+            <<",manual_up_mps,"<<g_Config::DeinoAirUpSpeed<<",hover_ms,"<<g_Config::DeinoHoverIntervalMs
+            <<",hover_follow_view,"<<g_Config::bDeinoHoverFollowView<<"; flight_revision=12\n";
+        R.File<<"# aim_jump,enabled,"<<g_Config::bDeinoAimJump<<",speed_mps,"<<g_Config::DeinoAimJumpSpeed<<'\n';
         R.File<<"elapsed_ms,utc_ms,space,w,a,s,d,shift,mode,custom_mode,role,x,y,z,vx,vy,vz,yaw,pitch,held_jump,slow_falling,latch_state,latched_jump_requested,gravity_scale,holding_jump_gravity,air_control_scalar,max_walk_speed,max_fall_speed,cached_vx,cached_vy,cached_vz,latched_vx,latched_vy,latched_vz,interp_speed,last_queued,last_started,allow_falling,own_latch_active,has_queued_target,queued_target_type,current_target_type,server_latch_state,cached_surface,last_auto_jump,last_jump_input_action\n";
         const auto UTF8=Destination.u8string();
         { std::scoped_lock L(ExtensionStatusMutex); DeinoGlideProbePath.assign(reinterpret_cast<const char*>(UTF8.data()),UTF8.size()); }
@@ -106,7 +108,7 @@ bool StartDeinoGlideProbe(SDK::APrimalDinoCharacter* D,uint64_t Now) {
     }
 }
 void TickDeinoGlideProbe(SDK::AShooterPlayerController* PC,SDK::APrimalDinoCharacter* D,
-    SDK::UCharacterMovementComponent* M,bool Ready) {
+    SDK::UCharacterMovementComponent* M,bool Ready,bool InputReady) {
     auto& R=DeinoGlideProbe;
     if (!g_Config::bDeinoFlight) { FinishDeinoGlideProbe("disabled"); R.Done=false; R.Mode=0; return; }
     if (R.Done) {
@@ -146,7 +148,7 @@ void TickDeinoGlideProbe(SDK::AShooterPlayerController* PC,SDK::APrimalDinoChara
     const auto V=M->Velocity; const auto Rotation=PC->GetControlRotation();
     FILETIME FT{}; GetSystemTimeAsFileTime(&FT); ULARGE_INTEGER UTC{}; UTC.LowPart=FT.dwLowDateTime; UTC.HighPart=FT.dwHighDateTime;
     R.File<<(Now-R.Window.Start)<<','<<(UTC.QuadPart/10000ULL-11644473600000ULL);
-    for (int Key : {VK_SPACE,int('W'),int('A'),int('S'),int('D'),VK_SHIFT}) R.File<<','<<((GetAsyncKeyState(Key)&0x8000)!=0);
+    for (int Key : {VK_SPACE,int('W'),int('A'),int('S'),int('D'),VK_SHIFT}) R.File<<','<<(InputReady && (GetAsyncKeyState(Key)&0x8000)!=0);
     R.File<<','<<int(M->MovementMode)<<','<<int(M->CustomMovementMode)<<','<<int(D->Role)
         <<','<<Position.X<<','<<Position.Y<<','<<Position.Z<<','<<V.X<<','<<V.Y<<','<<V.Z<<','<<Rotation.Yaw<<','<<Rotation.Pitch;
     for (const char* Name : {"IsJumpButtonHeld","bIsHeldJumpSlowFalling","UberpounceState","LatchedJumpRequested"}) R.File<<','<<GlideProbeScalar(D,Name);

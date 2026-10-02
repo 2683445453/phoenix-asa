@@ -79,6 +79,14 @@ namespace g_ESP {
             const BarManager* barMgr, float scaleMultiplier = 1.0f);
     };
 
+    enum class LootItemKind { Unknown, Item, Blueprint };
+    struct LootItemInfo {
+        std::string Name;
+        SDK::UTexture2D* Icon = nullptr;
+        Shadow::Color QualityColor{};
+        int Quantity = 1;
+        LootItemKind Kind = LootItemKind::Unknown;
+    };
     struct EntityInfo {
         std::string Name;
         std::string Detail;
@@ -87,7 +95,8 @@ namespace g_ESP {
         SDK::UTexture2D* WeaponIcon = nullptr;
         std::array<Shadow::Color, 5> ArmorQualityColors{};
         Shadow::Color WeaponQualityColor{};
-        std::vector<std::string> LootItems;
+        std::vector<LootItemInfo> LootItems;
+        int LootMoreCount = 0;
         Shadow::Color ArmorColor{}, WeaponColor{}, AmmoColor{};
         float Distance = 0, Health = 0, MaxHealth = 0, Torpor = 0, MaxTorpor = 0;
         float Scale = 1, Alpha = 1;

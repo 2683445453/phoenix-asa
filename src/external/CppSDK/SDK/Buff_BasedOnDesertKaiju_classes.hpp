@@ -16,11 +16,12 @@
 SDK_NAMESPACE_START
 
 // BlueprintGeneratedClass Buff_BasedOnDesertKaiju.Buff_BasedOnDesertKaiju_C
-// 0x0008 (0x0BF8 - 0x0BF0)
+// 0x0008 (0x0B60 - 0x0B58)
 class ABuff_BasedOnDesertKaiju_C final : public ABuff_Base_C
 {
 public:
-	double                                        CachedMaxWalkSpeed;                                // 0x0BF0(0x0008)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	uint8                                         Pad_B51[0x7];                                      // 0x0B51(0x0007)(Fixing Size After Last Property [ Dumper-7 ])
+	double                                        CachedMaxWalkSpeed;                                // 0x0B58(0x0008)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 
 public:
 	void BPDeactivated(class AActor* ForInstigator);

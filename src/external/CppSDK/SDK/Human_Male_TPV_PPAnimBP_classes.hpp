@@ -12,16 +12,16 @@
 
 #include "Engine_structs.hpp"
 #include "Engine_classes.hpp"
-#include "ControlRig_structs.hpp"
 #include "CoreUObject_structs.hpp"
 #include "AnimGraphRuntime_structs.hpp"
+#include "ControlRig_structs.hpp"
 
 
 SDK_NAMESPACE_START
 
 // AnimBlueprintGeneratedClass Human_Male_TPV_PPAnimBP.Human_Male_TPV_PPAnimBP_C
 // 0x1120 (0x14F0 - 0x03D0)
-class UHuman_Male_TPV_PPAnimBP_C final : public UAnimInstance
+class UHuman_Male_TPV_PPAnimBP_C : public UAnimInstance
 {
 public:
 	uint8                                         Pad_3C8[0x8];                                      // 0x03C8(0x0008)(Fixing Size After Last Property [ Dumper-7 ])
@@ -43,21 +43,27 @@ public:
 	struct FAnimNode_UseCachedPose                AnimGraphNode_UseCachedPose;                       // 0x11B0(0x0028)()
 	struct FAnimNode_LinkedAnimGraph              AnimGraphNode_LinkedAnimGraph_1;                   // 0x11D8(0x00B8)()
 	struct FAnimNode_LinkedAnimGraph              AnimGraphNode_LinkedAnimGraph;                     // 0x1290(0x00B8)()
-	bool                                          K2Node_PropertyAccess_2;                           // 0x1348(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-	bool                                          K2Node_PropertyAccess_1;                           // 0x1349(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-	uint8                                         Pad_134A[0x6];                                     // 0x134A(0x0006)(Fixing Size After Last Property [ Dumper-7 ])
+	bool                                          K2Node_PropertyAccess_4;                           // 0x1348(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          K2Node_PropertyAccess_3;                           // 0x1349(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          K2Node_PropertyAccess_2;                           // 0x134A(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          K2Node_PropertyAccess_1;                           // 0x134B(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	uint8                                         Pad_134C[0x4];                                     // 0x134C(0x0004)(Fixing Size After Last Property [ Dumper-7 ])
 	struct FRotator                               K2Node_PropertyAccess;                             // 0x1350(0x0018)(ZeroConstructor, IsPlainOldData, NoDestructor)
 	bool                                          __CustomProperty_bIsAnimSharingPaused_3844FC4D49A003EF19E3B78FC159752E; // 0x1368(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	bool                                          __CustomProperty_LegacyWearingSkin_DEPRECATED_3844FC4D49A003EF19E3B78FC159752E; // 0x1369(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	bool                                          __CustomProperty_WearingSkin_3844FC4D49A003EF19E3B78FC159752E; // 0x136A(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	bool                                          __CustomProperty_bIsAnimSharingPaused_2F67FAF34628BED52EEA69B4824C4A64; // 0x136B(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-	bool                                          __CustomProperty_UseFaceOverrides_2F67FAF34628BED52EEA69B4824C4A64; // 0x136C(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-	bool                                          __CustomProperty_OverrideBoneMods_2F67FAF34628BED52EEA69B4824C4A64; // 0x136D(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-	uint8                                         Pad_136E[0x2];                                     // 0x136E(0x0002)(Fixing Size After Last Property [ Dumper-7 ])
+	bool                                          __CustomProperty_bBlinking_2F67FAF34628BED52EEA69B4824C4A64; // 0x136C(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          __CustomProperty_DisableBlink_2F67FAF34628BED52EEA69B4824C4A64; // 0x136D(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          __CustomProperty_UseFaceOverrides_2F67FAF34628BED52EEA69B4824C4A64; // 0x136E(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          __CustomProperty_OverrideBoneMods_2F67FAF34628BED52EEA69B4824C4A64; // 0x136F(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	class AShooterCharacter*                      __CustomProperty_PrimalChar_2F67FAF34628BED52EEA69B4824C4A64; // 0x1370(0x0008)(ZeroConstructor, NoDestructor, HasGetValueTypeHash)
-	bool                                          __CustomProperty_bIsRidingOnShip_F694739249D51D179E5FCEADEBD90CFB; // 0x1378(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-	bool                                          __CustomProperty_bUseHandIKBones_F694739249D51D179E5FCEADEBD90CFB; // 0x1379(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-	uint8                                         Pad_137A[0x6];                                     // 0x137A(0x0006)(Fixing Size After Last Property [ Dumper-7 ])
+	bool                                          __CustomProperty_MoveRiderBasedOnSize_F694739249D51D179E5FCEADEBD90CFB; // 0x1378(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          __CustomProperty_isFemale_F694739249D51D179E5FCEADEBD90CFB; // 0x1379(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          __CustomProperty_UseReactiveRidersSpring_F694739249D51D179E5FCEADEBD90CFB; // 0x137A(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          __CustomProperty_bIsRidingOnShip_F694739249D51D179E5FCEADEBD90CFB; // 0x137B(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          __CustomProperty_bUseHandIKBones_F694739249D51D179E5FCEADEBD90CFB; // 0x137C(0x0001)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	uint8                                         Pad_137D[0x3];                                     // 0x137D(0x0003)(Fixing Size After Last Property [ Dumper-7 ])
 	double                                        __CustomProperty_LegLengthHipZOffset_F694739249D51D179E5FCEADEBD90CFB; // 0x1380(0x0008)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	double                                        __CustomProperty_LegLengthPercentage_F694739249D51D179E5FCEADEBD90CFB; // 0x1388(0x0008)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	struct FVector                                __CustomProperty_DinoLocation_F694739249D51D179E5FCEADEBD90CFB; // 0x1390(0x0018)(ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
@@ -110,6 +116,12 @@ public:
 	bool                                          Use_Hand_IKBones;                                  // 0x14E0(0x0001)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	bool                                          Is_Riding_on_Ship;                                 // 0x14E1(0x0001)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 	bool                                          LegacyWearingSkin_DEPRECATED;                      // 0x14E2(0x0001)(Edit, BlueprintVisible, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          bBlinking;                                         // 0x14E3(0x0001)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          DisableBlink;                                      // 0x14E4(0x0001)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          UseReactiveRiderSpring;                            // 0x14E5(0x0001)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	bool                                          MoveRiderBasedOnSize;                              // 0x14E6(0x0001)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+	uint8                                         Pad_14E7[0x1];                                     // 0x14E7(0x0001)(Fixing Size After Last Property [ Dumper-7 ])
+	double                                        RiderPhysics_Alpha;                                // 0x14E8(0x0008)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 
 public:
 	void AnimGraph(const struct FPoseLink& InPose, struct FPoseLink* AnimGraph_0);

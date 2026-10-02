@@ -16,7 +16,7 @@
 SDK_NAMESPACE_START
 
 // BlueprintGeneratedClass Buff_ASAPreventDismount.Buff_ASAPreventDismount_C
-// 0x0000 (0x0BE0 - 0x0BE0)
+// 0x0000 (0x0B48 - 0x0B48)
 class ABuff_ASAPreventDismount_C final : public APrimalBuff
 {
 public:

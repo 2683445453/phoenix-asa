@@ -18,9 +18,14 @@
 #include "../Lua/LuaManager.h"
 #endif
 #include "../Hack/Hack.h"
+#include "../Hack/DeinoFlightUI.h"
 #include "../Hack/TekSpear.h"
+#include "../Hack/GeneScannerMarkers.h"
 
 namespace g_DrawImGui {
+#ifndef PHOENIX_UI_TEST
+#include "DeinoFlightOverlay.inl"
+#endif
     float g_MenuAlpha=1;
     bool g_UseSidebarNavigation=true;
     MenuPage g_ActiveMenuPage=MenuPage::Home;
@@ -78,7 +83,13 @@ namespace g_DrawImGui {
             DrawKeyBindButton(Tr(U8("菜单开关")),PhoenixShortcuts::MenuKey);
             DrawKeyBindButton(Tr(U8("停止自动化")),PhoenixShortcuts::StopKey);
             ImGui::Separator();
-            for(auto& A:PhoenixShortcuts::Actions) DrawKeyBindButton(Tr(A.Label),A.Key);
+            Title(Tr(U8("视角与移动快捷键")));
+            for(auto& A:PhoenixShortcuts::Actions) if(A.Enabled==&g_Config::bFreeCameraEnabled) {
+                DrawKeyBindButton(Tr(A.Label),A.Key,U8("设置灵魂出窍的进入／退出快捷键，默认 Z。点击绑定后按新的按键或组合键，Esc 取消；清除后仅可使用功能页开关。WASD、空格、Ctrl、Shift 与 Esc 为固定移动操作。"));
+            }
+            ImGui::Separator();
+            Title(Tr(U8("功能快捷键")));
+            for(auto& A:PhoenixShortcuts::Actions) if(A.Enabled!=&g_Config::bFreeCameraEnabled) DrawKeyBindButton(Tr(A.Label),A.Key);
             if(!PhoenixShortcuts::BindingError.empty()) {
                 const std::string Prefix=U8("该快捷键已用于："); const auto& Error=PhoenixShortcuts::BindingError;
                 std::string Message=Error.starts_with(Prefix)?std::string(Tr(Prefix.c_str()))+Tr(Error.substr(Prefix.size()).c_str()):Tr(Error.c_str());
@@ -217,7 +228,11 @@ namespace g_DrawImGui {
             } ImGui::End();
             ImGui::PopStyleVar();
         }
+        if(Open) DrawNoteExperimentWindow();
         Welcome(); ColorPalette::Draw(); HoverHelp::Draw();
+#ifndef PHOENIX_UI_TEST
+        DrawDeinoFlightOverlay();
+#endif
 #ifndef PHOENIX_UI_TEST
         g_LogManager::Run();LuaManager::Get().Lua_OnPaint();
 #endif

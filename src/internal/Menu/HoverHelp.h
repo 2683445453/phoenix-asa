@@ -8,15 +8,27 @@ namespace HoverHelp {
     inline ImVec2 Position{};
     inline float Alpha=0, Dwell=0;
     inline bool Specific=false;
+    inline ImRect AnchorBounds{};
     inline void BeginFrame() { Anchor=Candidate=0; Text.clear(); Guide=""; }
     inline void Remember(const char* CustomGuide=nullptr) {
         Anchor=ImGui::GetItemID();
+        AnchorBounds=GImGui->LastItemData.Rect;
         if (!Anchor) Anchor=ImGui::GetID("##text_help");
         if (!g_Config::bShowFeatureHelp || !ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) return;
-        Candidate=Anchor; Text=Tr(CustomGuide?CustomGuide:Guide); Specific=false;
+        Candidate=Anchor; Text=CustomGuide?Tr(CustomGuide):""; Specific=false;
+    }
+    inline void Control(const char* Label,const char* Usage) {
+        Remember();
+        if(Candidate!=Anchor || !ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) return;
+        Text=Label; Text+="\n\n"; Text+=Tr(Usage);
+        Specific=true;
     }
     template<typename... T> void Add(const char* Format,T... Args) {
         if (!g_Config::bShowFeatureHelp || !Candidate || Candidate!=Anchor) return;
+        // Plain status text and headings must not attach their help to a previous control.
+        const auto& Bounds=GImGui->LastItemData.Rect;
+        if(Bounds.Min.x!=AnchorBounds.Min.x || Bounds.Min.y!=AnchorBounds.Min.y ||
+           Bounds.Max.x!=AnchorBounds.Max.x || Bounds.Max.y!=AnchorBounds.Max.y) return;
         const int N=std::snprintf(nullptr,0,Format,Args...);
         if (N<=0 || N>16384) return;
         std::string S(N+1,'\0'); std::snprintf(S.data(),S.size(),Format,Args...); S.resize(N);

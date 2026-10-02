@@ -1,10 +1,13 @@
-﻿#include "StartupPresentation.h"
+#include "StartupPresentation.h"
 #pragma once
 #include "../../external/Minimal-D3D12-Hook-ImGui/Main/hooks.h"
 #include "../Config/Configs.h"
 #include "ConfigImGui.h"
 #include "Misc_Menu.h"
+#include "FeatureCatalog.h"
 #include "../Hack/Hack.h"
+#include "../Hack/NoteExperiment.h"
+#include "../Hack/GeneScannerMarkers.h"
 #include "../Config/ConfigManager.h"
 #include "../AActor/Tick.h"
 #include "../../external/CppSDK/SDK.hpp"
@@ -13,6 +16,7 @@
 #include <cctype>
 
 namespace g_DrawImGui {
+#include "NoteExperimentWindow.inl"
 	std::vector<const char*> Menu_Scale = {
 	"75%",
 	"100%",
@@ -95,6 +99,17 @@ namespace g_DrawImGui {
 
         if (g_ActiveMenuPage != MenuPage::Automation && g_ActiveMenuPage != MenuPage::InterfaceSettings) return;
         BeginTabRegion("AutomationDetail");
+        if (IsTopic(Topic::Scanner)) {
+            ImGui::BeginDisabled(!g_Hook::ActorTickOK);
+            DrawCustomCheckbox(Tr(U8("自动标注基因扫描目标")),
+                &g_Config::bAutoGeneScannerMarker);
+            ImGui::TextWrapped("%s", Tr(U8("开启后手持基因扫描仪并开始追踪，当前目标会自动创建为待驯服导航点；取消追踪、切换目标或关闭功能时自动清除旧点。")));
+            ImGui::TextWrapped("%s", g_GeneScannerMarkers::GetStatus().c_str());
+            for (const auto& Marker : g_GeneScannerMarkers::GetCandidates())
+                ImGui::BulletText("%s  %.1f, %.1f", Marker.Label.c_str(),
+                    Marker.Latitude, Marker.Longitude);
+            ImGui::EndDisabled();
+        }
         if (IsTopic(Topic::Care)) {
             ImGui::BeginDisabled(!g_Hook::UpdateCameraOK && !g_Hook::PostRenderOK);
             DrawCustomCheckbox(Tr(U8("自动认养幼崽")), &g_Config::bAutoClaimBabies);
@@ -132,11 +147,12 @@ namespace g_DrawImGui {
                 ImGui::SameLine();
                 if (DrawCustomButton(Tr(U8("停止笔记解锁")))) g_Hack::CancelNoteXPBuff();
                 ImGui::TextWrapped("%s", g_Hack::GetNoteXPBuffStatus().c_str());
-                HelpText(Tr(U8("每次请求一轮，启用笔记经验 Buff；服务器决定实际解锁与奖励。")));
+                HelpText(Tr(U8("每 100 毫秒最多请求 4 条未解锁笔记；每次一轮，可随时停止。已解锁笔记会跳过，经验 Buff 以服务器授予为准。")));
+                if (DrawCustomButton(Tr(U8("笔记重复解锁实验")))) ShowNoteExperimentWindow();
                 DrawAnimatedSeparator();
-                if (DrawCustomButton(Tr(U8("实验：原地打开上传面板")))) g_Hack::RequestOpenUploadTerminal();
+                if (DrawCustomButton(Tr(U8("打开方尖碑上传终端")))) g_Hack::RequestOpenUploadTerminal();
                 ImGui::TextWrapped("%s", g_Hack::GetUploadTerminalStatus().c_str());
-                HelpText(Tr(U8("以人物背包打开原生贡品界面，不读取任何建筑。客户端仅提供界面；物资、恐龙和人物上传能否成功由服务器决定，当前尚未实机验证。")));
+                HelpText(Tr(U8("只使用真实、已复制的方尖碑终端进入原生上传与传服流程；服务器仍会校验距离、集群、冷却和角色资格。")));
                 DrawAnimatedSeparator();
 
  ImGui::EndDisabled();
@@ -169,22 +185,25 @@ namespace g_DrawImGui {
 }
         if (IsTopic(Topic::Loot)) {
  ImGui::BeginDisabled(!g_Hook::ActorTickOK);
-                DrawCustomCheckbox(Tr(U8("自动吸取附近空投／掉落包")), &g_Config::bAutoLootContainers);
+                DrawCustomCheckbox(Tr(U8("自动吸取附近空投／掉落包")), &g_Config::bAutoLootContainers, U8("自动吸取附近可访问容器中的物品。选择空投、掉落包、河狸窝或野生蛋，并设置搜索范围；打开手动容器界面时暂停。"));
                 if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_2", g_Config::bAutoLootContainers); Fade) {
                     ImGui::Indent();
-                    DrawCustomCheckbox(Tr(U8("吸取空投")), &g_Config::bAutoLootSupplyCrates);
-                    DrawCustomCheckbox(Tr(U8("吸取掉落包／死亡包")), &g_Config::bAutoLootBags);
-                    DrawCustomCheckbox(Tr(U8("吸取河狸窝")), &g_Config::bAutoLootBeaverDams);
-                    DrawCustomCheckbox(Tr(U8("拾取野生飞龙／恐爪龙蛋")), &g_Config::bAutoLootWildEggs);
+                    DrawChoiceGroup(U8("吸取目标类型"), {
+                        {Tr(U8("吸取空投／上古神器／藏宝箱")), false, nullptr, &g_Config::bAutoLootSupplyCrates},
+                        {Tr(U8("吸取掉落包／死亡包")), false, nullptr, &g_Config::bAutoLootBags},
+                        {Tr(U8("吸取河狸窝")), false, nullptr, &g_Config::bAutoLootBeaverDams},
+                        {Tr(U8("拾取野生飞龙／恐爪龙蛋")), false, nullptr, &g_Config::bAutoLootWildEggs}
+                    });
                     ImGui::TextWrapped(U8("%s"), Tr(U8("龙蛋共用吸包范围、间隔和负重限制；需满足原生拾取距离与视线条件。")));
                     DrawCustomSliderFloat(Tr(U8("吸包搜索范围")), &g_Config::AutoLootRangeMeters, 1.0f, 30.0f, "%.1f", 1.0f, "m");
                     DrawCustomSliderFloat(Tr(U8("吸包请求间隔")), &g_Config::AutoLootIntervalMs, 250.0f, 3000.0f, "%.0f", 50.0f, "ms");
+                    ImGui::TextWrapped(U8("%s"), Tr(U8("物品同步后尽快提取，无需开关面板刷新；请求间隔控制新目标搜索，等待同步时会自动补请求。")));
                     DrawCustomSliderFloat(Tr(U8("吸包停止负重")), &g_Config::AutoLootMaxWeightPercent, 10.0f, 100.0f, "%.0f", 5.0f, "%");
                     ImGui::TextWrapped(U8("%s"), g_Hack::GetAutoLootStatus().c_str());
-                    HelpText(Tr(U8("支持步行和骑乘，按人物位置搜索，每次吸取一个容器。保留距离、等级和权限检查；失焦或手动打开界面时暂停，上下坐骑后重新搜索。负重阈值按人物计算，单次批量转移可能超过阈值。")));
+                    HelpText(Tr(U8("支持步行和骑乘，按人物位置搜索空投、上古神器、藏宝箱和掉落包。单机／本地主机按设置范围访问容器并跳过容器视线检查；远程服仍检查服务器距离、遮挡、等级和权限。关闭功能或结束访问后恢复容器设置。负重阈值按人物计算，单次批量转移可能超过阈值。")));
                     ImGui::Unindent();
                 }
-				DrawCustomCheckbox(chkAutoPickup, &g_Config::bAutoPickupDroppedItems);
+				DrawCustomCheckbox(chkAutoPickup, &g_Config::bAutoPickupDroppedItems, U8("自动拾取附近散落的地面物品。可与掉落物显示共用筛选，搜索范围与负重限制在下方设置。"));
 				if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_3", g_Config::bAutoPickupDroppedItems); Fade) {
 					ImGui::Indent();
 					DrawCustomSliderFloat(autoPickupRange, &g_Config::AutoPickupRangeMeters,
@@ -238,19 +257,21 @@ namespace g_DrawImGui {
 					ImGui::TextDisabled("%s: %s", autoBrewStatus, Status.c_str());
 					ImGui::Unindent();
 				}
-				DrawCustomCheckbox(Tr(U8("自动汤类增益（buff 到期自动续）")), &g_Config::bAutoBuffSoup);
+				DrawCustomCheckbox(Tr(U8("自动汤类增益（buff 到期自动续）")), &g_Config::bAutoBuffSoup, U8("所选汤类的增益到期后尝试使用背包内对应物品。展开类型选择并勾选所需增益；仍需物品和原生使用条件。"));
 				if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_16", g_Config::bAutoBuffSoup); Fade) {
 					ImGui::Indent();
 					ImGui::TextDisabled("%s", Tr(U8("自动续杯类型")));
-					DrawCustomCheckbox(Tr(U8("战斗牛排")), &g_Config::bSoupBattleTartare);
-					DrawCustomCheckbox(Tr(U8("仙人掌汤")), &g_Config::bSoupCactusBroth);
-					DrawCustomCheckbox(Tr(U8("绯红辣椒")), &g_Config::bSoupFocalChili);
-					DrawCustomCheckbox(Tr(U8("菲拉咖喱")), &g_Config::bSoupFriaCurry);
-					DrawCustomCheckbox(Tr(U8("卡琳汤")), &g_Config::bSoupCalienSoup);
-					DrawCustomCheckbox(Tr(U8("拉撒路杂烩")), &g_Config::bSoupLazarusChowder);
-					DrawCustomCheckbox(Tr(U8("耐力炖锅")), &g_Config::bSoupEnduroStew);
-					DrawCustomCheckbox(Tr(U8("影子牛排")), &g_Config::bSoupShadowSteak);
-					DrawCustomCheckbox(Tr(U8("蘑菇汤")), &g_Config::bSoupMushroomBrew);
+					DrawChoiceGroup(U8("增益汤类型"), {
+					    {Tr(U8("战斗牛排")), false, nullptr, &g_Config::bSoupBattleTartare},
+					    {Tr(U8("仙人掌汤")), false, nullptr, &g_Config::bSoupCactusBroth},
+					    {Tr(U8("绯红辣椒")), false, nullptr, &g_Config::bSoupFocalChili},
+					    {Tr(U8("菲拉咖喱")), false, nullptr, &g_Config::bSoupFriaCurry},
+					    {Tr(U8("卡琳汤")), false, nullptr, &g_Config::bSoupCalienSoup},
+					    {Tr(U8("拉撒路杂烩")), false, nullptr, &g_Config::bSoupLazarusChowder},
+					    {Tr(U8("耐力炖锅")), false, nullptr, &g_Config::bSoupEnduroStew},
+					    {Tr(U8("影子牛排")), false, nullptr, &g_Config::bSoupShadowSteak},
+					    {Tr(U8("蘑菇汤")), false, nullptr, &g_Config::bSoupMushroomBrew}
+					});
 					HelpText(Tr(U8("只识别原版增益汤类目；对应增益消失后自动吃一个补续，背包没有该汤时提示缺少。每次使用仍由服务器按原生规则结算。")));
 					ImGui::TextDisabled("%s: %s", Tr(U8("汤类状态")), g_Hack::GetAutoBuffSoupStatus().c_str());
 					ImGui::Unindent();
@@ -277,7 +298,7 @@ namespace g_DrawImGui {
             }
             DrawAnimatedSeparator();
  ImGui::BeginDisabled(!g_Hook::ActorTickOK);
-				DrawCustomCheckbox(chkGacha, &g_Config::bAutoOpenGachaCrystals);
+				DrawCustomCheckbox(chkGacha, &g_Config::bAutoOpenGachaCrystals, U8("连续开启背包中的嘎查水晶，每批最多 32 颗。设置整批间隔，可启用从附近保险箱补充水晶；关闭后同时停止开启与补充。"));
 				if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_8", g_Config::bAutoOpenGachaCrystals); Fade) {
 					ImGui::Indent();
 					DrawCustomSliderFloat(gachaOpenInterval, &g_Config::AutoOpenGachaIntervalMs,
@@ -303,7 +324,7 @@ namespace g_DrawImGui {
             }
             DrawAnimatedSeparator();
  ImGui::BeginDisabled(!g_Hook::ActorTickOK);
-				DrawCustomCheckbox(chkFishing, &g_Config::bAutoFishingQTE);
+				DrawCustomCheckbox(chkFishing, &g_Config::bAutoFishingQTE, U8("进入原生钓鱼流程后自动处理钓鱼按键。先装备鱼竿及鱼饵；下方可开启重新抛竿，菜单或失焦时暂停输入。"));
 				if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_11", g_Config::bAutoFishingQTE); Fade) {
 					const std::string Status = g_Hack::GetFishingQTEStatus();
 					ImGui::Indent();
@@ -451,6 +472,25 @@ if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_13", g_Config::bAutoCraf
             HelpText(Tr(U8("专服仅实验修改当前坐骑的本地步行速度，可能回拉；实际加速尚未验证。关闭、下龙或打开菜单时恢复。单机仍支持游泳与飞行倍率。")));
             if (auto Fade = ParameterFade("##DinoMoveSpeed", g_Config::bDinoMoveSpeed); Fade)
                 DrawCustomSliderFloat(Tr(U8("移动速度倍率")), &g_Config::DinoMoveSpeedMultiplier, .25f, 5, "%.2f", .25f, "x");
+            DrawCustomCheckbox(Tr(U8("吞丘龙客户端实验")), &g_Config::bGargantarClient);
+            if (g_Config::bGargantarClient) {
+                HelpText(Tr(U8("仅修改联机客户端当前骑乘的吞丘龙。服务器继续决定技能、吞入结果、伤害、耐力和采集数量。单机或主机权威对象不修改。")));
+                DrawCustomCheckbox(Tr(U8("吞入生物距离实验")), &g_Config::bGargantarReach);
+                if(g_Config::bGargantarReach) DrawCustomSliderFloat(Tr(U8("客户端吞入生物距离")),&g_Config::GargantarReachMeters,5,50,"%.1f",1,"m");
+                HelpText(Tr(U8("此距离仅实验吞入生物。长按左键吸资源的范围由服务器锥形采集与技能倍率决定，此开关不能扩大实际采集范围。")));
+                DrawCustomCheckbox(Tr(U8("飞行速度预测实验")), &g_Config::bGargantarFlightSpeed);
+                if(g_Config::bGargantarFlightSpeed) DrawCustomSliderFloat(Tr(U8("吞丘龙飞行倍率")),&g_Config::GargantarFlightMultiplier,.5f,3,"%.1f",.1f,"x");
+                DrawCustomCheckbox(Tr(U8("缩短攻击长按判定")), &g_Config::bGargantarFastHold);
+                if(g_Config::bGargantarFastHold) DrawCustomSliderFloat(Tr(U8("攻击长按判定时间")),&g_Config::GargantarHoldSeconds,.02f,.25f,"%.2f",.01f,"s");
+                DrawCustomCheckbox(Tr(U8("客户端攻击间隔实验")), &g_Config::bGargantarAttackInterval);
+                if(g_Config::bGargantarAttackInterval) DrawCustomSliderFloat(Tr(U8("客户端攻击间隔倍率")),&g_Config::GargantarAttackIntervalMultiplier,.1f,1,"%.2f",.1f,"x");
+                DrawCustomCheckbox(Tr(U8("缩短吞吐视觉过程")), &g_Config::bGargantarTransitVisual);
+                if(g_Config::bGargantarTransitVisual) DrawCustomSliderFloat(Tr(U8("吞吐视觉时长")),&g_Config::GargantarTransitVisualSeconds,.1f,1.2f,"%.1f",.1f,"s");
+                HelpText(Tr(U8("一次测试一个开关，使用游戏原生按键。距离与攻击间隔可能被服务器拒绝，飞行可能回拉；吞吐视觉加速不等于服务器更快完成。关闭、下骑、菜单、失焦或停止全部时恢复参数。")));
+                HelpText(Tr(U8("状态末尾依次显示本地胃充盈百分比和已应用字段数；这些数字不表示服务器已接受修改。")));
+                HelpText(Tr(U8("上次运行值保留关闭菜单后的客户端写入结果；飞行值为 0 表示该字段未应用。参数已写入仍不代表服务器接受。")));
+                ImGui::TextWrapped("%s",g_Hack::GetGargantarClientStatus().c_str());
+            }
             DrawCustomCheckbox(Tr(U8("穴角兔大跳（实验）")), &g_Config::bJackalopeBigJump);
             if (auto Fade = ParameterFade("##JackalopeJump", g_Config::bJackalopeBigJump); Fade)
                 DrawCustomSliderFloat(Tr(U8("穴角兔起跳力度倍率")), &g_Config::JackalopeJumpMultiplier, 1.0f, 20.0f, "%.1f", .1f, "x");
@@ -464,19 +504,64 @@ if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_13", g_Config::bAutoCraf
             HelpText(Tr(U8("可同时开启大跳、蓄力速度上限和加速蓄力。上限开启时独立决定最大速度倍率，不与大跳倍率相乘；加速5倍将蓄力时间缩短到原来的五分之一，松键起跳。保留原生蓄力值、耐力和跳跃次数限制。关闭或暂停时恢复。实际效果请在游戏内确认。")));
             DrawCustomCheckbox(Tr(U8("恐爪龙大跳")), &g_Config::bDeinoFlight);
             if (g_Config::bDeinoFlight) {
+                DrawCustomCheckbox(Tr(U8("悬停时恐爪朝向跟随玩家")), &g_Config::bDeinoHoverFollowView);
+                HelpText(Tr(U8("悬停时让恐爪水平朝向跟随玩家视角，保留身体俯仰和悬停速度。跳跃、移动、菜单或后台暂停转向。可配合360度射击；服务器命中与伤害效果仍需实测。")));
+                if(g_Config::bDeinoHoverFollowView) ImGui::TextWrapped("%s",g_Hack::GetDeinoHoverFacingStatus().c_str());
                 DrawCustomSliderFloat(Tr(U8("地面大跳倍率")), &g_Config::DeinonychusJumpMultiplier,1,5,"%.1f",.1f,"x");
-                DrawCustomSliderFloat(Tr(U8("空中水平倍率")), &g_Config::DeinoAirHorizontalMultiplier,1,30,"%.1f",.1f,"x");
-                DrawCustomSliderFloat(Tr(U8("空中向上速度")), &g_Config::DeinoAirUpSpeed,0,30,"%.1f",.5f,"m/s");
+                DrawCustomCheckbox(Tr(U8("朝视角方向跳跃")), &g_Config::bDeinoAimJump);
+                if(g_Config::bDeinoAimJump) {
+                    DrawCustomSliderFloat(Tr(U8("视角跳跃力度")), &g_Config::DeinoAimJumpSpeed,1,300,"%.1f",1,"m/s");
+                    DrawCustomSliderFloat(Tr(U8("力度滚轮步长")), &g_Config::DeinoAimSpeedStep,.1f,30,"%.1f",.1f,"m/s");
+                } else {
+                    DrawCustomSliderFloat(Tr(U8("空中水平倍率")), &g_Config::DeinoAirHorizontalMultiplier,1,30,"%.1f",.1f,"x");
+                    DrawCustomSliderFloat(Tr(U8("手动垂直速度")), &g_Config::DeinoAirUpSpeed,-300,300,"%+.1f",.5f,"m/s");
+                }
+                HelpText(Tr(U8("开启后，空中按空格沿当时的视角方向跳跃，抬头向上、低头向下。力度是总速度，不随视角角度增大；转动视角只影响下一跳。水平滚轮快捷键改为调整力度，手动分量暂不参与。关闭后恢复手动参数；地面大跳保持原操作。")));
                 DrawCustomSliderFloat(Tr(U8("起跳保护时间")), &g_Config::DeinoTakeoffProtectionSeconds,.1f,5,"%.2f",.05f,"s");
                 DrawCustomSliderFloat(Tr(U8("空中跳跃保护时间")), &g_Config::DeinoAirProtectionSeconds,.1f,5,"%.2f",.05f,"s");
                 DrawCustomSliderFloat(Tr(U8("悬停请求间隔")), &g_Config::DeinoHoverIntervalMs,10,500,"%.0f",10,"ms");
-                HelpText(Tr(U8("地面按空格大跳；空中再按空格向前跳，松开空格与方向键后悬停。水平按视角朝向计算，1倍为30米每秒，上限30倍；向上速度独立设置，不随倍率或抬头增大。")));
-                HelpText(Tr(U8("起跳和空中跳跃各自的保护期内暂停悬停；过早再按空格不会排队。保护结束后松键由结束链接管，按住空格或WASD、Ctrl暂停悬停。默认10毫秒间隔，实际受游戏帧率限制，不积压补发。菜单、失焦、下骑或关闭后停止。参数支持保存。")));
+                HelpText(Tr(U8("地面按空格大跳；空中按空格跳跃，松开空格与方向键后悬停。朝视角模式使用独立总速度；手动模式使用水平倍率和垂直速度。手动水平1倍为30米每秒，上限30倍。")));
+                HelpText(Tr(U8("起跳和空中跳跃的保护期内暂停悬停；过早按空格不会排队。默认10毫秒间隔，实际受游戏帧率限制。打开菜单或失去前台时继续已有悬停，忽略跳跃和移动键；返回游戏后松开空格再按。下骑、死亡、关闭功能或停止全部时退出。")));
                 HelpText(Tr(U8("结束链已实测不额外扣飞扑耐力，但仍可能缓降；空中跳跃仍由服务器扣费和衰减。零耐力可继续悬停，不保证空中跳跃。新的水平分量与整合控制待实测，先从低倍率开始。")));
+                DrawCustomCheckbox(Tr(U8("显示下一跳预览")), &g_Config::bDeinoFlightPreview);
+                DrawCustomCheckbox(Tr(U8("原生泰克轨迹光束")), &g_Config::bDeinoNativeArc);
+                HelpText(Tr(U8("自动加载泰克轨迹资源，无需装备发射器。原生光束启用后隐藏黄色轨迹，在光束末端保留预计停止位置标记；加载或接口失败时回退黄色预览。打开菜单或切出游戏时清理光束，已有悬停继续；返回后恢复显示。首次加载可能短暂停顿。")));
+                HelpText(Tr(U8("3倍水平、5m/s向上、0.8秒空中保护、10ms悬停且静止起跳时使用本地测试服实测基准；其他参数仍为模型估算。本地观测不再覆盖服务器基准。")));
+                if(!g_Config::bDeinoAimJump) DrawCustomSliderFloat(Tr(U8("水平滚轮步长")), &g_Config::DeinoHorizontalStep,.1f,5,"%.1f",.1f,"x");
+                DrawCustomSliderFloat(Tr(U8("垂直滚轮步长")), &g_Config::DeinoUpStep,.1f,30,"%.1f",.1f,"m/s");
+                const char* KeyLabels[]={"骑乘面板键","切换预设键","水平或力度滚轮按住键","垂直滚轮按住键"};
+                float* KeyValues[]={&g_Config::DeinoPanelFKey,&g_Config::DeinoPresetFKey,&g_Config::DeinoHorizontalFKey,&g_Config::DeinoUpFKey};
+                const char* KeyItems[]={"F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12"};
+                for(int I=0;I<4;++I) {
+                    int Selected=std::clamp(int(std::lround(*KeyValues[I]))-1,0,11);
+                    if(ImGui::Combo(Tr(KeyLabels[I]),&Selected,KeyItems,12)) *KeyValues[I]=float(Selected+1);
+                }
+                float* PresetH[]={&g_Config::DeinoPreset1H,&g_Config::DeinoPreset2H,&g_Config::DeinoPreset3H};
+                float* PresetUp[]={&g_Config::DeinoPreset1Up,&g_Config::DeinoPreset2Up,&g_Config::DeinoPreset3Up};
+                float* PresetT[]={&g_Config::DeinoPreset1Protection,&g_Config::DeinoPreset2Protection,&g_Config::DeinoPreset3Protection};
+                for(int I=0;I<3;++I) {
+                    ImGui::PushID(I);
+                    ImGui::Text(Tr(U8("预设 %d：水平 %.1f 倍 / 手动垂直 %+.1f m/s / 保护 %.2f s")),I+1,*PresetH[I],*PresetUp[I],*PresetT[I]);
+                    if(ImGui::Button(Tr(U8("用当前参数覆盖")))) { *PresetH[I]=g_Config::DeinoAirHorizontalMultiplier; *PresetUp[I]=g_Config::DeinoAirUpSpeed; *PresetT[I]=g_Config::DeinoAirProtectionSeconds; }
+                    ImGui::SameLine();
+                    if(ImGui::Button(Tr(U8("应用预设")))) { g_Config::DeinoAirHorizontalMultiplier=*PresetH[I]; g_Config::DeinoAirUpSpeed=*PresetUp[I]; g_Config::DeinoAirProtectionSeconds=*PresetT[I]; }
+                    ImGui::PopID();
+                }
+                HelpText(Tr(U8("骑乘面板中Tab选择参数，滚轮调整；空格停用，保护结束后继续悬停。三个预设保存手动水平、垂直和空中保护；朝视角跳跃力度独立保存。关闭面板后松开空格再按，避免误跳。")));
+                HelpText(Tr(U8("垂直速度范围为-300至300m/s，不是跳跃高度。预览使用当前有效垂直速度，按静止悬停和松键计算，未检测碰撞。已提交跳跃的速度与保护时间不随调参变化。完整菜单仅暂停输入，已有悬停继续。")));
                 ImGui::TextWrapped("%s",g_Hack::GetDeinoFlightStatus().c_str());
             }
             DrawCustomCheckbox(Tr(U8("浮空建筑（放置参数实验）")), &g_Config::bFloatingStructures);
             if (g_Config::bFloatingStructures) ImGui::TextWrapped("%s",g_Hack::GetFloatingStructureStatus().c_str());
+
+            ImGui::SeparatorText(Tr(U8("蜘蛛蛛丝倒挂实验")));
+            HelpText(Tr(U8("骑乘小蜘蛛并附着在自己的蛛丝上后，按一次按钮。先在空旷处验证，再靠近地形测试。按钮只调用原生蓝图入口，不修改坐标或碰撞。")));
+            if (ImGui::Button(Tr(U8("调用蛛丝组件 CrouchPressed"))))
+                g_Hack::RequestSpiderZiplineFlip(false);
+            ImGui::SameLine();
+            if (ImGui::Button(Tr(U8("直接请求服务器倒挂"))))
+                g_Hack::RequestSpiderZiplineFlip(true);
+            ImGui::TextWrapped("%s", g_Hack::GetSpiderZiplineExperimentStatus().c_str());
 
 			ImGui::BeginDisabled(!g_Hook::ActorTickOK);
 			{
@@ -522,18 +607,20 @@ if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_13", g_Config::bAutoCraf
 			DrawAnimatedSeparator();
 			ImGui::BeginDisabled(!g_Hook::ActorTickOK);
 			{
-				DrawCustomCheckbox(automaticChecked, &g_Config::bAutomatic);
+				DrawCustomCheckbox(automaticChecked, &g_Config::bAutomatic, U8("装备损坏时从背包选择替代装备。选择需要替换的部位；只替换已装备部位选项可避免给空槽位自动穿戴。"));
 				if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_14", g_Config::bAutomatic); Fade) {
 					DrawCustomSliderFloat(armorRange, &g_Config::ArmorRange, 0.1f, 100.0f, "%.1f", 0.1f, U8(""));
 					DrawCustomCheckbox(Tr(U8("只替换已装备部位（不自动穿戴空槽位）")), &g_Config::bArmorSwapOnlyEquipped);
 					HelpText(Tr(U8("开启后仅当该部位已经穿着护甲（或只剩皮肤）时才找备件替换，不会把空槽位自动穿上背包里的装备。")));
 					ImGui::TextDisabled("%s", Tr(U8("参与替换的部位（5 个身体部位 + 副手）")));
-					DrawCustomCheckbox(Tr(U8("头盔")), &g_Config::bArmorSwapHead);
-					DrawCustomCheckbox(Tr(U8("胸甲")), &g_Config::bArmorSwapShirt);
-					DrawCustomCheckbox(Tr(U8("护腿")), &g_Config::bArmorSwapPants);
-					DrawCustomCheckbox(Tr(U8("靴子")), &g_Config::bArmorSwapBoots);
-					DrawCustomCheckbox(Tr(U8("手套（手臂）")), &g_Config::bArmorSwapGloves);
-					DrawCustomCheckbox(Tr(U8("副手盾牌")), &g_Config::bArmorSwapShield);
+					DrawChoiceGroup(U8("替换装备部位"), {
+					    {Tr(U8("头盔")), false, nullptr, &g_Config::bArmorSwapHead},
+					    {Tr(U8("胸甲")), false, nullptr, &g_Config::bArmorSwapShirt},
+					    {Tr(U8("护腿")), false, nullptr, &g_Config::bArmorSwapPants},
+					    {Tr(U8("靴子")), false, nullptr, &g_Config::bArmorSwapBoots},
+					    {Tr(U8("手套（手臂）")), false, nullptr, &g_Config::bArmorSwapGloves},
+					    {Tr(U8("副手盾牌")), false, nullptr, &g_Config::bArmorSwapShield}
+					});
 					HelpText(Tr(U8("每帧只请求替换一个部位，多个部位同时破损会依次排队；同槽位带皮肤的护甲也能正常替换。备件需为背包内可用、未破损的非皮肤装备。")));
 					ImGui::TextWrapped("%s: %s", Tr(U8("换甲状态")), g_Hack::GetArmorSwapStatus().c_str());
 				}
@@ -543,15 +630,18 @@ if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_13", g_Config::bAutoCraf
 
 			ImGui::BeginDisabled(!g_Hook::UpdateCameraOK);
             {
-                DrawCustomCheckbox(freeCameraEnabled, &g_Config::bFreeCameraEnabled);
+                DrawCustomCheckbox(Tr(U8("灵魂出窍")), &g_Config::bFreeCameraEnabled);
+                HelpText(Tr(U8("仅移动本地相机，人物留在原位。先下坐骑，关闭菜单后按绑定键进入／退出。WASD 移动，空格上升，Ctrl 下降，Shift 加速，鼠标转向，Esc 返回人物视角。打开菜单、死亡或骑乘时自动退出。")));
                 if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_15", g_Config::bFreeCameraEnabled); Fade) {
                 ImGui::TextWrapped("%s", g_Hack::GetFreeCameraStatus().c_str());
                 DrawCustomSliderFloat(Tr(U8("本地相机飞行速度")), &g_Config::FreeCameraSpeedMeters, 1.0f, PhoenixInterface::MaxCameraSpeed, "%.0f", 1.0f, "m/s");
-                HelpText(Tr(U8("先下坐骑，在快捷键页面设置开启键（默认 Z）。按快捷键进入／退出；也可关闭菜单后用此开关进入。WASD 移动、空格上升、Ctrl 下降、Shift 临时加速、鼠标转向；Esc 返回人物视角。")));
-                HelpText(Tr(U8("仅移动本地相机，无需管理员权限；相机不会改变人物位置，人物仍受重力、碰撞和伤害影响。菜单、聊天、背包、失焦、死亡、骑乘及人物或世界切换时退出并恢复视角与输入。速度不扩大远程建造或交互权限。")));
+                HelpText(Tr(U8("控制本地相机每秒移动的距离，数值越大移动越快；Shift 可临时加速。仅影响相机，不改变人物速度或远程交互距离。")));
                 }
 			}
 			ImGui::EndDisabled();
+            for(const auto& A:PhoenixShortcuts::Actions) if(A.Enabled==&g_Config::bFreeCameraEnabled)
+                ImGui::TextWrapped("%s: %s",Tr(U8("进入／退出快捷键")),KeyName(A.Key).c_str());
+            if(DrawCustomButton(Tr(U8("前往快捷键绑定")))) SelectTopic(Topic::Shortcuts);
 			DrawAnimatedSeparator();
 
 }

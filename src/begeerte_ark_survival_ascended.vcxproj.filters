@@ -444,6 +444,9 @@
     <ClInclude Include="internal\Hack\AutoLootRules.h" />
     <ClInclude Include="internal\Hack\CameraControls.h" />
     <ClInclude Include="internal\Hack\WorldUtilityRules.h" />
+    <ClInclude Include="internal\Hack\NoteExperiment.h" />
+    <ClInclude Include="internal\Hack\NoteExperiment.inl" />
+    <ClInclude Include="internal\Menu\NoteExperimentWindow.inl" />
     <ClInclude Include="internal\Hack\GachaOpenScheduler.h" />
     <ClInclude Include="internal\Hack\GachaOpen.inl" />
     <ClInclude Include="internal\Hack\FreeCamera.inl" />
@@ -456,6 +459,15 @@
     <ClInclude Include="internal\Legit\Aimbot\ProjectilePrediction.h" />
     <ClInclude Include="internal\Legit\Aimbot\ProjectileAim.inl" />
     <ClInclude Include="internal\Hack\Hack.h">
+      <Filter>internal\Hack</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Hack\GargantarClient.inl">
+      <Filter>internal\Hack</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Hack\GargantarAttackPatch.inl">
+      <Filter>internal\Hack</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Hack\GeneScannerMarkers.h">
       <Filter>internal\Hack</Filter>
     </ClInclude>
     <ClInclude Include="internal\Hack\TekSpear.h">
@@ -507,6 +519,9 @@
       <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
     </ClInclude>
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\UnloadBarrier.h">
+      <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
+    </ClInclude>
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\RespawnNotification.h">
       <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
     </ClInclude>
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\WindowProcedureRoutes.h">
@@ -664,6 +679,9 @@
       <Filter>internal\Log</Filter>
     </ClCompile>
     <ClCompile Include="internal\Hack\Hack.cpp">
+      <Filter>internal\Hack</Filter>
+    </ClCompile>
+    <ClCompile Include="internal\Hack\GeneScannerMarkers.cpp">
       <Filter>internal\Hack</Filter>
     </ClCompile>
     <ClCompile Include="internal\Hack\TekSpear.cpp">

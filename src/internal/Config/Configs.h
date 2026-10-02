@@ -34,6 +34,8 @@ namespace g_Config {
     inline bool bFireRatePistol = true;
     inline bool bFireRateBow = true;
     inline bool bFireRateOther = true;
+    // 独立于通用射速倍率的制式弩按住速射；只在本地主机应用。
+    inline bool bCrossbowHoldRapidFire = false;
     inline bool bProjectilePrediction = false;
     inline float ProjectilePredictionMaxSeconds = 3.0f;
     inline float ProjectilePredictionDelayMs = 0.0f;
@@ -50,6 +52,7 @@ namespace g_Config {
     inline bool bSuperFlyer = false;
     inline bool bForceTurn = false;
     inline bool bAutoFeed = false;
+    inline bool bAutoGeneScannerMarker = false;
     inline float AutoFeedRangeMeters = 50.0f;
     inline float AutoFeedIntervalSeconds = 1.0f;
     inline char AutoFeedDinoFilter[256] = "";

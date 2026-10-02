@@ -18,10 +18,10 @@
 #include "ImageCore_structs.hpp"
 #include "InputCore_structs.hpp"
 #include "Chaos_structs.hpp"
-#include "SlateCore_structs.hpp"
 #include "UniversalObjectLocator_structs.hpp"
 #include "AudioExtensions_structs.hpp"
 #include "TypedElementFramework_structs.hpp"
+#include "SlateCore_structs.hpp"
 #include "Slate_structs.hpp"
 
 
@@ -7375,7 +7375,8 @@ public:
 	bool                                          bIsReliable;                                       // 0x0080(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 	bool                                          bForceSendToLocalPlayer;                           // 0x0081(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 	bool                                          bIgnoreRelevancy;                                  // 0x0082(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
-	uint8                                         Pad_83[0x5];                                       // 0x0083(0x0005)(Fixing Struct Size After Last Property [ Dumper-7 ])
+	bool                                          bAllowAsPlayerServer;                              // 0x0083(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+	uint8                                         Pad_84[0x4];                                       // 0x0084(0x0004)(Fixing Struct Size After Last Property [ Dumper-7 ])
 };
 DUMPER7_ASSERTS_Actor_ServerSendExecCommandToEveryone;
 
@@ -7390,7 +7391,8 @@ public:
 	bool                                          bIsReliable;                                       // 0x0088(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 	bool                                          bForceSendToLocalPlayer;                           // 0x0089(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 	bool                                          bIgnoreRelevancy;                                  // 0x008A(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
-	uint8                                         Pad_8B[0x5];                                       // 0x008B(0x0005)(Fixing Struct Size After Last Property [ Dumper-7 ])
+	bool                                          bAllowAsPlayerServer;                              // 0x008B(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+	uint8                                         Pad_8C[0x4];                                       // 0x008C(0x0004)(Fixing Struct Size After Last Property [ Dumper-7 ])
 };
 DUMPER7_ASSERTS_Actor_ServerSendExecCommandToPlayer;
 
@@ -7403,7 +7405,7 @@ public:
 	bool                                          bIsReliable;                                       // 0x0008(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 	bool                                          bForceSendToLocalPlayer;                           // 0x0009(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 	bool                                          bIgnoreRelevancy;                                  // 0x000A(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
-	uint8                                         Pad_B[0x1];                                        // 0x000B(0x0001)(Fixing Struct Size After Last Property [ Dumper-7 ])
+	bool                                          bAllowAsPlayerServer;                              // 0x000B(0x0001)(Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 };
 DUMPER7_ASSERTS_Actor_ServerSendSimpleExecCommandToEveryone;
 
