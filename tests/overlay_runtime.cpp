@@ -220,11 +220,20 @@ struct Fixture
     }
     ~Fixture()
     {
+        std::cout << "WARP cleanup: waiting for native work.\n";
         WaitNative(); assert(g_MDX12::FinalCleanupAll());
+        std::cout << "WARP cleanup: overlay resources released.\n";
         CheckDebugErrors(); Chain.Reset(); Secondary.Reset();
         DestroyWindow(Window); DestroyWindow(OtherWindow);
         UnregisterClassW(L"PhoenixOverlayWarpTest", GetModuleHandleW(nullptr));
         CloseHandle(NativeEvent);
+        Info.Reset(); NativeList.Reset(); NativeAllocator.Reset(); NativeFence.Reset();
+        OtherQueue.Reset(); Queue.Reset();
+        std::cout << "WARP cleanup: queues and native resources released.\n";
+        Device.Reset();
+        std::cout << "WARP cleanup: device released.\n";
+        Factory.Reset();
+        std::cout << "WARP cleanup: factory released.\n";
     }
 };
 
@@ -232,6 +241,7 @@ int main()
 {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
+    std::atexit([] { std::cout << "WARP test reached normal CRT exit.\n"; });
     Fixture fixture;
     using namespace g_MDX12;
     using namespace g_MDX12::g_D3D12Resources;
