@@ -14,6 +14,6 @@ Set-Content -LiteralPath $testRunner -Value $testLines -Encoding ascii
 Push-Location -LiteralPath $testRoot
 try {
     & cmd.exe /c $testRunner 2>&1 | Tee-Object -FilePath (Join-Path $testOutput 'overlay-runtime.log')
-    if ($LASTEXITCODE -ne 0) { throw 'Production overlay WARP regression checks failed.' }
+    if ($LASTEXITCODE -ne 0) { throw "Production overlay WARP regression checks failed (exit $LASTEXITCODE)." }
 }
 finally { Pop-Location }

@@ -4,6 +4,7 @@
 #include <d3d12sdklayers.h>
 #include "../src/external/Minimal-D3D12-Hook-ImGui/MinHook/include/MinHook.h"
 #include <cassert>
+#include <cstdlib>
 #include <iostream>
 
 namespace OverlayTest
@@ -85,6 +86,17 @@ namespace g_MDX12 {
 }
 
 using Microsoft::WRL::ComPtr;
+
+// Keep failed assertions visible in redirected/headless runner logs.
+namespace OverlayTest {
+    [[noreturn]] void AssertionFailed(const char* expression, int line) {
+        std::cerr << "overlay_runtime.cpp:" << line << ": assertion failed: " << expression << std::endl;
+        std::abort();
+    }
+}
+#undef assert
+#define assert(expression) ((expression) ? static_cast<void>(0) : OverlayTest::AssertionFailed(#expression, __LINE__))
+
 struct Fixture
 {
     ComPtr<IDXGIFactory4> Factory;
@@ -218,6 +230,8 @@ struct Fixture
 
 int main()
 {
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
     Fixture fixture;
     using namespace g_MDX12;
     using namespace g_MDX12::g_D3D12Resources;
