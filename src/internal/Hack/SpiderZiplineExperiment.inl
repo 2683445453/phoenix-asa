@@ -1,6 +1,6 @@
 // One-shot SpiderS zipline flip experiment. Included inside g_Hack.
 namespace {
-    std::atomic<int> SpiderFlipRequest{0}; // 1: component path, 2: server event
+    std::atomic<int> SpiderFlipRequest{0}; // 1: component, 2: server RPC, 3: local flip event
     std::mutex SpiderFlipStatusMutex;
     std::string SpiderFlipStatus = "待命：骑乘小蜘蛛并附着蛛丝后点击一次按钮";
     std::string SpiderFlipPath;
@@ -51,7 +51,7 @@ namespace {
         SpiderFlip.File << std::setprecision(12)
             << "# client_observation_only; coordinates_cm; server_correction_inferred_from_later_samples\n"
             << "elapsed_ms,event,role,using_zipline,hanging,attach_offset,actor_x,actor_y,actor_z,"
-               "capsule_x,capsule_y,capsule_z,mesh_x,mesh_y,mesh_z\n";
+               "capsule_x,capsule_y,capsule_z,mesh_x,mesh_y,mesh_z,dino_hanging,component_hanging,flipping\n";
         const auto Utf8 = Destination.u8string();
         {
             std::scoped_lock Lock(SpiderFlipStatusMutex);
@@ -70,16 +70,23 @@ namespace {
             ? Dino->CapsuleComponent->K2_GetComponentLocation() : SDK::FVector{};
         const auto Mesh = IsUsableObject(Dino->Mesh)
             ? Dino->Mesh->K2_GetComponentLocation() : SDK::FVector{};
-        bool Using = false, Hanging = false;
+        bool Using = false, Hanging = false, DinoHanging = false;
+        bool ComponentHanging = false, Flipping = false;
         ReadReflectedBoolValue(Component, "UsingZipline", &Using);
-        if (Buff) ReadReflectedBoolValue(Buff, "ZiplineHanging", &Hanging);
+        ReadReflectedBoolValue(Component, "Hanging", &ComponentHanging);
+        ReadReflectedBoolValue(Dino, "Hanging", &DinoHanging);
+        if (Buff) {
+            ReadReflectedBoolValue(Buff, "ZiplineHanging", &Hanging);
+            ReadReflectedBoolValue(Buff, "ZiplineFlipping", &Flipping);
+        }
         const double Offset = Buff ? GlideProbeScalar(Buff, "AttachOffset") :
             std::numeric_limits<double>::quiet_NaN();
         SpiderFlip.File << Now - SpiderFlip.Started << ',' << Event << ','
             << static_cast<int>(Dino->Role) << ',' << Using << ',' << Hanging << ',' << Offset << ','
             << Actor.X << ',' << Actor.Y << ',' << Actor.Z << ','
             << Capsule.X << ',' << Capsule.Y << ',' << Capsule.Z << ','
-            << Mesh.X << ',' << Mesh.Y << ',' << Mesh.Z << '\n';
+            << Mesh.X << ',' << Mesh.Y << ',' << Mesh.Z << ','
+            << DinoHanging << ',' << ComponentHanging << ',' << Flipping << '\n';
         SpiderFlip.File.flush();
     }
 
@@ -116,14 +123,14 @@ namespace {
                 SDK::FLinearColor{0.0f, 1.0f, 0.0f, 1.0f}, -1.0f);
             SpiderFlip.File << "# trace_" << Label << ",length=" << Length
                 << ",radius=" << Radius << ",hit=" << Any
-                << ",blocking=" << Hit.bBlockingHit
-                << ",initial_overlap=" << Hit.bStartPenetrating
+                << ",blocking=" << static_cast<int>(Hit.bBlockingHit)
+                << ",initial_overlap=" << static_cast<int>(Hit.bStartPenetrating)
                 << ",distance=" << Hit.Distance
                 << ",point=" << Hit.ImpactPoint.X << ',' << Hit.ImpactPoint.Y << ',' << Hit.ImpactPoint.Z
                 << ",start=" << Start.X << ',' << Start.Y << ',' << Start.Z
                 << ",end=" << End.X << ',' << End.Y << ',' << End.Z << '\n';
         };
-        SpiderFlip.File << "# diagnostic_single_hit_traces; blueprint_uses_multi_hit_and_filters_volume_and_ninja\n";
+        SpiderFlip.File << "# diagnostic_single_hit_traces; source=root_component_approximation; blueprint_uses_multi_hit_and_filters_volume_and_ninja\n";
         Trace("native_length", NativeLength);
         Trace("full_displacement", FullLength);
         SpiderFlip.File.flush();
@@ -146,6 +153,11 @@ void RequestSpiderZiplineFlip(bool DirectServerEvent) {
     if (SpiderFlipRequest.exchange(DirectServerEvent ? 2 : 1) == 0)
         SetSpiderFlipStatus(DirectServerEvent ? "已排队：直接请求服务器倒挂" :
                             "已排队：调用蛛丝组件 CrouchPressed");
+}
+
+void RequestSpiderZiplineLocalEvent() {
+    if (SpiderFlipRequest.exchange(3) == 0)
+        SetSpiderFlipStatus("已排队：仅在客户端调用快速翻转事件");
 }
 
 std::string GetSpiderZiplineExperimentStatus() {
@@ -192,6 +204,10 @@ void SpiderZiplineExperimentTick(SDK::UWorld* World) {
         SetSpiderFlipStatus("未执行：当前没有控制可用的小蜘蛛 SpiderS");
         return;
     }
+    if (Request == 3 && Dino->Role != SDK::ENetRole::ROLE_AutonomousProxy) {
+        SetSpiderFlipStatus("未执行：本地翻转实验只允许客户端自主代理，不能在权威角色执行");
+        return;
+    }
     auto* Component = ReadReflectedObjectValue(Dino, "ZiplineComponent_SpiderS");
     if (!ExpansionHasClass(Component, "ziplinecomponent_spiders")) {
         SetSpiderFlipStatus("未执行：蜘蛛蛛丝组件不存在或类型不符");
@@ -209,11 +225,13 @@ void SpiderZiplineExperimentTick(SDK::UWorld* World) {
     }
     auto* ComponentEvent = SpiderFlipFunction(Component, "ZiplineComponent_SpiderS_C", "CrouchPressed", 1);
     auto* ServerEvent = SpiderFlipFunction(Buff, "Buff_Zipline_DinoBase_C", "FlipOnZipline_RunOnServer", 0);
+    auto* LocalEvent = SpiderFlipFunction(Buff, "Buff_Zipline_DinoBase_C", "Event_FlipOnZipline", 16);
     auto* CanFlip = SpiderFlipFunction(Buff, "Buff_Zipline_DinoBase_C", "CanZiplineFlip", 744);
-    if (!ComponentEvent || !ServerEvent || !CanFlip ||
+    if (!ComponentEvent || !ServerEvent || !LocalEvent || !CanFlip ||
         !(static_cast<uint32_t>(ServerEvent->FunctionFlags) & 0x40) ||
-        !(static_cast<uint32_t>(ServerEvent->FunctionFlags) & 0x200000)) {
-        SetSpiderFlipStatus("未执行：蓝图函数签名或服务器 RPC 标志不匹配");
+        !(static_cast<uint32_t>(ServerEvent->FunctionFlags) & 0x200000) ||
+        (static_cast<uint32_t>(LocalEvent->FunctionFlags) & 0x40)) {
+        SetSpiderFlipStatus("未执行：蓝图函数签名或网络标志不匹配");
         return;
     }
     if (!SpiderFlipOpenLog(Now)) {
@@ -229,14 +247,21 @@ void SpiderZiplineExperimentTick(SDK::UWorld* World) {
     alignas(16) uint8_t CanFlipArgs[744]{};
     Buff->ProcessEvent(CanFlip, CanFlipArgs);
     const bool Allowed = CanFlipArgs[0] != 0;
+    const char* Route = Request == 3 ? "local_fast_flip_event" :
+        Request == 2 ? "direct_server_rpc" : "component_crouch_pressed";
     SpiderFlip.File << "# can_zipline_flip_client=" << Allowed
-                    << "; route=" << (Request == 2 ? "direct_server_rpc" : "component_crouch_pressed") << '\n';
-    if (Request == 2) Buff->ProcessEvent(ServerEvent, nullptr);
+                    << "; route=" << Route << '\n';
+    if (Request == 3) {
+        alignas(16) uint8_t Args[16]{};
+        Args[0] = 1; // bFast
+        std::memcpy(Args + 8, &Dino, sizeof(Dino)); // AttachedDino
+        Buff->ProcessEvent(LocalEvent, Args);
+    } else if (Request == 2) Buff->ProcessEvent(ServerEvent, nullptr);
     else {
         uint8_t Args[1]{};
         Component->ProcessEvent(ComponentEvent, Args);
     }
     SpiderFlipSample("after_call", GetTickCount64());
     SetSpiderFlipStatus(std::format("已调用{}；客户端 CanZiplineFlip={}。继续采样 3 秒",
-        Request == 2 ? "服务器倒挂事件" : "蛛丝组件入口", Allowed));
+        Request == 3 ? "本地快速翻转事件" : Request == 2 ? "服务器倒挂事件" : "蛛丝组件入口", Allowed));
 }

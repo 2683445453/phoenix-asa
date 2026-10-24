@@ -561,6 +561,9 @@ if (auto Fade=ParameterFade("##parameters_Misc_Menu.cpp_13", g_Config::bAutoCraf
             ImGui::SameLine();
             if (ImGui::Button(Tr(U8("直接请求服务器倒挂"))))
                 g_Hack::RequestSpiderZiplineFlip(true);
+            if (ImGui::Button(Tr(U8("本地快速翻转（结束链测试）"))))
+                g_Hack::RequestSpiderZiplineLocalEvent();
+            HelpText(Tr(U8("仅在客户端调用 Event_FlipOnZipline(Fast=true)，不发送服务器翻转请求。记录3秒姿态与坐标，用于检验本地结束链能否保持。")));
             ImGui::TextWrapped("%s", g_Hack::GetSpiderZiplineExperimentStatus().c_str());
 
 			ImGui::BeginDisabled(!g_Hook::ActorTickOK);

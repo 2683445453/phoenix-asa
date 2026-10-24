@@ -54,6 +54,7 @@ namespace g_MDX12 {
     // Hook function pointer types
     typedef HRESULT(STDMETHODCALLTYPE* PFN_Present)(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT Flags);
     typedef void(STDMETHODCALLTYPE* PFN_ExecuteCommandLists)(ID3D12CommandQueue* queue, UINT NumCommandLists, ID3D12CommandList* const* ppCommandLists);
+    typedef HRESULT(STDMETHODCALLTYPE* PFN_Present1)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
     typedef HRESULT(STDMETHODCALLTYPE* PFN_ResizeBuffers)(IDXGISwapChain* pSwapChain, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags);
     typedef UINT(WINAPI* PFN_GetRawInputData)(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader);
     typedef UINT(WINAPI* PFN_GetRawInputBuffer)(PRAWINPUT pData, PUINT pcbSize, UINT cbSizeHeader);
@@ -68,6 +69,7 @@ namespace g_MDX12 {
     // Hook original function pointers namespace
     namespace g_HookFunctions {
         extern PFN_Present g_oPresent;
+        extern PFN_Present1 g_oPresent1;
         extern PFN_ExecuteCommandLists g_oExecuteCommandLists;
         extern PFN_ResizeBuffers g_oResizeBuffers;
         extern PFN_GetRawInputData g_oGetRawInputData;

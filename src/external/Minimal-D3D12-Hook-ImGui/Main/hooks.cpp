@@ -32,6 +32,7 @@
 #include <array>
 #include <cmath>
 #include <TlHelp32.h>
+#include <wrl/client.h>
 #include "LicenseClient.h"
 
 #pragma warning(push)
@@ -196,7 +197,7 @@ namespace {
         if (Target > RegionEnd || RegionEnd - Target < 0x80) return false;
 
         const auto* Code = static_cast<const uint8_t*>(Address);
-        // ASA CL 832029 UpdateCamera(float) prologue. Stack-frame displacements are
+        // ASA CL 832196 UpdateCamera(float) prologue. Stack-frame displacements are
         // deliberately ignored, while the register-save shape is required.
         constexpr uint8_t Prologue[] = {
             0x4C, 0x8B, 0xDC, 0x55, 0x53, 0x56, 0x57,
@@ -1454,11 +1455,7 @@ namespace g_MDX12 {
         if (g_HookFunctions::g_oExecuteCommandLists) g_HookFunctions::g_oExecuteCommandLists(Queue, Count, Lists);
         if (!ShouldBypassFeatures()) g_QueueTracker.CompleteSubmission(Queue, Submission);
     }
-    HRESULT STDMETHODCALLTYPE hkPresent(IDXGISwapChain3* SwapChain, UINT SyncInterval, UINT Flags) {
-        g_Hook::CallbackScope Guard;
-        if (!ShouldBypassFeatures() && !(Flags & DXGI_PRESENT_TEST)) RenderOverlayFrame(SwapChain);
-        return g_HookFunctions::g_oPresent ? g_HookFunctions::g_oPresent(SwapChain, SyncInterval, Flags) : S_OK;
-    }
+    #include "PresentationHooks.inl"
     HRESULT STDMETHODCALLTYPE hkResizeBuffers(IDXGISwapChain* SwapChain, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags) {
         g_Hook::CallbackScope Guard;
         if (!ShouldBypassFeatures()) return ResizeOverlayBuffers(SwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
@@ -1495,6 +1492,7 @@ namespace g_MDX12 {
             ID3D12GraphicsCommandList7* tempList7 = nullptr;
             IDXGIFactory4* factory = nullptr;
             IDXGISwapChain* tempSwapChain = nullptr;
+            IDXGISwapChain1* tempSwapChain1 = nullptr;
 
             // 使用运行时加载的函数指针，而非编译期链接的符号
             bool ok = SUCCEEDED(g_RuntimeModules::g_pD3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&tempDevice)));
@@ -1538,8 +1536,15 @@ namespace g_MDX12 {
                 void** listVTable = *reinterpret_cast<void***>(tempList);
                 void** list7VTable = tempList7 ? *reinterpret_cast<void***>(tempList7) : nullptr;
 
-                bool PresentReady = false, ResizeReady = false, QueueReady = false;
+                bool PresentReady = false, Present1Ready = false, ResizeReady = false, QueueReady = false;
+                if (SUCCEEDED(tempSwapChain->QueryInterface(IID_PPV_ARGS(&tempSwapChain1)))) {
+                    void** Table1 = *reinterpret_cast<void***>(tempSwapChain1);
+                    // IDXGISwapChain1::Present1 is slot 22 (public DXGI ABI).
+                    LogPresentationTarget("Present1", Table1[22]);
+                    Present1Ready = MH_CreateHook(Table1[22], reinterpret_cast<LPVOID>(hkPresent1), reinterpret_cast<LPVOID*>(&g_HookFunctions::g_oPresent1)) == MH_OK;
+                }
                 if (swapVTable && swapVTable[g_CheatData::VTable::D3D12::Present]) {
+                    LogPresentationTarget("Present", swapVTable[g_CheatData::VTable::D3D12::Present]);
                     PresentReady = MH_CreateHook(swapVTable[g_CheatData::VTable::D3D12::Present], reinterpret_cast<LPVOID>(hkPresent), reinterpret_cast<LPVOID*>(&g_HookFunctions::g_oPresent)) == MH_OK;
                 }
 
@@ -1548,6 +1553,7 @@ namespace g_MDX12 {
                 }
 
                 if (queueVTable && queueVTable[g_CheatData::VTable::D3D12::ExecuteCommandLists]) {
+                    LogPresentationTarget("ExecuteCommandLists", queueVTable[g_CheatData::VTable::D3D12::ExecuteCommandLists]);
                     QueueReady = MH_CreateHook(queueVTable[g_CheatData::VTable::D3D12::ExecuteCommandLists], reinterpret_cast<LPVOID>(hkExecuteCommandLists), reinterpret_cast<LPVOID*>(&g_HookFunctions::g_oExecuteCommandLists)) == MH_OK;
                 }
 
@@ -1559,8 +1565,9 @@ namespace g_MDX12 {
                 const bool EnhancedBarrierReady = !list7VTable ||
                     (list7VTable[80] && MH_CreateHook(list7VTable[80], reinterpret_cast<LPVOID>(hkEnhancedBarrier), reinterpret_cast<LPVOID*>(&oEnhancedBarrier)) == MH_OK);
                 const bool ResetReady = MH_CreateHook(listVTable[10], reinterpret_cast<LPVOID>(hkCommandListReset), reinterpret_cast<LPVOID*>(&oCommandListReset)) == MH_OK;
-                const bool HookReady = PresentReady && ResizeReady && QueueReady && BarrierReady && EnhancedBarrierReady && ResetReady &&
+                const bool HookReady = PresentReady && Present1Ready && ResizeReady && QueueReady && BarrierReady && EnhancedBarrierReady && ResetReady &&
                     !g_Hook::IsUnloadRequested() && MH_EnableHook(MH_ALL_HOOKS) == MH_OK;
+                if (tempSwapChain1) tempSwapChain1->Release();
                 tempSwapChain->Release();
                 factory->Release();
                 tempQueue->Release();
@@ -1573,11 +1580,12 @@ namespace g_MDX12 {
 
                 if (!HookReady) g_Hook::LogLifecycle("D3D12 initialization failed: required overlay detours were not installed/enabled; coordinating rollback.");
                 else g_Hook::LogLifecycle(list7VTable ?
-                    "D3D12 hooks installed: Present, ExecuteCommandLists, legacy ResourceBarrier, and enhanced Barrier." :
-                    "D3D12 hooks installed: Present, ExecuteCommandLists, and legacy ResourceBarrier; enhanced Barrier unsupported by this runtime.");
+                    "D3D12 hooks installed: Present, Present1, ExecuteCommandLists, legacy ResourceBarrier, and enhanced Barrier." :
+                    "D3D12 hooks installed: Present, Present1, ExecuteCommandLists, and legacy ResourceBarrier; enhanced Barrier unsupported by this runtime.");
                 return HookReady ? 1 : 0;
             }
 
+            if (tempSwapChain1) tempSwapChain1->Release();
             if (tempSwapChain) tempSwapChain->Release();
             if (factory) factory->Release();
             if (tempQueue) tempQueue->Release();

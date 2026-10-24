@@ -32,6 +32,7 @@ namespace g_Hack {
     std::string GetDeinoGlideProbeStatus();
     std::string GetDeinoGlideProbePath();
     void RequestSpiderZiplineFlip(bool DirectServerEvent);
+    void RequestSpiderZiplineLocalEvent();
     void SpiderZiplineExperimentTick(SDK::UWorld* World);
     void ResetSpiderZiplineExperiment();
     std::string GetSpiderZiplineExperimentStatus();

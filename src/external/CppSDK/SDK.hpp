@@ -7,10 +7,10 @@
 */
 
 // ShooterGame
-// Compatible target: 5.5.4-832029+++ARK1+Rel-1.94
+// Compatible target: 5.5.4-832196+++ARK1+Rel-1.94
 // SDK regenerated on 2026-10-01 at MainMenu and TheIsland_WP; changed definitions merged; unloaded DLC retained.
 
-// Native class sizes and 1954 reflected field offsets statically revalidated on 2026-10-02; runtime/BP validation pending.
+// Native class sizes and 1954 reflected field offsets statically revalidated on 2026-10-04; runtime/BP validation pending.
 
 // Includes the entire SDK. Include files directly for faster compilation!
 

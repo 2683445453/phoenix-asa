@@ -2,11 +2,17 @@
 // Game callbacks and input hooks are stubbed; no game is started or inspected.
 #include "../src/external/Minimal-D3D12-Hook-ImGui/Main/mdx12_api.h"
 #include <d3d12sdklayers.h>
+#include "../src/external/Minimal-D3D12-Hook-ImGui/MinHook/include/MinHook.h"
 #include <cassert>
 #include <iostream>
 
 namespace OverlayTest
 {
+    bool BypassPresentation = false;
+    UINT PresentationDraws = 0;
+    UINT PresentCalls = 0;
+    UINT SeenSync = 0, SeenFlags = 0;
+    const DXGI_PRESENT_PARAMETERS* SeenParameters = nullptr;
     bool DropNextDraw = false;
     bool DrawWasDropped = false;
     bool DropMakesBackendNotReady = true;
@@ -37,6 +43,8 @@ namespace OverlayTest
 
 namespace g_Hook
 {
+    CallbackScope::CallbackScope() {}
+    CallbackScope::~CallbackScope() {}
     bool IsStopping() { return false; }
     bool IsUnloadRequested() { return false; }
     void LogLifecycle(const char* message) { std::cout << message << '\n'; }
@@ -63,6 +71,17 @@ namespace g_MDX12
         ImGui::TextUnformatted("Production draw and font atlas");
         ImGui::End();
     }
+}
+
+namespace g_MDX12 {
+    bool ShouldBypassFeatures() { return OverlayTest::BypassPresentation; }
+    void CountPresentedFrame(IDXGISwapChain3* Chain) {
+        ++OverlayTest::PresentationDraws;
+        RenderOverlayFrame(Chain);
+    }
+#define RenderOverlayFrame CountPresentedFrame
+#include "../src/external/Minimal-D3D12-Hook-ImGui/Main/PresentationHooks.inl"
+#undef RenderOverlayFrame
 }
 
 using Microsoft::WRL::ComPtr;
@@ -202,6 +221,30 @@ int main()
     Fixture fixture;
     using namespace g_MDX12;
     using namespace g_MDX12::g_D3D12Resources;
+    DXGI_PRESENT_PARAMETERS parameters{};
+    g_HookFunctions::g_oPresent1 = [](IDXGISwapChain1*, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* p) {
+        ++OverlayTest::PresentCalls; OverlayTest::SeenSync = sync;
+        OverlayTest::SeenFlags = flags; OverlayTest::SeenParameters = p;
+        return DXGI_STATUS_OCCLUDED;
+    };
+    assert(hkPresent1(fixture.Chain.Get(), 3, DXGI_PRESENT_TEST, &parameters) == DXGI_STATUS_OCCLUDED);
+    assert(!TargetChain && OverlayTest::PresentationDraws == 0);
+    assert(OverlayTest::SeenParameters == &parameters && OverlayTest::SeenSync == 3 && OverlayTest::SeenFlags == DXGI_PRESENT_TEST);
+    OverlayTest::BypassPresentation = true;
+    hkPresent1(fixture.Chain.Get(), 0, 0, nullptr);
+    assert(!TargetChain && OverlayTest::PresentationDraws == 0);
+    OverlayTest::BypassPresentation = false;
+    assert(hkPresent1(fixture.Chain.Get(), 0, 0, &parameters) == DXGI_STATUS_OCCLUDED);
+    assert(TargetChain && OverlayTest::PresentationDraws == 1);
+    g_HookFunctions::g_oPresent = [](IDXGISwapChain3*, UINT, UINT) { return S_FALSE; };
+    g_HookFunctions::g_oPresent1 = [](IDXGISwapChain1* chain, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS*) {
+        ComPtr<IDXGISwapChain3> chain3; assert(SUCCEEDED(chain->QueryInterface(IID_PPV_ARGS(&chain3))));
+        return hkPresent(chain3.Get(), sync, flags);
+    };
+    assert(hkPresent1(fixture.Chain.Get(), 0, 0, &parameters) == S_FALSE);
+    assert(OverlayTest::PresentationDraws == 2); // Present1 -> Present draws once.
+    assert(hkPresent(fixture.Chain.Get(), 0, DXGI_PRESENT_TEST) == S_FALSE);
+    assert(OverlayTest::PresentationDraws == 2);
     RenderOverlayFrame(fixture.Chain.Get()); // Bind the game window before native queue proof.
     assert(g_bufferCount == 2 && !g_InitState::g_Initialized && OverlayTest::Submissions == 0);
     assert(OverlayTest::InputInstalls == 1); // F2 must not depend on GPU backend readiness.
@@ -281,5 +324,21 @@ int main()
     fixture.DrawUntilSubmitted();
     assert(g_FrameContexts[0].Resource->GetDesc().Width == 400);
     fixture.CheckDebugErrors();
+    // Hook the actual DXGI slot, rather than calling only our wrapper directly.
+    ComPtr<IDXGISwapChain1> extended;
+    assert(SUCCEEDED(fixture.Chain.As(&extended)));
+    void* present1Address = (*reinterpret_cast<void***>(extended.Get()))[22];
+    assert(MH_Initialize() == MH_OK);
+    assert(MH_CreateHook(present1Address, reinterpret_cast<void*>(hkPresent1), reinterpret_cast<void**>(&g_HookFunctions::g_oPresent1)) == MH_OK);
+    assert(MH_EnableHook(present1Address) == MH_OK);
+    const UINT beforeNativePresent1 = OverlayTest::PresentationDraws;
+    assert(SUCCEEDED(extended->Present1(0, 0, &parameters)));
+    assert(OverlayTest::PresentationDraws == beforeNativePresent1 + 1);
+    assert(MH_DisableHook(present1Address) == MH_OK);
+    assert(MH_RemoveHook(present1Address) == MH_OK);
+    assert(MH_Uninitialize() == MH_OK);
+    g_HookFunctions::g_oPresent1 = nullptr;
+    fixture.CheckDebugErrors();
+    std::cout << "Present1 real DXGI detour, argument/result forwarding, TEST/bypass and nested Present dispatch passed.\n";
     std::cout << "Production overlay WARP passed: fixed chain, fresh verified queue, pending draw/font protection, font scale rebuild, discarded draw rollback and Resize rebinding.\n";
 }

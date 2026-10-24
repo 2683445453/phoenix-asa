@@ -108,7 +108,9 @@ namespace g_DrawImGui {
             DrawCustomCheckbox(Tr(U8("泰克步枪不过热（狙击枪仅本地主机）")), &g_Config::bTekNoHeat);
             HelpText(Tr(U8("泰克步枪已验证可在远程服持续造成伤害。泰克狙击枪的热量由服务器维护，仅在本地主机拥有 authority 时可取消；远程服不会伪造本地连发。")));
             DrawCustomCheckbox(Tr(U8("泰克胸甲喷射冷却调整")), &g_Config::bTekChestJetNoCooldown);
+            HelpText(Tr(U8("只调整当前胸甲的本地输入冷却。服务器仍保留至少 0.4 秒的推进间隔及能量检查；连续镜头晃动不代表连续推进。")));
             DrawCustomCheckbox(Tr(U8("泰克手套冲刺冷却调整")), &g_Config::bTekGloveDashNoCooldown);
+            HelpText(Tr(U8("只调整当前手套的本地 PunchCooldown。服务器仍保留火箭拳 1.5 秒间隔和动作冷却；需空手，胸甲能力占用或下落速度超过 5 米/秒时会阻止冲刺。")));
             if (g_Config::bTekNoHeat || g_Config::bTekChestJetNoCooldown || g_Config::bTekGloveDashNoCooldown)
                 ImGui::TextWrapped("%s", g_Hack::GetTekEquipmentStatus().c_str());
             Title(Tr(U8("骑乘与水下")));

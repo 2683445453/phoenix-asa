@@ -109,6 +109,6 @@ void TekEquipmentTick(SDK::UWorld* World) {
     ExtensionStatus(TekEquipmentStatus, Sniper && !Authority ?
         "泰克狙击枪热量由远程服务器维护；已保留服务器同步状态，需服务端组件才能真正连续射击" :
         HeatReady ? FormatLocalized("专用加热回调已匹配，已处理 {} 次；以实际扣弹和伤害为准", TekHeatEventsSkipped.load()) : Matched ?
-        "已调整当前泰克装备的专用热量／冷却参数，实际效果待联机验证" :
+        "已调整本地泰克参数；胸甲推进与手套冲刺仍受服务器间隔、能量和动作条件限制" :
         "未匹配已装备的泰克步枪、狙击枪或护甲能力");
 }

@@ -515,6 +515,9 @@
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\D3D12Overlay.inl">
       <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
     </ClInclude>
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\PresentationHooks.inl">
+      <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
+    </ClInclude>
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\SwapChainQueueTracker.h">
       <Filter>external\Minimal-D3D12-Hook-ImGui\Main</Filter>
     </ClInclude>

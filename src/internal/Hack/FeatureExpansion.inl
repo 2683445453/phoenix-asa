@@ -16,7 +16,7 @@ namespace {
     uint64_t NextMountedNativeCheck = 0;
     uint8_t* MountedYawClampTest = nullptr;
     bool SetMountedNativeYawClampBypass(bool Enabled) {
-        // ASA CL 832029: the rider-weapon branch tests AllowMountedWeaponry and
+        // ASA CL 832196: the rider-weapon branch tests AllowMountedWeaponry and
         // clamps view yaw to mount yaw +/- 90 degrees when it returns true.
         // Replace only that TEST AL,AL with XOR AL,AL, preserving the existing
         // branch and all weapon equip/fire checks elsewhere in the function.
@@ -24,7 +24,7 @@ namespace {
         if (Enabled && !MountedYawClampTest) {
             auto* Base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
             if (!Base) return false;
-            constexpr uintptr_t SiteRva = 0x66CDB95;
+            constexpr uintptr_t SiteRva = 0x66CF8A5;
             constexpr uint8_t Before[] = {
                 0x48,0x8B,0x00,0x45,0x33,0xC0,0x33,0xD2,0x48,0x8B,0xCB,
                 0xFF,0x90,0xE0,0x23,0x00,0x00

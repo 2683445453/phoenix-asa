@@ -3,127 +3,129 @@ param(
     [switch]$Rebuild,
     [string]$MSBuildPath = $env:PHOENIX_MSBUILD,
     [ValidateSet('Development','Local')][string]$LicenseMode = 'Development',
-    [ValidateRange(1024,65535)][int]$LicensePort = 17891
+    [ValidateRange(1024,65535)][int]$LicensePort = 17891,
+    [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = $PSScriptRoot
+if (-not $Version) { $Version = (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION') -Raw).Trim() }
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-
 $msbuild = $MSBuildPath
 if (-not $msbuild -and (Test-Path -LiteralPath $vswhere)) {
     $msbuild = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
 }
-if (-not $msbuild) {
-    throw 'MSBuild was not found. Supply -MSBuildPath or PHOENIX_MSBUILD for a custom C++ Build Tools installation.'
+if (-not $msbuild -or -not (Test-Path -LiteralPath $msbuild -PathType Leaf)) {
+    throw 'MSBuild was not found. Install the v145 C++ tools or supply -MSBuildPath / PHOENIX_MSBUILD.'
 }
-if (-not (Test-Path -LiteralPath $msbuild -PathType Leaf)) { throw "MSBuild does not exist: $msbuild" }
 
+# Native compiler/linker output only: no packer or protected-release step.
 $target = if ($Rebuild) { 'Rebuild' } else { 'Build' }
-$commonArgs = @(
-    "/t:$target",
-    '/p:Configuration=Release',
-    '/p:Platform=x64',
-    "/p:PhoenixLicenseMode=$LicenseMode",
-    '/m:2',
-    '/nologo',
-    '/v:minimal'
-)
-
-& $msbuild (Join-Path $projectRoot 'src\begeerte_ark_survival_ascended.sln') @commonArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "DLL build failed with exit code $LASTEXITCODE."
-}
-
-& $msbuild (Join-Path $projectRoot 'ASA_Loader\ASA_Loader.sln') @commonArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "Loader build failed with exit code $LASTEXITCODE."
+$commonArgs = @("/t:$target", '/p:Configuration=Release', '/p:Platform=x64',
+    "/p:PhoenixLicenseMode=$LicenseMode", '/m:2', '/nologo', '/v:minimal')
+foreach ($solution in @('src\begeerte_ark_survival_ascended.sln', 'ASA_Loader\ASA_Loader.sln')) {
+    & $msbuild (Join-Path $projectRoot $solution) @commonArgs
+    if ($LASTEXITCODE -ne 0) { throw "$solution build failed with exit code $LASTEXITCODE." }
 }
 
 $localLicense = $LicenseMode -eq 'Local'
 $packageName = if ($localLicense) { 'phoenix-local-license' } else { 'phoenix' }
-$packageDir = Join-Path $projectRoot "dist\$packageName"
-$languageDir = Join-Path $packageDir 'language'
-$workshopDir = Join-Path $packageDir 'work_shop'
-
-New-Item -ItemType Directory -Path $packageDir, $languageDir, $workshopDir, (Join-Path $packageDir 'cfg'), (Join-Path $packageDir 'lua'), (Join-Path $packageDir 'logs') -Force | Out-Null
+$distRoot = Join-Path $projectRoot 'dist'
+$packageDir = Join-Path $distRoot $packageName
+$stageDir = Join-Path $distRoot ('.staging-' + [guid]::NewGuid().ToString('N'))
+$archivePath = Join-Path $distRoot "$packageName.zip"
 $loaderOutput = if ($localLicense) { 'release\license-local\ASA_Loader\phoenix.exe' } else { 'ASA_Loader\x64\Release\phoenix.exe' }
 $dllOutput = if ($localLicense) { 'release\license-local\begeerte_ark_survival_ascended\phoenix.dll' } else { 'release\phoenix.dll' }
-Copy-Item -LiteralPath (Join-Path $projectRoot $loaderOutput) -Destination (Join-Path $packageDir 'phoenix.exe') -Force
-$releaseDll = Join-Path $projectRoot $dllOutput
-$packageDll = Join-Path $packageDir 'phoenix.dll'
-$pendingDll = Join-Path $packageDir 'phoenix.dll.pending'
-$dllWasStaged = $false
+
+$utf8 = [Text.UTF8Encoding]::new($false)
+
+New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 try {
-    Copy-Item -LiteralPath $releaseDll -Destination $packageDll -Force
-    if (Test-Path -LiteralPath $pendingDll) {
-        Remove-Item -LiteralPath $pendingDll -Force
+    Copy-Item -LiteralPath (Join-Path $projectRoot $loaderOutput) -Destination (Join-Path $stageDir 'phoenix.exe')
+    Copy-Item -LiteralPath (Join-Path $projectRoot $dllOutput) -Destination (Join-Path $stageDir 'phoenix.dll')
+    foreach ($folder in @('language', 'lua', 'work_shop')) {
+        $extension = if ($folder -eq 'language') { '*.ini' } else { '*.lua' }
+        foreach ($file in Get-ChildItem -LiteralPath (Join-Path $projectRoot $folder) -Filter $extension -File -Recurse) {
+            $destination = Join-Path $stageDir $file.FullName.Substring($projectRoot.Length + 1)
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+            Copy-Item -LiteralPath $file.FullName -Destination $destination
+        }
     }
-}
-catch [System.IO.IOException] {
-    Copy-Item -LiteralPath $releaseDll -Destination $pendingDll -Force
-    $dllWasStaged = $true
-    Write-Warning 'The packaged DLL is in use. The new DLL was saved as a pending update and will be applied by the loader after the game fully exits.'
-}
-Copy-Item -Path (Join-Path $projectRoot 'language\*') -Destination $languageDir -Recurse -Force
-Copy-Item -Path (Join-Path $projectRoot 'work_shop\*') -Destination $workshopDir -Recurse -Force
-Copy-Item -Path (Join-Path $projectRoot 'lua\*.lua') -Destination (Join-Path $packageDir 'lua') -Force
-# Windows PowerShell 5.1 reads UTF-8 scripts without a BOM through the active
-# ANSI code page. Keep package-document path literals ASCII-safe.
-function ConvertFrom-Utf8Base64([string]$Value) {
-    [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Value))
-}
-$usageSourceName = ConvertFrom-Utf8Base64 'cGhvZW5peC3kvb/nlKjor7TmmI4ubWQ='
-$featureSourceName = ConvertFrom-Utf8Base64 'cGhvZW5peC0yMDI2MDkxNy3lip/og73ooaXlhYUubWQ='
-$localUsageSourceName = ConvertFrom-Utf8Base64 'cGhvZW5peC3mnKzlnLDmjojmnYPpqozor4EubWQ='
-$usagePackageName = ConvertFrom-Utf8Base64 '5L2/55So6K+05piOLm1k'
-$featurePackageName = ConvertFrom-Utf8Base64 '5Yqf6IO96KGl5YWF5LiO5a+554WnLm1k'
-Copy-Item -LiteralPath (Join-Path $projectRoot "docs\$usageSourceName") -Destination (Join-Path $packageDir $usagePackageName) -Force
-Copy-Item -LiteralPath (Join-Path $projectRoot "docs\$featureSourceName") -Destination (Join-Path $packageDir $featurePackageName) -Force
-Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $packageDir -Force
-if ($localLicense) {
-    $serviceConfig = Join-Path $packageDir 'license-server.json'
-    # Preserve an explicitly configured service address on incremental builds.
-    if (-not (Test-Path -LiteralPath $serviceConfig)) {
-        [System.IO.File]::WriteAllText($serviceConfig, ('{"url":"http://127.0.0.1:' + $LicensePort + '"}'), [System.Text.UTF8Encoding]::new($false))
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $stageDir
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $stageDir
+    [IO.File]::WriteAllText((Join-Path $stageDir 'VERSION'), "$Version`n", $utf8)
+    $notices = @{
+        'LuaJIT.txt' = 'src\external\LuaJIT-2.1\COPYRIGHT'
+        'ImGui.txt' = 'src\external\Minimal-D3D12-Hook-ImGui\ImGui\LICENSE.txt'
+        'D3D12-Hook.txt' = 'src\external\Minimal-D3D12-Hook-ImGui\LICENSE'
+        'MinHook.txt' = 'src\external\Minimal-D3D12-Hook-ImGui\MinHook\LICENSE.txt'
+        'ezVMT.txt' = 'src\external\ezVMT\LICENSE'
+        'sol2.txt' = 'src\external\sol2\License.txt'
     }
-    Copy-Item -LiteralPath (Join-Path $projectRoot "docs\$localUsageSourceName") -Destination (Join-Path $packageDir $usagePackageName) -Force
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'licensing\client\vendor\LICENSE.nlohmann-json') -Destination $packageDir -Force
-}
+    $noticeDir = Join-Path $stageDir 'licenses'
+    New-Item -ItemType Directory -Path $noticeDir | Out-Null
+    foreach ($entry in $notices.GetEnumerator()) {
+        Copy-Item -LiteralPath (Join-Path $projectRoot $entry.Value) -Destination (Join-Path $noticeDir $entry.Key)
+    }
+    if ($localLicense) {
+        $serviceConfig = Join-Path $packageDir 'license-server.json'
+        $stagedConfig = Join-Path $stageDir 'license-server.json'
+        if (Test-Path -LiteralPath $serviceConfig) { Copy-Item -LiteralPath $serviceConfig -Destination $stagedConfig }
+        else { [IO.File]::WriteAllText($stagedConfig, ('{"url":"http://127.0.0.1:' + $LicensePort + '"}'), $utf8) }
+        Copy-Item -LiteralPath (Join-Path $projectRoot 'licensing\client\vendor\LICENSE.nlohmann-json') -Destination $stageDir
+    }
+    & (Join-Path $stageDir 'phoenix.exe') --check
+    if ($LASTEXITCODE -ne 0) { throw "Packaged loader check failed with exit code $LASTEXITCODE." }
+    # --check creates runtime logs. Archive only the explicit distribution files.
+    $stagedLogs = Join-Path $stageDir 'logs'
+    if (Test-Path -LiteralPath $stagedLogs) {
+        if (-not ([IO.Path]::GetFullPath($stagedLogs)).StartsWith($stageDir + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid staged log path.' }
+        Remove-Item -LiteralPath $stagedLogs -Recurse -Force
+    }
+    $sourceCommit = $null
+    $sourceDirty = $null
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $sourceCommit = & git -C $projectRoot rev-parse HEAD
+        if ($LASTEXITCODE -ne 0) { $sourceCommit = $null }
+        else { $sourceDirty = [bool](& git -C $projectRoot status --porcelain) }
+    }
+    $metadata = [ordered]@{
+        product = 'phoenix'; version = $Version; architecture = 'x64'
+        license_mode = $LicenseMode; protection = 'none'
+        source_commit = $sourceCommit; source_dirty = $sourceDirty
+    }
+    [IO.File]::WriteAllText((Join-Path $stageDir 'release.json'), ($metadata | ConvertTo-Json), $utf8)
+    $hashLines = @(Get-ChildItem -LiteralPath $stageDir -File -Recurse | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($stageDir.Length + 1).Replace('\', '/')
+        (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $relative
+    })
+    [IO.File]::WriteAllLines((Join-Path $stageDir 'SHA256SUMS.txt'), $hashLines, $utf8)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    if (Test-Path -LiteralPath $archivePath) { Remove-Item -LiteralPath $archivePath -Force }
+    [IO.Compression.ZipFile]::CreateFromDirectory($stageDir, $archivePath, [IO.Compression.CompressionLevel]::Optimal, $false)
 
-& (Join-Path $packageDir 'phoenix.exe') --check
-if ($LASTEXITCODE -ne 0) {
-    throw "Packaged loader check failed with exit code $LASTEXITCODE."
-}
-
-$hashTargets = @((Join-Path $packageDir 'phoenix.exe'))
-$hashTargets += if ($dllWasStaged) { $pendingDll } else { $packageDll }
-Get-FileHash -Algorithm SHA256 -LiteralPath $hashTargets | Format-Table -AutoSize
-
-$archivePath = Join-Path $projectRoot "dist\$packageName.zip"
-$archiveItems = @(
-    (Join-Path $packageDir 'phoenix.exe'),
-    # Always package the fresh build as phoenix.dll, even when the local copy is locked.
-    $releaseDll,
-    $languageDir,
-    $workshopDir,
-    (Join-Path $projectRoot 'lua'),
-    (Join-Path $packageDir 'LICENSE')
-)
-if ($localLicense) {
-    $archiveItems += (Join-Path $packageDir 'license-server.json'), (Join-Path $packageDir 'LICENSE.nlohmann-json')
-}
-$usageGuide = Join-Path $packageDir $usagePackageName
-if (Test-Path -LiteralPath $usageGuide) {
-    $archiveItems += $usageGuide
-}
-$archiveItems += (Join-Path $packageDir $featurePackageName)
-Compress-Archive -LiteralPath $archiveItems -DestinationPath $archivePath -CompressionLevel Optimal -Force
-
-Write-Host "Release package: $packageDir"
-Write-Host "Release archive: $archivePath"
-if ($localLicense) {
-    Write-Host 'Local license validation build: activation and expiry enforced; no protection shell or code signing.'
-} else {
-    Write-Host 'Development build: no activation, expiration enforcement, or protection shell.'
+    # Refresh program files while retaining personal configuration and logs.
+    New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+    foreach ($file in Get-ChildItem -LiteralPath $stageDir -File -Recurse) {
+        $destination = Join-Path $packageDir $file.FullName.Substring($stageDir.Length + 1)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        if ($file.Name -eq 'phoenix.dll') {
+            try {
+                Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
+                if (Test-Path -LiteralPath "$destination.pending") { Remove-Item -LiteralPath "$destination.pending" -Force }
+            } catch [IO.IOException] {
+                Copy-Item -LiteralPath $file.FullName -Destination "$destination.pending" -Force
+                Write-Warning 'DLL in use: staged as phoenix.dll.pending. The ZIP contains the fresh phoenix.dll.'
+            }
+        } else { Copy-Item -LiteralPath $file.FullName -Destination $destination -Force }
+    }
+    $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText(("$archivePath.sha256"), "$archiveHash  $packageName.zip`n", $utf8)
+    Write-Host "Native x64 release: $archivePath"
+    Write-Host "SHA256: $archiveHash"
+    Write-Host "License mode: $LicenseMode; protection: none."
+} finally {
+    $resolvedStage = [IO.Path]::GetFullPath($stageDir)
+    if (-not $resolvedStage.StartsWith(([IO.Path]::GetFullPath($distRoot) + '\.staging-'), [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid staging cleanup path.' }
+    if (Test-Path -LiteralPath $resolvedStage) { Remove-Item -LiteralPath $resolvedStage -Recurse -Force }
 }

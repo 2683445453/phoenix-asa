@@ -138,21 +138,26 @@ namespace g_MDX12 {
         }
         bool BindChain(IDXGISwapChain3* Chain) {
             DXGI_SWAP_CHAIN_DESC Desc{};
-            if (FAILED(Chain->GetDesc(&Desc)) || !Desc.OutputWindow || !IsWindow(Desc.OutputWindow) ||
-                !Desc.BufferCount || Desc.BufferCount > 16 || Desc.SampleDesc.Count != 1) return false;
+            const HRESULT DescResult = Chain->GetDesc(&Desc);
+            if (FAILED(DescResult)) { Status("swapchain GetDesc failed", DescResult); return false; }
+            if (!Desc.OutputWindow || !IsWindow(Desc.OutputWindow) ||
+                !Desc.BufferCount || Desc.BufferCount > 16 || Desc.SampleDesc.Count != 1) { Status("swapchain window or buffer description rejected"); return false; }
             DWORD WindowPID = 0; GetWindowThreadProcessId(Desc.OutputWindow, &WindowPID);
-            if (WindowPID != GetCurrentProcessId()) return false;
+            if (WindowPID != GetCurrentProcessId()) { Status("swapchain window belongs to another process"); return false; }
             if (g_ProcessWindow::g_mainWindow && g_ProcessWindow::g_mainWindow != Desc.OutputWindow && !inputhook::Remove(g_ProcessWindow::g_mainWindow)) return false;
             ComPtr<ID3D12Device> Device;
             std::vector<ComPtr<ID3D12Resource>> Buffers(Desc.BufferCount);
             std::vector<ID3D12Resource*> Raw(Desc.BufferCount);
             for (UINT I = 0; I < Desc.BufferCount; ++I) {
-                if (FAILED(Chain->GetBuffer(I, IID_PPV_ARGS(&Buffers[I])))) return false;
+                const HRESULT BufferResult = Chain->GetBuffer(I, IID_PPV_ARGS(&Buffers[I]));
+                if (FAILED(BufferResult)) { Status("swapchain GetBuffer failed", BufferResult); return false; }
                 Raw[I] = Buffers[I].Get();
             }
             // Use the resource's actual device. A frame-generation interposer
             // may wrap the swapchain's GetDevice result with another identity.
-            if (FAILED(Buffers[0]->GetDevice(IID_PPV_ARGS(&Device))) || FAILED(Device->GetDeviceRemovedReason())) return false;
+            const HRESULT DeviceResult = Buffers[0]->GetDevice(IID_PPV_ARGS(&Device));
+            if (FAILED(DeviceResult)) { Status("backbuffer GetDevice failed", DeviceResult); return false; }
+            if (FAILED(Device->GetDeviceRemovedReason())) { Status("backbuffer device removed", Device->GetDeviceRemovedReason()); return false; }
             if (!g_QueueTracker.SetTarget(Device.Get(), Raw.data(), Desc.BufferCount)) return false;
             g_D3D12Resources::g_pd3dDevice = Device.Detach();
             g_D3D12Resources::g_bufferCount = Desc.BufferCount; g_D3D12Resources::g_FrameContexts.resize(Desc.BufferCount);

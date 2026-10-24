@@ -26,7 +26,7 @@
     <ClCompile Include="$(PhoenixLicenseRoot)client\LicenseClient.cpp" />
   </ItemGroup>
   <Target Name="ValidatePhoenixLicenseMode" BeforeTargets="PrepareForBuild">
-    <Error Condition="'$(PhoenixLicenseMode)'!='Development' and '$(PhoenixLicenseMode)'!='Local'" Text="Unknown PhoenixLicenseMode. Only Development and Local are implemented; protected production publishing is not configured." />
+    <Error Condition="'$(PhoenixLicenseMode)'!='Development' and '$(PhoenixLicenseMode)'!='Local'" Text="Unknown PhoenixLicenseMode. Only native Development and Local builds are supported." />
     <Error Condition="'$(PhoenixLicenseMode)'=='Local' and ('$(Configuration)'!='Release' or '$(Platform)'!='x64')" Text="Local licensing requires Release|x64 and uses separate output directories." />
     <Error Condition="'$(PhoenixLicenseMode)'=='Local' and !Exists('$(PhoenixPublicKeyDirectory)\LicensePublicKey.h')" Text="Initialize the local license service before building. The public key is missing." />
   </Target>

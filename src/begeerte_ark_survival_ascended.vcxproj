@@ -116,6 +116,7 @@
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\ImGui\imstb_truetype.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\hooks.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\D3D12Overlay.inl" />
+    <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\PresentationHooks.inl" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\SwapChainQueueTracker.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\UnloadBarrier.h" />
     <ClInclude Include="external\Minimal-D3D12-Hook-ImGui\Main\RespawnNotification.h" />

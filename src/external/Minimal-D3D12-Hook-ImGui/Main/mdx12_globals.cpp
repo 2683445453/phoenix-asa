@@ -15,6 +15,7 @@ namespace g_MDX12 {
     // Hook original function pointers
     namespace g_HookFunctions {
         PFN_Present g_oPresent = nullptr;
+        PFN_Present1 g_oPresent1 = nullptr;
         PFN_ExecuteCommandLists g_oExecuteCommandLists = nullptr;
         PFN_ResizeBuffers g_oResizeBuffers = nullptr;
         PFN_GetRawInputData g_oGetRawInputData = nullptr;
