@@ -37,6 +37,7 @@ Temporarily disable ReShade before use: its graphics proxy may prevent the menu 
 | Release | `2026.10.24.2` |
 | Game client | ASA **94.34** · CL **833800** · Steam build **26003405** |
 | SDK checks | 6 core addresses, 4 hook signatures, 18 native classes / 1,954 fields |
+| In-game smoke check | Main-menu loading, F2 menu, language switching and coordinated unloading |
 | Automated checks | Windows x64 build, package integrity, translation parity and 26 offline regression groups |
 
 SDK layouts and offsets need revalidation after game updates. Offline Actions tests do not cover live servers or every gameplay feature; feature behavior requires in-game verification.

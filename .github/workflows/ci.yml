@@ -45,6 +45,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Loader file check failed.' }
           & ./dist/phoenix/phoenix.exe --unknown-option
           if ($LASTEXITCODE -ne 7) { throw 'Unknown options must fail without waiting for a game.' }
+          exit 0
       - name: Upload verified package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
