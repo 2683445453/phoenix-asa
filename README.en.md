@@ -28,6 +28,8 @@ Images are offline renders of the project's actual ImGui menus, with game data s
 
 Fully exit the game before updating files; keep your personal `cfg/` and `logs/`. `phoenix.exe --check` checks that the DLL exists; it does not validate game compatibility.
 
+Temporarily disable ReShade before use: its graphics proxy may prevent the menu from appearing or cause presentation failures. The in-game smoke check used a client without ReShade loaded.
+
 ## Version and validation
 
 | Item | Current baseline |

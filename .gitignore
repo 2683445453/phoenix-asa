@@ -58,6 +58,10 @@ bld/
 [Oo]ut/
 [Ll]og/
 [Ll]ogs/
+# This is C++ source, not runtime log output.
+!/src/internal/Log/
+!/src/internal/Log/LogManager.h
+!/src/internal/Log/LogManager.cpp
 
 # Build results on 'Bin' directories
 **/[Bb]in/*

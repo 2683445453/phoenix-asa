@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Verify recorded native SDK contract
-        run: python tests/check_client_compatibility.py
+        run: ./tests/run-client-compatibility-tests.ps1
       - name: Build native release
         run: |
           New-Item -ItemType Directory -Path release/ci/build -Force | Out-Null

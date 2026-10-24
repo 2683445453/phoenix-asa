@@ -14,7 +14,7 @@ import struct
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def check(executable=None):
+def check(executable=None, emit_assertions=None):
     baseline = json.loads((ROOT / 'tests/fixtures/client-94.34.json').read_text(encoding='utf-8'))
     basic = (ROOT / 'src/external/CppSDK/SDK/Basic.hpp').read_text(encoding='utf-8-sig')
     assertions = (ROOT / 'src/external/CppSDK/Assertions.inl').read_text(encoding='utf-8-sig')
@@ -63,6 +63,14 @@ def check(executable=None):
             matches = [m.start() for m in re.finditer(pattern, data, re.DOTALL)]
             assert len(matches) == 1, f'Hook is not unique: {name}'
             assert rva(matches[0]) == int(contract['rva'], 16), f'Hook target drift: {name}'
+    if emit_assertions:
+        lines = ['#include "external/CppSDK/SDK.hpp"', '#include <cstddef>']
+        for name, contract in baseline['native_classes'].items():
+            lines.append(f'static_assert(sizeof(SDK::{name}) == {contract["size"]});')
+            for field, offset in contract['fields'].items():
+                lines.append(f'static_assert(offsetof(SDK::{name}, {field}) == {offset});')
+        emit_assertions.parent.mkdir(parents=True, exist_ok=True)
+        emit_assertions.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     print(f"SDK baseline passed: ASA {baseline['game_version']}, CL {baseline['cl']}, "
           f"Steam {baseline['steam_build']}; {len(baseline['native_classes'])} classes / {checked} fields. "
           f"Installed EXE checked: {bool(executable)}.")
@@ -71,4 +79,6 @@ def check(executable=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--exe', type=Path, help='Optional installed ArkAscended.exe to validate read-only.')
-    check(parser.parse_args().exe)
+    parser.add_argument('--emit-assertions', type=Path, help='Write C++ assertions for the recorded native layouts.')
+    args = parser.parse_args()
+    check(args.exe, args.emit_assertions)
