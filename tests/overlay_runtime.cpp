@@ -223,7 +223,12 @@ struct Fixture
         std::cout << "WARP cleanup: waiting for native work.\n";
         WaitNative(); assert(g_MDX12::FinalCleanupAll());
         std::cout << "WARP cleanup: overlay resources released.\n";
-        CheckDebugErrors(); Chain.Reset(); Secondary.Reset();
+        CheckDebugErrors();
+        std::cout << "WARP cleanup: debug queue checked.\n";
+        Chain.Reset();
+        std::cout << "WARP cleanup: primary chain released.\n";
+        Secondary.Reset();
+        std::cout << "WARP cleanup: secondary chain released.\n";
         DestroyWindow(Window); DestroyWindow(OtherWindow);
         UnregisterClassW(L"PhoenixOverlayWarpTest", GetModuleHandleW(nullptr));
         CloseHandle(NativeEvent);
