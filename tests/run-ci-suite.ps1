@@ -6,7 +6,7 @@ $groups = @{
     Core = @('aim-selection','auto-craft','backpack-tools','instant-reload','interface','note-experiment','shortcut-runtime')
     Gameplay = @('buff-soup','dino-harvest-range','feature-expansion','gameplay-extensions','harvest-efficiency',
         'native-camera','tek-spear','underwater-performance','underwater-weapons','weapon-water-access')
-    Graphics = @('dx12-backend','independent-overlay','interface-render','overlay-runtime','respawn-notification',
+    Graphics = @('overlay-runtime','dx12-backend','independent-overlay','interface-render','respawn-notification',
         'swap-chain-queue-tracker','vibrancy-gpu','vmt-reinject','window-procedure-routes')
 }
 $logDir = Join-Path $PSScriptRoot "..\release\ci\$Suite"

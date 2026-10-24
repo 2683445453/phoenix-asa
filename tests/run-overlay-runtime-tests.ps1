@@ -9,11 +9,15 @@ New-Item -ItemType Directory -Path $testOutput -Force | Out-Null
 $testRunner = Join-Path $testOutput 'run-overlay-runtime.cmd'
 $testLines = @('@echo off', ('call "' + $testDev + '" -no_logo -arch=x64'), 'if errorlevel 1 exit /b 1',
     'cl /nologo /std:c++20 /bigobj /O1 /EHsc /W0 /utf-8 /DNOMINMAX /DPHOENIX_UI_TEST /I src\external\LuaJIT-2.1\src tests\overlay_runtime.cpp src\external\Minimal-D3D12-Hook-ImGui\Main\mdx12_globals.cpp src\external\Minimal-D3D12-Hook-ImGui\ImGui\imgui.cpp src\external\Minimal-D3D12-Hook-ImGui\ImGui\imgui_draw.cpp src\external\Minimal-D3D12-Hook-ImGui\ImGui\imgui_widgets.cpp src\external\Minimal-D3D12-Hook-ImGui\ImGui\imgui_tables.cpp src\external\Minimal-D3D12-Hook-ImGui\ImGui\imgui_impl_dx12.cpp src\external\Minimal-D3D12-Hook-ImGui\ImGui\imgui_impl_win32.cpp src\external\Minimal-D3D12-Hook-ImGui\MinHook\src\buffer.c src\external\Minimal-D3D12-Hook-ImGui\MinHook\src\hook.c src\external\Minimal-D3D12-Hook-ImGui\MinHook\src\trampoline.c src\external\Minimal-D3D12-Hook-ImGui\MinHook\src\hde\hde64.c /Fe:release\injection-crash-2157\tests\overlay\overlay_runtime.exe /Fo:release\injection-crash-2157\tests\overlay\ /link d3d12.lib dxgi.lib d3dcompiler.lib user32.lib gdi32.lib dwmapi.lib imm32.lib',
-    'if errorlevel 1 exit /b 1', 'release\injection-crash-2157\tests\overlay\overlay_runtime.exe')
+    'if errorlevel 1 exit /b 1')
 Set-Content -LiteralPath $testRunner -Value $testLines -Encoding ascii
 Push-Location -LiteralPath $testRoot
 try {
-    & cmd.exe /c $testRunner 2>&1 | Tee-Object -FilePath (Join-Path $testOutput 'overlay-runtime.log')
-    if ($LASTEXITCODE -ne 0) { throw "Production overlay WARP regression checks failed (exit $LASTEXITCODE)." }
+    & cmd.exe /d /c $testRunner
+    if ($LASTEXITCODE -ne 0) { throw "Overlay WARP compilation failed (exit $LASTEXITCODE)." }
+    & (Join-Path $testOutput 'overlay_runtime.exe')
+    $testExitCode = $LASTEXITCODE
+    Write-Host "Overlay WARP native process exit: $testExitCode"
+    if ($testExitCode -ne 0) { throw "Production overlay WARP regression checks failed (exit $testExitCode)." }
 }
 finally { Pop-Location }
