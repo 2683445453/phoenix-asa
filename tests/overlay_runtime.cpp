@@ -355,4 +355,5 @@ int main()
     fixture.CheckDebugErrors();
     std::cout << "Present1 real DXGI detour, argument/result forwarding, TEST/bypass and nested Present dispatch passed.\n";
     std::cout << "Production overlay WARP passed: fixed chain, fresh verified queue, pending draw/font protection, font scale rebuild, discarded draw rollback and Resize rebinding.\n";
+    return 0;
 }
