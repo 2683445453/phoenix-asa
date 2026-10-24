@@ -33,7 +33,6 @@
 #include <cmath>
 #include <TlHelp32.h>
 #include <wrl/client.h>
-#include "LicenseClient.h"
 
 #pragma warning(push)
 #pragma warning(disable: 26451)
@@ -57,7 +56,7 @@ namespace {
 
     bool ShouldBypassFeatures() {
         return !g_RuntimeReady.load(std::memory_order_acquire) ||
-            g_UnloadRequested.load(std::memory_order_acquire) || !phoenix::license::IsAuthorized();
+            g_UnloadRequested.load(std::memory_order_acquire);
     }
 
     void PrepareRuntimeForUnload() {
@@ -1399,7 +1398,6 @@ namespace {
         // module. They are now cancellable and joinable, so stop them first.
         LanguageManager::Get().Shutdown();
         LuaManager::Get().Shutdown();
-        phoenix::license::Stop();
         g_Hook::LogLifecycle("Unload: worker threads joined; checking callback return paths.");
         if (!PhoenixUnload::WaitForImageExit(module, g_ActiveHookCalls, 5000)) {
             g_Hook::LogLifecycle("Unload blocked: a thread still references this DLL's code; DLL remains resident."); return 5;

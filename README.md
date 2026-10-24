@@ -1,8 +1,8 @@
 # phoenix · ASA
 
-Windows x64 的 ARK: Survival Ascended 客户端扩展，包含 `phoenix.exe` 启动器、`phoenix.dll` 模块及 Lua 工具。当前版本 **2026.10.24**。
+Windows x64 的 ARK: Survival Ascended 客户端扩展，包含 `phoenix.exe` 启动器、`phoenix.dll` 模块及 Lua 工具。当前版本 **2026.10.24.1**。
 
-**分发版使用原生 EXE/DLL，不加壳；默认不要求激活、联网授权或期限验证。** 可选 Local 模式仅用于本机授权验证，未接入正式生产授权服务。
+本项目由 [zetsr/Begeerte-ASA](https://github.com/zetsr/Begeerte-ASA) 演化而来，保留上游 MIT 许可和版权声明。此衍生版本主要扩展界面、功能、游戏适配与构建流程，与上游独立维护。
 
 ## 使用
 
@@ -26,7 +26,7 @@ SDK 与偏移依赖游戏版本，实验功能及服务器效果需游戏内确�
 
 脚本默认构建 `Release|x64`，输出 `dist/phoenix/`、`dist/phoenix.zip` 和 `dist/phoenix.zip.sha256`。依赖已随仓库提供；必需的预编译 LuaJIT x64 对象 `src/external/LuaJIT-2.1/src/lj_vm.obj` 应保留。
 
-分发包包含 `VERSION`、源码来源 `release.json` 和逐文件 `SHA256SUMS.txt`，不含个人配置、日志、授权密钥、数据库和调试符号。包内程序与本次链接器输出保持一致，无加壳步骤。
+分发包包含 `VERSION`、源码来源 `release.json` 和逐文件 `SHA256SUMS.txt`，不含个人配置、日志和调试符号。包内程序与本次链接器输出保持一致。
 
 ```powershell
 Get-FileHash .\dist\phoenix.zip -Algorithm SHA256
@@ -37,10 +37,12 @@ Get-FileHash .\dist\phoenix.zip -Algorithm SHA256
 python .\tests\language_package_integrity.py
 ```
 
-可选本机授权构建：安装 Python 3.12+ 与 `licensing/server/requirements.txt` 后运行 `build-local-license.ps1 -Python 'C:\Python312\python.exe'`，生成独立的 `phoenix-local-license` 包。`.local-license/` 中的私钥和数据库仅留本机。
-
 ## 目录与许可
 
-`src/` 为 DLL 与依赖，`ASA_Loader/` 为启动器，`language/`、`lua/`、`work_shop/` 为运行资源，`tests/` 为回归检查，`licensing/` 为可选授权模块。`server/`、`_Data/` 为独立实验及源码参考，不进入默认分发包。构建与分发输出由 Git 忽略。
+`src/` 为 DLL 与依赖，`ASA_Loader/` 为启动器，`language/`、`lua/`、`work_shop/` 为运行资源，`tests/` 为回归检查。`server/`、`_Data/` 为独立实验及源码参考，不进入默认分发包。构建与分发输出由 Git 忽略。
 
-原项目采用 [MIT License](LICENSE)，保留原作者声明；第三方许可见各组件及包内 `licenses/`。历史文档、诊断记录和旧包仅保留在本地归档，不随此次源码和分发版上传。
+项目采用 [MIT License](LICENSE)。原始版权归 zetsr，后续修改归相应贡献者；源码和二进制分发均保留许可证。第三方组件及字体遵循各自许可，见源码目录和包内 `licenses/`。
+
+界面使用 HarmonyOS Sans 字体（Copyright 2021 Huawei Device Co., Ltd.），其独立许可见 `src/external/Minimal-D3D12-Hook-ImGui/Font/LICENSE.txt` 及包内 `licenses/HarmonyOS-Sans.txt`。
+
+公开再分发前仍需确认生成 SDK 及其中 UTF-N 代码的许可；上游 MIT 声明不替代第三方权利授权。

@@ -2,8 +2,6 @@
 param(
     [switch]$Rebuild,
     [string]$MSBuildPath = $env:PHOENIX_MSBUILD,
-    [ValidateSet('Development','Local')][string]$LicenseMode = 'Development',
-    [ValidateRange(1024,65535)][int]$LicensePort = 17891,
     [string]$Version
 )
 
@@ -19,23 +17,22 @@ if (-not $msbuild -or -not (Test-Path -LiteralPath $msbuild -PathType Leaf)) {
     throw 'MSBuild was not found. Install the v145 C++ tools or supply -MSBuildPath / PHOENIX_MSBUILD.'
 }
 
-# Native compiler/linker output only: no packer or protected-release step.
+# Native compiler/linker output.
 $target = if ($Rebuild) { 'Rebuild' } else { 'Build' }
 $commonArgs = @("/t:$target", '/p:Configuration=Release', '/p:Platform=x64',
-    "/p:PhoenixLicenseMode=$LicenseMode", '/m:2', '/nologo', '/v:minimal')
+    '/m:2', '/nologo', '/v:minimal')
 foreach ($solution in @('src\begeerte_ark_survival_ascended.sln', 'ASA_Loader\ASA_Loader.sln')) {
     & $msbuild (Join-Path $projectRoot $solution) @commonArgs
     if ($LASTEXITCODE -ne 0) { throw "$solution build failed with exit code $LASTEXITCODE." }
 }
 
-$localLicense = $LicenseMode -eq 'Local'
-$packageName = if ($localLicense) { 'phoenix-local-license' } else { 'phoenix' }
+$packageName = 'phoenix'
 $distRoot = Join-Path $projectRoot 'dist'
 $packageDir = Join-Path $distRoot $packageName
 $stageDir = Join-Path $distRoot ('.staging-' + [guid]::NewGuid().ToString('N'))
 $archivePath = Join-Path $distRoot "$packageName.zip"
-$loaderOutput = if ($localLicense) { 'release\license-local\ASA_Loader\phoenix.exe' } else { 'ASA_Loader\x64\Release\phoenix.exe' }
-$dllOutput = if ($localLicense) { 'release\license-local\begeerte_ark_survival_ascended\phoenix.dll' } else { 'release\phoenix.dll' }
+$loaderOutput = 'ASA_Loader\x64\Release\phoenix.exe'
+$dllOutput = 'release\phoenix.dll'
 
 $utf8 = [Text.UTF8Encoding]::new($false)
 
@@ -61,18 +58,13 @@ try {
         'MinHook.txt' = 'src\external\Minimal-D3D12-Hook-ImGui\MinHook\LICENSE.txt'
         'ezVMT.txt' = 'src\external\ezVMT\LICENSE'
         'sol2.txt' = 'src\external\sol2\License.txt'
+        'HarmonyOS-Sans.txt' = 'src\external\Minimal-D3D12-Hook-ImGui\Font\LICENSE.txt'
+        'UnrealContainers.txt' = 'src\external\CppSDK\LICENSE.UnrealContainers'
     }
     $noticeDir = Join-Path $stageDir 'licenses'
     New-Item -ItemType Directory -Path $noticeDir | Out-Null
     foreach ($entry in $notices.GetEnumerator()) {
         Copy-Item -LiteralPath (Join-Path $projectRoot $entry.Value) -Destination (Join-Path $noticeDir $entry.Key)
-    }
-    if ($localLicense) {
-        $serviceConfig = Join-Path $packageDir 'license-server.json'
-        $stagedConfig = Join-Path $stageDir 'license-server.json'
-        if (Test-Path -LiteralPath $serviceConfig) { Copy-Item -LiteralPath $serviceConfig -Destination $stagedConfig }
-        else { [IO.File]::WriteAllText($stagedConfig, ('{"url":"http://127.0.0.1:' + $LicensePort + '"}'), $utf8) }
-        Copy-Item -LiteralPath (Join-Path $projectRoot 'licensing\client\vendor\LICENSE.nlohmann-json') -Destination $stageDir
     }
     & (Join-Path $stageDir 'phoenix.exe') --check
     if ($LASTEXITCODE -ne 0) { throw "Packaged loader check failed with exit code $LASTEXITCODE." }
@@ -91,7 +83,6 @@ try {
     }
     $metadata = [ordered]@{
         product = 'phoenix'; version = $Version; architecture = 'x64'
-        license_mode = $LicenseMode; protection = 'none'
         source_commit = $sourceCommit; source_dirty = $sourceDirty
     }
     [IO.File]::WriteAllText((Join-Path $stageDir 'release.json'), ($metadata | ConvertTo-Json), $utf8)
@@ -123,7 +114,6 @@ try {
     [IO.File]::WriteAllText(("$archivePath.sha256"), "$archiveHash  $packageName.zip`n", $utf8)
     Write-Host "Native x64 release: $archivePath"
     Write-Host "SHA256: $archiveHash"
-    Write-Host "License mode: $LicenseMode; protection: none."
 } finally {
     $resolvedStage = [IO.Path]::GetFullPath($stageDir)
     if (-not $resolvedStage.StartsWith(([IO.Path]::GetFullPath($distRoot) + '\.staging-'), [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid staging cleanup path.' }

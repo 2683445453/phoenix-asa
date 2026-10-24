@@ -16,7 +16,6 @@
 #include <sstream>
 #include <iomanip>
 #include <system_error>
-#include "LicenseClient.h"
 
 namespace {
     HANDLE g_StartupLog = INVALID_HANDLE_VALUE;
@@ -94,7 +93,7 @@ bool init(LPVOID lpParam) {
     const ULONGLONG engineWaitStarted = GetTickCount64();
 
     while (true) {
-        if (!phoenix::license::IsAuthorized() || g_Hook::IsUnloadRequested()) return false;
+        if (g_Hook::IsUnloadRequested()) return false;
         SDK::UWorld* World = SDK::UWorld::GetWorld();
 
         // During the first seconds of process startup GObjects is published before
@@ -143,7 +142,6 @@ bool init(LPVOID lpParam) {
 	}
 
     StartupLog("Initializing D3D12 hook runtime...");
-    if (!phoenix::license::IsAuthorized()) return false;
     if (!g_MDX12::Initialize(lpParam)) {
         StartupLog("ERROR: hook initialization failed; requesting coordinated rollback.");
         return false;
@@ -170,19 +168,7 @@ bool init(LPVOID lpParam) {
 
 DWORD WINAPI MainThread(LPVOID lpParam) {
     InitializeStartupLog(lpParam);
-#if PHOENIX_LICENSE_ENABLED
-    const bool authorized = phoenix::license::Start(GetModuleDirectory(lpParam));
-    if (!authorized) StartupLog("Authorization denied: " + phoenix::license::Status().message);
-    if (!authorized || !init(lpParam)) {
-        g_Hook::SetRuntimeReady(false);
-        g_Hook::RequestUnload();
-        return 6;
-    }
-    // Publish only after initialization has finished using this DLL image.
-    phoenix::license::SetExpirationCallback(g_Hook::RequestUnload);
-#else
     if (!init(lpParam)) { g_Hook::RequestUnload(); return 6; }
-#endif
     g_Hook::SetRuntimeReady(true);
     return 0;
 }

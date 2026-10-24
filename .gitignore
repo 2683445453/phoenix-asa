@@ -5,11 +5,7 @@
 # Local build and packaged release outputs
 /dist/
 /release/
-/.local-license/
 /.codex-*
-**/.license/
-licensing/server/.venv/
-**/x64/LicenseLocal/
 /server/MekBeamTiming/dist/
 /docs/phoenix-diagnostics/
 /docs/

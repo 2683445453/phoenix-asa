@@ -37,13 +37,18 @@ with zipfile.ZipFile(root/'dist/phoenix.zip') as z:
              'ImGui.txt':'src/external/Minimal-D3D12-Hook-ImGui/ImGui/LICENSE.txt',
              'D3D12-Hook.txt':'src/external/Minimal-D3D12-Hook-ImGui/LICENSE',
              'MinHook.txt':'src/external/Minimal-D3D12-Hook-ImGui/MinHook/LICENSE.txt',
-             'ezVMT.txt':'src/external/ezVMT/LICENSE','sol2.txt':'src/external/sol2/License.txt'}
+             'ezVMT.txt':'src/external/ezVMT/LICENSE','sol2.txt':'src/external/sol2/License.txt',
+             'HarmonyOS-Sans.txt':'src/external/Minimal-D3D12-Hook-ImGui/Font/LICENSE.txt',
+             'UnrealContainers.txt':'src/external/CppSDK/LICENSE.UnrealContainers'}
     expected += ['licenses/'+n for n in notices]
     normalized={n.replace('\\','/'):n for n in names}
     assert len(normalized)==len(names), 'Duplicate archive entry'
     assert {n for n in normalized if not n.endswith('/')}==set(expected), names
     for name in expected:
         if name in ['release.json','SHA256SUMS.txt']:continue
+        if name=='VERSION':
+            assert z.read(name).decode('utf-8').strip()==(root/name).read_text().strip()
+            continue
         source=root/('release/phoenix.dll' if name=='phoenix.dll' else
                      'ASA_Loader/x64/Release/phoenix.exe' if name=='phoenix.exe' else
                      notices[name.split('/',1)[1]] if name.startswith('licenses/') else name)
@@ -51,7 +56,6 @@ with zipfile.ZipFile(root/'dist/phoenix.zip') as z:
     assert not any(n.startswith(('cfg/','logs/')) or 'uasset' in n.lower() for n in normalized)
     manifest=json.loads(z.read('release.json'))
     assert manifest['product']=='phoenix' and manifest['architecture']=='x64'
-    assert manifest['license_mode']=='Development' and manifest['protection']=='none'
     assert manifest['version']==(root/'VERSION').read_text().strip()
     if args.require_clean:
         assert manifest['source_dirty'] is False, manifest
