@@ -1830,7 +1830,7 @@ public:
 DUMPER7_ASSERTS_UMovieSceneSequence;
 
 // Class MovieScene.MovieSceneSequencePlayer
-// 0x0458 (0x0480 - 0x0028)
+// 0x0468 (0x0490 - 0x0028)
 class UMovieSceneSequencePlayer : public UObject
 {
 public:
@@ -1859,7 +1859,7 @@ public:
 	struct FMovieSceneSequenceReplProperties      NetSyncProps;                                      // 0x0384(0x0014)(Net, NoDestructor, Protected, NativeAccessSpecifierProtected)
 	TScriptInterface<class IMovieScenePlaybackClient> PlaybackClient;                                // 0x0398(0x0010)(ZeroConstructor, Transient, IsPlainOldData, NoDestructor, Protected, UObjectWrapper, HasGetValueTypeHash, NativeAccessSpecifierProtected)
 	class UMovieSceneSequenceTickManager*         TickManager;                                       // 0x03A8(0x0008)(ZeroConstructor, Transient, NoDestructor, Protected, UObjectWrapper, HasGetValueTypeHash, NativeAccessSpecifierProtected, ExperimentalNeverOverriden)
-	uint8                                         Pad_3B0[0xD0];                                     // 0x03B0(0x00D0)(Fixing Struct Size After Last Property [ Dumper-7 ])
+	uint8                                         Pad_3B0[0xE0];                                     // 0x03B0(0x00E0)(Fixing Struct Size After Last Property [ Dumper-7 ])
 
 public:
 	void ChangePlaybackDirection();

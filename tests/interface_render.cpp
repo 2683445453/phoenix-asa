@@ -1,4 +1,5 @@
 #include "../src/internal/Menu/StartupPresentation.h"
+#include "../src/external/Minimal-D3D12-Hook-ImGui/Font/HarmonyOS_Sans_SC_Regular.h"
 // Actual ImGui menu rendering with game-side services stubbed; never loads or controls a game.
 #include "../src/external/Minimal-D3D12-Hook-ImGui/Main/hooks.h"
 #include "../src/internal/Menu/FeatureCatalog.h"
@@ -83,6 +84,7 @@ namespace g_Hack {
 #undef STATUS
     void RequestNoteXPBuff(){} void CancelNoteXPBuff(){} void RequestOpenUploadTerminal(){}
     void RequestSpiderZiplineFlip(bool) {}
+    void RequestSpiderZiplineLocalEvent() {}
     void RequestAllocateLevel(int){}
     bool CanAllocateLevel(){return false;}
     void RequestEnableNearbyDaeodonHealing(){} void DumpServerInfo(){}
@@ -391,11 +393,19 @@ void ChoiceGroupCases() {
 int main(int Argc, char** Argv){
     using namespace g_DrawImGui;
     ImGui::CreateContext();auto& IO=ImGui::GetIO();IO.IniFilename=nullptr;IO.DeltaTime=1.f/60;
-    IO.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf",18);
+    auto AddPreviewFont = [&](const char* Path, float Size, ImFontConfig* Config = nullptr, const ImWchar* Ranges = nullptr) {
+        if (GetFileAttributesA(Path) != INVALID_FILE_ATTRIBUTES)
+            return IO.Fonts->AddFontFromFileTTF(Path, Size, Config, Ranges);
+        ImFontConfig Fallback = Config ? *Config : ImFontConfig{};
+        Fallback.FontDataOwnedByAtlas = false;
+        return IO.Fonts->AddFontFromMemoryTTF(g_Fonts::HarmonyOS_Sans_SC_Regular,
+            sizeof(g_Fonts::HarmonyOS_Sans_SC_Regular), Size, &Fallback, Ranges);
+    };
+    AddPreviewFont("C:/Windows/Fonts/segoeui.ttf",18);
     ImFontConfig Merge;Merge.MergeMode=true;
-    IO.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/msyh.ttc",18,&Merge,IO.Fonts->GetGlyphRangesChineseFull());
-    g_TitleFont=IO.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/georgia.ttf",22);
-    IO.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/simsun.ttc",22,&Merge,IO.Fonts->GetGlyphRangesChineseFull());
+    AddPreviewFont("C:/Windows/Fonts/msyh.ttc",18,&Merge,IO.Fonts->GetGlyphRangesChineseFull());
+    g_TitleFont=AddPreviewFont("C:/Windows/Fonts/georgia.ttf",22);
+    AddPreviewFont("C:/Windows/Fonts/simsun.ttc",22,&Merge,IO.Fonts->GetGlyphRangesChineseFull());
     IO.Fonts->Build();IO.Fonts->SetTexID(1);
     ImGui::GetCurrentContext()->TestEngineHookItems=true;
     SetupCustomImGuiStyle();g_Config::bInitWelcome=true;g_Config::bShowWelcome=false;

@@ -14,8 +14,8 @@ namespace g_CheatData {
 		}
 
 		namespace AShooterPlayerCameraManager {
-			// ASA CL 832196 / Steam build 25691765 (2026-10-04).
-			// UpdateCamera is at RVA 0x667D010 and remains in client vtable slot 472.
+			// ASA CL 833800 / Steam build 26003405 (2026-10-24).
+			// UpdateCamera is at RVA 0x66A5070 and remains in client vtable slot 472.
 			inline int UpdateCamera = 472;
 		}
 
@@ -52,13 +52,13 @@ namespace g_CheatData {
 			// 无法在服务器工作，需要找到ASA重写的TakeDamage，或者UI Hit Damage，idk
 			inline std::string TakeDamage = "OUTDATED";
 
-			// 2026/10/4, ASA CL 832196 / Steam build 25691765 (unique at RVA 0x4CB5210)
+			// 2026/10/24, ASA CL 833800 / Steam build 26003405 (unique at RVA 0x4CC6E00)
 			// 470
 			inline std::string Tick = "40 53 48 83 EC ? 0F B6 81 ? ? ? ? 48 8B D9 A8 ? 75 ? A8 ? 74";
 		}
 
 		namespace UNetConnection {
-			// 2026/10/4, ASA CL 832196 / Steam build 25691765 (unique at RVA 0x46A1790)
+			// 2026/10/24, ASA CL 833800 / Steam build 26003405 (unique at RVA 0x46B0C60)
 			// 也没啥用，退出服务器的时候会触发一次。
 			// 不敢相信这个特征码能存活这么长时间
 			inline std::string HandleDisconnect = "? ? ? ? ? ? ? 55 57 48 8D 68 A1 48 81 EC D8 00 00 00 48 89 58 E8 48 8D 55 E7 48 89 70 E0";
@@ -66,7 +66,7 @@ namespace g_CheatData {
 
 		namespace UMovementComponent {
 			// 48 89 5C 24 ? 48 89 7C 24 ? 55 48 8D AC 24 ? ? ? ? 48 81 EC ? ? ? ? 44 0F 29 BC 24 过期了
-			// 2026/10/4, ASA CL 832196 / Steam build 25691765 (unique at RVA 0x413A380)
+			// 2026/10/24, ASA CL 833800 / Steam build 26003405 (unique at RVA 0x4147BC0)
 			// mov rax, rsp | push rbx | sub rsp, alloc | movaps [rax+offset], xmm6 | mov rbx, rcx | movaps [rax+offset], xmm7 | movaps
 			// 48 8B C4 53 48 81 EC 00 01 00 00 0F 29 70 E8 48 8B D9 0F 29 78 D8 0F 28
 
@@ -122,7 +122,7 @@ namespace g_CheatData {
 			// mov eax, edx | xor eax, imm32 | mov r8d, eax | imul eax, eax, imm32 | shr r8d, imm8 | xor r8d, eax | imul r8d, r8d, imm32
 			
 			// 122
-			// Steam build 25691765 retains vtable slot 122; no unique AOB is currently needed.
+			// Steam build 26003405 retains vtable slot 122; no unique AOB is currently needed.
 			inline std::string PostRender = "OUTDATED";
 		}
 
@@ -152,7 +152,7 @@ namespace g_CheatData {
 			// 2026/6/10 @zetsr
 			// mov rax, rsp | push r12 | sub rsp, alloc | mov [rax+8], rbx | mov
 
-			// 2026/10/4, ASA CL 832196 / Steam build 25691765 (unique at RVA 0x4BD3220)
+			// 2026/10/24, ASA CL 833800 / Steam build 26003405 (unique at RVA 0x4BE4870)
 			// 99
 			inline std::string OutputTextLine = "48 89 5C 24 ? 55 56 57 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC ? 48 63 72 ? 45 33 F6";
 		}

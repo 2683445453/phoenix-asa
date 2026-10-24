@@ -810,6 +810,20 @@ void UUI_CFCore_StoreMenu_C::PlayStartFadeInAnimation()
 }
 
 
+// Function UI_CFCore_StoreMenu.UI_CFCore_StoreMenu_C.RefreshBackground
+// (BlueprintCallable, BlueprintEvent)
+
+void UUI_CFCore_StoreMenu_C::RefreshBackground()
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("UI_CFCore_StoreMenu_C", "RefreshBackground");
+
+	UObject::ProcessEvent(Func, nullptr);
+}
+
+
 // Function UI_CFCore_StoreMenu.UI_CFCore_StoreMenu_C.RemoveExtraWidgets
 // (Public, BlueprintCallable, BlueprintEvent)
 

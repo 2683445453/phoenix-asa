@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+<title id="title">phoenix for ARK: Survival Ascended</title><desc id="desc">Independent client extension. Native x64, DirectX 12 and Lua.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0b1220"/><stop offset="1" stop-color="#1a2b3b"/></linearGradient><linearGradient id="fire" x2="0.7" y2="1"><stop stop-color="#ffe0ad"/><stop offset="1" stop-color="#e88959"/></linearGradient><radialGradient id="glow"><stop stop-color="#df9360" stop-opacity=".18"/><stop offset="1" stop-color="#df9360" stop-opacity="0"/></radialGradient></defs>
+<rect width="1200" height="340" rx="20" fill="url(#bg)"/><circle cx="975" cy="160" r="235" fill="url(#glow)"/>
+<g stroke="#8493a4" opacity=".11"><path d="M710 0v340M810 0v340M910 0v340M1010 0v340M1110 0v340M700 70h500M700 170h500M700 270h500"/></g>
+<g fill="none" stroke="url(#fire)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M933 238c-22-56-10-106 54-150-8 45-20 68-45 92 22-10 45-14 73-10-38 13-55 35-53 69"/><path d="M929 203c-64-1-95-31-112-80 47 8 79 31 103 63-6-42 8-75 36-103-4 47-2 77-28 120Z"/><path d="M922 224c-35 4-66-2-90-18 40-8 64-7 89 6M952 242l-15 20 3-29"/></g>
+<rect x="56" y="46" width="92" height="27" rx="13.5" fill="#f6bd83" fill-opacity=".12" stroke="#f6bd83" stroke-opacity=".28"/>
+<text x="102" y="64" text-anchor="middle" fill="#f2c394" font-family="Segoe UI,Arial,sans-serif" font-size="12" letter-spacing="2">ASA / x64</text>
+<text x="54" y="157" fill="#f2f0eb" font-family="Georgia,serif" font-size="76" letter-spacing="-2">phoenix</text>
+<text x="58" y="202" fill="#c0ccd6" font-family="Segoe UI,Arial,sans-serif" font-size="20">An independent evolution of Begeerte-ASA.</text>
+<text x="58" y="241" fill="#8397a7" font-family="Segoe UI,Arial,sans-serif" font-size="14" letter-spacing="2">DIRECTX 12   /   IMGUI   /   LUAJIT</text>
+<path d="M58 277h1084" stroke="#8795a5" stroke-opacity=".2"/>
+<text x="58" y="306" fill="#8195a7" font-family="Segoe UI,Arial,sans-serif" font-size="12">Windows client extension</text><text x="1140" y="306" text-anchor="end" fill="#b6c4cf" font-family="Segoe UI,Arial,sans-serif" font-size="12">Originally by zetsr · MIT</text>
+</svg>

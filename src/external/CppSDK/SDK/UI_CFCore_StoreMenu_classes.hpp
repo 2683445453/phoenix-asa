@@ -10,12 +10,12 @@
 
 #include "Basic.hpp"
 
-#include "cfcore_ui_structs.hpp"
 #include "Engine_structs.hpp"
 #include "SlateCore_structs.hpp"
 #include "ENUM_CFCore_SideTabs_structs.hpp"
 #include "ENUM_CFCore_InputDevices_structs.hpp"
 #include "CFCoreUIWidget_MainModShop_classes.hpp"
+#include "cfcore_ui_structs.hpp"
 
 
 SDK_NAMESPACE_START
@@ -142,6 +142,7 @@ public:
 	void OpenCurrentActivePage();
 	void OpenPendingModPage();
 	void PlayStartFadeInAnimation();
+	void RefreshBackground();
 	void RemoveExtraWidgets();
 	void RequestInstalledModsFromAPI();
 	void RequestThemeUpdate();

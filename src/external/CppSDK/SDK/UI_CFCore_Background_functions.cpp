@@ -30,8 +30,22 @@ void UUI_CFCore_Background_C::ApplyThemeSettingsToAll()
 }
 
 
+// Function UI_CFCore_Background.UI_CFCore_Background_C.Construct
+// (BlueprintCosmetic, Event, Public, BlueprintEvent)
+
+void UUI_CFCore_Background_C::Construct()
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("UI_CFCore_Background_C", "Construct");
+
+	UObject::ProcessEvent(Func, nullptr);
+}
+
+
 // Function UI_CFCore_Background.UI_CFCore_Background_C.ExecuteUbergraph_UI_CFCore_Background
-// (Final, UbergraphFunction)
+// (Final, UbergraphFunction, HasDefaults)
 // Parameters:
 // int32                                   EntryPoint                                             (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 
@@ -69,6 +83,20 @@ void UUI_CFCore_Background_C::FadeTowards(EUMGSequencePlayMode PlayMode, double 
 	Parms.PlaybackSpeed = PlaybackSpeed;
 
 	UObject::ProcessEvent(Func, &Parms);
+}
+
+
+// Function UI_CFCore_Background.UI_CFCore_Background_C.MakeSureBackgroundImageLoaded
+// (BlueprintCallable, BlueprintEvent)
+
+void UUI_CFCore_Background_C::MakeSureBackgroundImageLoaded()
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("UI_CFCore_Background_C", "MakeSureBackgroundImageLoaded");
+
+	UObject::ProcessEvent(Func, nullptr);
 }
 
 

@@ -16,85 +16,23 @@
 
 SDK_NAMESPACE_START
 
-// Function Slider_ASA_Widget.Slider_ASA_Widget_C.BPExecutedCommandForPrimalUI
-// (Event, Public, HasOutParams, BlueprintEvent)
+// Function Slider_ASA_Widget.Slider_ASA_Widget_C.Tick
+// (BlueprintCosmetic, Event, Public, BlueprintEvent)
 // Parameters:
-// class FName                             CommandName                                            (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-// const struct FBPNetExecParams&          ExecParams                                             (ConstParm, BlueprintVisible, BlueprintReadOnly, Parm, OutParm, ReferenceParm)
+// const struct FGeometry&                 MyGeometry_Tick                                        (BlueprintVisible, BlueprintReadOnly, Parm, IsPlainOldData, NoDestructor)
+// float                                   InDeltaTime_Tick                                       (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 
-void USlider_ASA_Widget_C::BPExecutedCommandForPrimalUI(class FName CommandName, const struct FBPNetExecParams& ExecParams)
+void USlider_ASA_Widget_C::Tick(const struct FGeometry& MyGeometry_Tick, float InDeltaTime_Tick)
 {
 	static class UFunction* Func = nullptr;
 
 	if (Func == nullptr)
-		Func = Class->GetFunction("Slider_ASA_Widget_C", "BPExecutedCommandForPrimalUI");
+		Func = Class->GetFunction("Slider_ASA_Widget_C", "Tick");
 
-	Params::Slider_ASA_Widget_C_BPExecutedCommandForPrimalUI Parms{};
+	Params::Slider_ASA_Widget_C_Tick Parms{};
 
-	Parms.CommandName = CommandName;
-	Parms.ExecParams = std::move(ExecParams);
-
-	UObject::ProcessEvent(Func, &Parms);
-}
-
-
-// Function Slider_ASA_Widget.Slider_ASA_Widget_C.ExecuteUbergraph_Slider_ASA_Widget
-// (Final, UbergraphFunction, HasDefaults)
-// Parameters:
-// int32                                   EntryPoint                                             (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-
-void USlider_ASA_Widget_C::ExecuteUbergraph_Slider_ASA_Widget(int32 EntryPoint)
-{
-	static class UFunction* Func = nullptr;
-
-	if (Func == nullptr)
-		Func = Class->GetFunction("Slider_ASA_Widget_C", "ExecuteUbergraph_Slider_ASA_Widget");
-
-	Params::Slider_ASA_Widget_C_ExecuteUbergraph_Slider_ASA_Widget Parms{};
-
-	Parms.EntryPoint = EntryPoint;
-
-	UObject::ProcessEvent(Func, &Parms);
-}
-
-
-// Function Slider_ASA_Widget.Slider_ASA_Widget_C.GetOverrideHighligteableWidgetBP
-// (Event, Public, HasOutParams, BlueprintCallable, BlueprintEvent)
-// Parameters:
-// class UWidget*                          ReturnValue                                            (Parm, OutParm, ZeroConstructor, ReturnParm, InstancedReference, NoDestructor, HasGetValueTypeHash)
-
-class UWidget* USlider_ASA_Widget_C::GetOverrideHighligteableWidgetBP()
-{
-	static class UFunction* Func = nullptr;
-
-	if (Func == nullptr)
-		Func = Class->GetFunction("Slider_ASA_Widget_C", "GetOverrideHighligteableWidgetBP");
-
-	Params::Slider_ASA_Widget_C_GetOverrideHighligteableWidgetBP Parms{};
-
-	UObject::ProcessEvent(Func, &Parms);
-
-	return Parms.ReturnValue;
-}
-
-
-// Function Slider_ASA_Widget.Slider_ASA_Widget_C.SetupSetPercent
-// (Public, HasDefaults, BlueprintCallable, BlueprintEvent)
-// Parameters:
-// float                                   InputPin                                               (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-// bool                                    PreventRecallParent                                    (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
-
-void USlider_ASA_Widget_C::SetupSetPercent(float InputPin, bool PreventRecallParent)
-{
-	static class UFunction* Func = nullptr;
-
-	if (Func == nullptr)
-		Func = Class->GetFunction("Slider_ASA_Widget_C", "SetupSetPercent");
-
-	Params::Slider_ASA_Widget_C_SetupSetPercent Parms{};
-
-	Parms.InputPin = InputPin;
-	Parms.PreventRecallParent = PreventRecallParent;
+	Parms.MyGeometry_Tick = std::move(MyGeometry_Tick);
+	Parms.InDeltaTime_Tick = InDeltaTime_Tick;
 
 	UObject::ProcessEvent(Func, &Parms);
 }
@@ -122,23 +60,85 @@ void USlider_ASA_Widget_C::SetupValue(double float_0, bool PreventRecallParent)
 }
 
 
-// Function Slider_ASA_Widget.Slider_ASA_Widget_C.Tick
-// (BlueprintCosmetic, Event, Public, BlueprintEvent)
+// Function Slider_ASA_Widget.Slider_ASA_Widget_C.SetupSetPercent
+// (Public, HasDefaults, BlueprintCallable, BlueprintEvent)
 // Parameters:
-// const struct FGeometry&                 MyGeometry                                             (BlueprintVisible, BlueprintReadOnly, Parm, IsPlainOldData, NoDestructor)
-// float                                   InDeltaTime                                            (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+// float                                   InputPin                                               (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+// bool                                    PreventRecallParent                                    (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
 
-void USlider_ASA_Widget_C::Tick(const struct FGeometry& MyGeometry, float InDeltaTime)
+void USlider_ASA_Widget_C::SetupSetPercent(float InputPin, bool PreventRecallParent)
 {
 	static class UFunction* Func = nullptr;
 
 	if (Func == nullptr)
-		Func = Class->GetFunction("Slider_ASA_Widget_C", "Tick");
+		Func = Class->GetFunction("Slider_ASA_Widget_C", "SetupSetPercent");
 
-	Params::Slider_ASA_Widget_C_Tick Parms{};
+	Params::Slider_ASA_Widget_C_SetupSetPercent Parms{};
 
-	Parms.MyGeometry = std::move(MyGeometry);
-	Parms.InDeltaTime = InDeltaTime;
+	Parms.InputPin = InputPin;
+	Parms.PreventRecallParent = PreventRecallParent;
+
+	UObject::ProcessEvent(Func, &Parms);
+}
+
+
+// Function Slider_ASA_Widget.Slider_ASA_Widget_C.GetOverrideHighligteableWidgetBP
+// (Event, Public, HasOutParams, BlueprintCallable, BlueprintEvent)
+// Parameters:
+// class UWidget*                          ReturnValue_GetOverrideHighligteableWidgetBP           (Parm, OutParm, ZeroConstructor, ReturnParm, InstancedReference, NoDestructor, HasGetValueTypeHash)
+
+class UWidget* USlider_ASA_Widget_C::GetOverrideHighligteableWidgetBP()
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("Slider_ASA_Widget_C", "GetOverrideHighligteableWidgetBP");
+
+	Params::Slider_ASA_Widget_C_GetOverrideHighligteableWidgetBP Parms{};
+
+	UObject::ProcessEvent(Func, &Parms);
+
+	return Parms.ReturnValue;
+}
+
+
+// Function Slider_ASA_Widget.Slider_ASA_Widget_C.ExecuteUbergraph_Slider_ASA_Widget
+// (Final, UbergraphFunction, HasDefaults)
+// Parameters:
+// int32                                   EntryPoint                                             (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+
+void USlider_ASA_Widget_C::ExecuteUbergraph_Slider_ASA_Widget(int32 EntryPoint)
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("Slider_ASA_Widget_C", "ExecuteUbergraph_Slider_ASA_Widget");
+
+	Params::Slider_ASA_Widget_C_ExecuteUbergraph_Slider_ASA_Widget Parms{};
+
+	Parms.EntryPoint = EntryPoint;
+
+	UObject::ProcessEvent(Func, &Parms);
+}
+
+
+// Function Slider_ASA_Widget.Slider_ASA_Widget_C.BPExecutedCommandForPrimalUI
+// (Event, Public, HasOutParams, BlueprintEvent)
+// Parameters:
+// class FName                             CommandName_BPExecutedCommandForPrimalUI               (BlueprintVisible, BlueprintReadOnly, Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash)
+// const struct FBPNetExecParams&          ExecParams_BPExecutedCommandForPrimalUI                (ConstParm, BlueprintVisible, BlueprintReadOnly, Parm, OutParm, ReferenceParm)
+
+void USlider_ASA_Widget_C::BPExecutedCommandForPrimalUI(class FName CommandName_BPExecutedCommandForPrimalUI, const struct FBPNetExecParams& ExecParams_BPExecutedCommandForPrimalUI)
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("Slider_ASA_Widget_C", "BPExecutedCommandForPrimalUI");
+
+	Params::Slider_ASA_Widget_C_BPExecutedCommandForPrimalUI Parms{};
+
+	Parms.CommandName_BPExecutedCommandForPrimalUI = CommandName_BPExecutedCommandForPrimalUI;
+	Parms.ExecParams_BPExecutedCommandForPrimalUI = std::move(ExecParams_BPExecutedCommandForPrimalUI);
 
 	UObject::ProcessEvent(Func, &Parms);
 }

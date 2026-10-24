@@ -2,6 +2,7 @@
 param(
     [switch]$Rebuild,
     [string]$MSBuildPath = $env:PHOENIX_MSBUILD,
+    [ValidateRange(1,16)][int]$CompileJobs = 2,
     [string]$Version
 )
 
@@ -20,7 +21,7 @@ if (-not $msbuild -or -not (Test-Path -LiteralPath $msbuild -PathType Leaf)) {
 # Native compiler/linker output.
 $target = if ($Rebuild) { 'Rebuild' } else { 'Build' }
 $commonArgs = @("/t:$target", '/p:Configuration=Release', '/p:Platform=x64',
-    '/m:2', '/nologo', '/v:minimal')
+    "/p:NumberOfProcessors=$CompileJobs", '/m:2', '/nologo', '/v:minimal')
 foreach ($solution in @('src\begeerte_ark_survival_ascended.sln', 'ASA_Loader\ASA_Loader.sln')) {
     & $msbuild (Join-Path $projectRoot $solution) @commonArgs
     if ($LASTEXITCODE -ne 0) { throw "$solution build failed with exit code $LASTEXITCODE." }
@@ -48,7 +49,12 @@ try {
             Copy-Item -LiteralPath $file.FullName -Destination $destination
         }
     }
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $stageDir
+    foreach ($readme in @('README.md', 'README.en.md')) {
+        Copy-Item -LiteralPath (Join-Path $projectRoot $readme) -Destination $stageDir
+    }
+    $readmeAssets = Join-Path $stageDir 'assets\readme'
+    New-Item -ItemType Directory -Path $readmeAssets -Force | Out-Null
+    Copy-Item -Path (Join-Path $projectRoot 'assets\readme\*') -Destination $readmeAssets
     Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $stageDir
     [IO.File]::WriteAllText((Join-Path $stageDir 'VERSION'), "$Version`n", $utf8)
     $notices = @{

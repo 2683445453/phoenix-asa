@@ -73,7 +73,7 @@ public:
 DUMPER7_ASSERTS_UActorSequenceComponent;
 
 // Class ActorSequence.ActorSequencePlayer
-// 0x0000 (0x0480 - 0x0480)
+// 0x0000 (0x0490 - 0x0490)
 class UActorSequencePlayer final : public UMovieSceneSequencePlayer
 {
 public:

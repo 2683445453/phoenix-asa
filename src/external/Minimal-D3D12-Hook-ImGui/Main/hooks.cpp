@@ -196,7 +196,7 @@ namespace {
         if (Target > RegionEnd || RegionEnd - Target < 0x80) return false;
 
         const auto* Code = static_cast<const uint8_t*>(Address);
-        // ASA CL 832196 UpdateCamera(float) prologue. Stack-frame displacements are
+        // ASA CL 833800 UpdateCamera(float) prologue. Stack-frame displacements are
         // deliberately ignored, while the register-save shape is required.
         constexpr uint8_t Prologue[] = {
             0x4C, 0x8B, 0xDC, 0x55, 0x53, 0x56, 0x57,
@@ -1248,11 +1248,14 @@ void g_Hook::StartAllHooks() {
 
     if (pWorld && !g_UnloadRequested.load(std::memory_order_acquire)) {
         // 理论上来说如果用户在UWorld非常不稳定的时候注入有极低概率发生检查后使用，但是这应该不是问题，因为如果环境不稳定，d3d12 hook会先崩溃
+        g_Hook::LogLifecycle("Installing native actor, connection and console hooks...");
         g_Hook::initActorTick();
         g_Hook::initHandleDisconnect();
         g_Hook::initOutputTextLine();
+        g_Hook::LogLifecycle("Installing viewport and camera hooks...");
         g_Hook::initPostRender();
         g_Hook::initUpdateCamera();
+        g_Hook::LogLifecycle("Installing weapon and projectile hooks...");
         g_Hook::initWeaponAim();
         g_Hook::initProjectileShotEvents();
         g_Hook::initDinoActionEvents();
@@ -1261,12 +1264,14 @@ void g_Hook::StartAllHooks() {
         g_Hook::initShotgunSpread();
         g_Hook::initInstantThrow();
         g_Hook::initBowFullChargeShot();
+        g_Hook::LogLifecycle("Installing movement and player event hooks...");
         g_Hook::initPhysicsRotation();
         // g_Hook::initTakeDamage();
         g_Hook::initClientNotifyReconnected();
         g_Hook::initClientNotifyRespawned();
         g_Hook::initClientChatMessage();
         g_Hook::initClientAddFloatingDamageText();
+        g_Hook::LogLifecycle("Native hook installation completed.");
     }
 }
 
@@ -1468,6 +1473,7 @@ namespace g_MDX12 {
             return 0;
         }
 
+        g_Hook::LogLifecycle("D3D12 runtime modules are ready.");
         g_Hook::StartAllHooks();
         if (!g_Hook::PostRenderOK && !g_Hook::UpdateCameraOK) return 0;
         // g_Hook::initUWorldTick();
@@ -1493,6 +1499,7 @@ namespace g_MDX12 {
             IDXGISwapChain1* tempSwapChain1 = nullptr;
 
             // 使用运行时加载的函数指针，而非编译期链接的符号
+            g_Hook::LogLifecycle("Creating D3D12 discovery device...");
             bool ok = SUCCEEDED(g_RuntimeModules::g_pD3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&tempDevice)));
 
             if (ok) {
@@ -1525,6 +1532,7 @@ namespace g_MDX12 {
                 sd.SampleDesc.Count = 1;
                 sd.Windowed = TRUE;
                 sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+                g_Hook::LogLifecycle("Creating DXGI discovery swap chain...");
                 ok = SUCCEEDED(factory->CreateSwapChain(tempQueue, &sd, &tempSwapChain));
             }
 

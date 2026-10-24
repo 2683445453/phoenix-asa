@@ -18,7 +18,7 @@
 SDK_NAMESPACE_START
 
 // WidgetBlueprintGeneratedClass UI_CFCore_Background.UI_CFCore_Background_C
-// 0x0020 (0x0890 - 0x0870)
+// 0x0028 (0x0898 - 0x0870)
 class UUI_CFCore_Background_C final : public UCFCoreWidget_C
 {
 public:
@@ -26,11 +26,14 @@ public:
 	class UWidgetAnimation*                       fade;                                              // 0x0878(0x0008)(BlueprintVisible, BlueprintReadOnly, ZeroConstructor, Transient, RepSkip, NoDestructor, HasGetValueTypeHash)
 	class UImage*                                 IMG_BackgroundBack;                                // 0x0880(0x0008)(BlueprintVisible, ExportObject, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, InstancedReference, RepSkip, NoDestructor, PersistentInstance, HasGetValueTypeHash)
 	class UImage*                                 IMG_BackgroundFront;                               // 0x0888(0x0008)(BlueprintVisible, ExportObject, BlueprintReadOnly, ZeroConstructor, DisableEditOnInstance, InstancedReference, RepSkip, NoDestructor, PersistentInstance, HasGetValueTypeHash)
+	class UTexture2D*                             LocalBackgroundImage;                              // 0x0890(0x0008)(Edit, BlueprintVisible, ZeroConstructor, DisableEditOnInstance, NoDestructor, HasGetValueTypeHash)
 
 public:
 	void ApplyThemeSettingsToAll();
+	void Construct();
 	void ExecuteUbergraph_UI_CFCore_Background(int32 EntryPoint);
 	void FadeTowards(EUMGSequencePlayMode PlayMode, double PlaybackSpeed);
+	void MakeSureBackgroundImageLoaded();
 	void PreConstruct(bool IsDesignTime);
 
 public:

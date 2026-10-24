@@ -182209,6 +182209,31 @@ void AShooterPlayerController::OnArkTributeSaved(bool success)
 }
 
 
+// Function ShooterGame.ShooterPlayerController.OnCharacterDataUploadedToArk
+// (Final, Native, Public)
+// Parameters:
+// bool                                    success                                                (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+
+void AShooterPlayerController::OnCharacterDataUploadedToArk(bool success)
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("ShooterPlayerController", "OnCharacterDataUploadedToArk");
+
+	Params::ShooterPlayerController_OnCharacterDataUploadedToArk Parms{};
+
+	Parms.success = success;
+
+	auto Flgs = Func->FunctionFlags;
+	Func->FunctionFlags |= 0x400;
+
+	UObject::ProcessEvent(Func, &Parms);
+
+	Func->FunctionFlags = Flgs;
+}
+
+
 // Function ShooterGame.ShooterPlayerController.OnConsumeItemFinished
 // (Final, Native, Public)
 // Parameters:
@@ -195578,18 +195603,24 @@ void UShooterCheatManager::DoExit()
 
 // Function ShooterGame.ShooterCheatManager.DoHang
 // (Final, Exec, Native, Public)
+// Parameters:
+// float                                   Seconds                                                (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 
-void UShooterCheatManager::DoHang()
+void UShooterCheatManager::DoHang(float Seconds)
 {
 	static class UFunction* Func = nullptr;
 
 	if (Func == nullptr)
 		Func = Class->GetFunction("ShooterCheatManager", "DoHang");
 
+	Params::ShooterCheatManager_DoHang Parms{};
+
+	Parms.Seconds = Seconds;
+
 	auto Flgs = Func->FunctionFlags;
 	Func->FunctionFlags |= 0x400;
 
-	UObject::ProcessEvent(Func, nullptr);
+	UObject::ProcessEvent(Func, &Parms);
 
 	Func->FunctionFlags = Flgs;
 }
@@ -200291,6 +200322,31 @@ void UShooterCheatManager::RegrowFoliage(float Radius)
 	Params::ShooterCheatManager_RegrowFoliage Parms{};
 
 	Parms.Radius = Radius;
+
+	auto Flgs = Func->FunctionFlags;
+	Func->FunctionFlags |= 0x400;
+
+	UObject::ProcessEvent(Func, &Parms);
+
+	Func->FunctionFlags = Flgs;
+}
+
+
+// Function ShooterGame.ShooterCheatManager.ReleaseTributeDownloadClaims
+// (Final, Exec, Native, Public)
+// Parameters:
+// const class FString&                    PlayerUniqueNetId                                      (Parm, ZeroConstructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+
+void UShooterCheatManager::ReleaseTributeDownloadClaims(const class FString& PlayerUniqueNetId)
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("ShooterCheatManager", "ReleaseTributeDownloadClaims");
+
+	Params::ShooterCheatManager_ReleaseTributeDownloadClaims Parms{};
+
+	Parms.PlayerUniqueNetId = std::move(PlayerUniqueNetId);
 
 	auto Flgs = Func->FunctionFlags;
 	Func->FunctionFlags |= 0x400;
@@ -223541,6 +223597,56 @@ void UUI_BackupSaveList::ClickedDeleteBackupEntry(class UWidget* clickedWidget)
 		Func = Class->GetFunction("UI_BackupSaveList", "ClickedDeleteBackupEntry");
 
 	Params::UI_BackupSaveList_ClickedDeleteBackupEntry Parms{};
+
+	Parms.clickedWidget = clickedWidget;
+
+	auto Flgs = Func->FunctionFlags;
+	Func->FunctionFlags |= 0x400;
+
+	UObject::ProcessEvent(Func, &Parms);
+
+	Func->FunctionFlags = Flgs;
+}
+
+
+// Function ShooterGame.UI_BackupSaveList.ClickedDeletePreUpgradeBackupEntry
+// (Final, Native, Public)
+// Parameters:
+// class UWidget*                          clickedWidget                                          (Parm, ZeroConstructor, InstancedReference, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+
+void UUI_BackupSaveList::ClickedDeletePreUpgradeBackupEntry(class UWidget* clickedWidget)
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("UI_BackupSaveList", "ClickedDeletePreUpgradeBackupEntry");
+
+	Params::UI_BackupSaveList_ClickedDeletePreUpgradeBackupEntry Parms{};
+
+	Parms.clickedWidget = clickedWidget;
+
+	auto Flgs = Func->FunctionFlags;
+	Func->FunctionFlags |= 0x400;
+
+	UObject::ProcessEvent(Func, &Parms);
+
+	Func->FunctionFlags = Flgs;
+}
+
+
+// Function ShooterGame.UI_BackupSaveList.ClickedPreUpgradeBackupEntry
+// (Final, Native, Public)
+// Parameters:
+// class UWidget*                          clickedWidget                                          (Parm, ZeroConstructor, InstancedReference, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+
+void UUI_BackupSaveList::ClickedPreUpgradeBackupEntry(class UWidget* clickedWidget)
+{
+	static class UFunction* Func = nullptr;
+
+	if (Func == nullptr)
+		Func = Class->GetFunction("UI_BackupSaveList", "ClickedPreUpgradeBackupEntry");
+
+	Params::UI_BackupSaveList_ClickedPreUpgradeBackupEntry Parms{};
 
 	Parms.clickedWidget = clickedWidget;
 

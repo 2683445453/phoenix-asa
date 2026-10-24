@@ -31,7 +31,8 @@ with zipfile.ZipFile(root/'dist/phoenix.zip') as z:
     assert z.testzip() is None
     names=z.namelist()
     expected=['phoenix.dll','phoenix.exe','language/CN.ini','language/EN.ini',
-              'README.md','LICENSE','VERSION','release.json','SHA256SUMS.txt']
+              'README.md','README.en.md','LICENSE','VERSION','release.json','SHA256SUMS.txt']
+    expected += [p.relative_to(root).as_posix() for p in (root/'assets/readme').iterdir() if p.is_file()]
     expected += [p.relative_to(root).as_posix() for folder in ['lua','work_shop'] for p in (root/folder).rglob('*.lua')]
     notices={'LuaJIT.txt':'src/external/LuaJIT-2.1/COPYRIGHT',
              'ImGui.txt':'src/external/Minimal-D3D12-Hook-ImGui/ImGui/LICENSE.txt',
