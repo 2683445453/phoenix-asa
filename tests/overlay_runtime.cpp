@@ -221,18 +221,23 @@ struct Fixture
     ~Fixture()
     {
         std::cout << "WARP cleanup: waiting for native work.\n";
+        // Present1 queues work after the last NativeFrame fence. Drain that
+        // final presentation before dropping recordings and swap-chain refs.
+        assert(SUCCEEDED(Queue->Signal(NativeFence.Get(), ++NativeValue)));
         WaitNative(); assert(g_MDX12::FinalCleanupAll());
         std::cout << "WARP cleanup: overlay resources released.\n";
+        NativeList.Reset(); NativeAllocator.Reset();
         CheckDebugErrors();
         std::cout << "WARP cleanup: debug queue checked.\n";
         Chain.Reset();
         std::cout << "WARP cleanup: primary chain released.\n";
         Secondary.Reset();
         std::cout << "WARP cleanup: secondary chain released.\n";
+        CheckDebugErrors();
         DestroyWindow(Window); DestroyWindow(OtherWindow);
         UnregisterClassW(L"PhoenixOverlayWarpTest", GetModuleHandleW(nullptr));
         CloseHandle(NativeEvent);
-        Info.Reset(); NativeList.Reset(); NativeAllocator.Reset(); NativeFence.Reset();
+        Info.Reset(); NativeFence.Reset();
         OtherQueue.Reset(); Queue.Reset();
         std::cout << "WARP cleanup: queues and native resources released.\n";
         Device.Reset();

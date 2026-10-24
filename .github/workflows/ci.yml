@@ -67,8 +67,7 @@ jobs:
 
   regression:
     name: ${{ matrix.suite }} regression
-    # Use the stable DXGI image for headless WARP; keep v145 for native builds.
-    runs-on: ${{ matrix.suite == 'Graphics' && 'windows-2022' || 'windows-2025-vs2026' }}
+    runs-on: windows-2025-vs2026
     timeout-minutes: 40
     strategy:
       fail-fast: false
